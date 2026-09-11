@@ -478,7 +478,8 @@ function compute_psi(state::S,x_grid,y_grid;inside_only=true,memory_limit=10.0e9
         sz=length(x_grid)*length(y_grid)
         pts=collect(SVector(x,y) for y in y_grid for x in x_grid)
         if inside_only
-            pts_mask=is_inside(billiard,pts)
+            #pts_mask=is_inside(billiard,pts)
+            pts_mask=inside_mask(billiard,pts,fundamental_domain=true)
             pts=pts[pts_mask]
         end
         n_pts=length(pts)
