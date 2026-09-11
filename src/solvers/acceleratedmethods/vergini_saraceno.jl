@@ -179,7 +179,6 @@ passed only to preserve the existing `_scale_rows_sqrtw!` helper interface.
 * `Fk::Matrix`: Real wavenumber derivative matrix.
 """
 function construct_matrices(solver::VerginiSaracenoSolver,basis::Ba,pts::BoundaryPoints,k::T;multithreaded::Bool=true) where {Ba<:AbsBasis,T<:Real}
-    check_basis_origin(solver,basis)
     @timeit_debug "construct_matrices" begin
         xy=pts.xy
         w=pts.w
