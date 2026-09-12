@@ -243,7 +243,7 @@ so that each window expects `N_expect` states, before delegating to the
 ## Returns
 * `data::SpectralData`: Every retained `(k,ten)` pair across `[k1,k2]`, sorted by `k`.
 """
-function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, N1::Int, N2::Int; N_expect::Real=1, tol=1e-4, multithreaded=true)
+function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, N1::Int, N2::Int; N_expect::Real=3, tol=1e-4, multithreaded=true)
     k1, k2 = k_range_for_states(billiard, N1, N2)
     dk = k -> N_expect / spectral_density(k, billiard)
     return compute_spectrum(solver, basis, billiard, k1, k2, dk; tol, multithreaded)
