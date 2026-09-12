@@ -22,108 +22,83 @@ function k_at_state(state, A, L, corner_angles)
     return (-b+dis)/(2*a)
 end
 
-################################################################################
-######################## AREA (GREEN'S THEOREM) ###############################
-################################################################################
+# Total boundary arc length of a collection of curves (as returned by
+# `get_boundary_curves`/`full_boundary`), shared by every billiard-level
+# Weyl-law function below.
+_boundary_length(curves) = sum(crv.length for crv in curves)
 
-# Twice the oriented area contribution of the planar curve `crv`,
-# ∫(x y' - y x')dt, used by `area` via Green's theorem.
-@inline function _area_integral(crv::AbsCurve; rtol=1e-10)
-    T = typeof(crv.length)
-    f(t) = begin
-        r = curve(crv, t)
-        dr = tangent(crv, t)
-        r[1]*dr[2] - r[2]*dr[1]
-    end
-    I, _ = quadgk(f, zero(T), one(T); rtol=rtol)
-    return I
+"""
+    k_at_state(state, billiard::AbsBilliard; fundamental::Bool=true) → k::Real
+
+Wavenumber at which Weyl's law state-counting function (including the
+corner correction) reaches `state`.
+
+## Keyword Arguments
+* `fundamental::Bool = true`: When `true` (default), uses the billiard's
+  fundamental-domain boundary (`get_boundary_curves`), matching what an
+  `AcceleratedBasisSolver`/`AcceleratedBIMSolver` actually diagonalizes over;
+  when `false`, uses the complete physical boundary (`full_boundary`).
+"""
+function k_at_state(state, billiard::AbsBilliard; fundamental::Bool=true)
+    curves = fundamental ? get_boundary_curves(billiard) : full_boundary(billiard)
+    A = fundamental ? fundamental_area(billiard) : area(billiard)
+    L = _boundary_length(curves)
+    angles = corner_angles(billiard; fundamental)
+    return isempty(angles) ? k_at_state(state, A, L) : k_at_state(state, A, L, angles)
 end
 
 """
-    area(crv::AbsCurve; rtol=1e-10) → A::Real
+    state_at_k(k, A, L) → N::Real
+    state_at_k(k, A, L, corner_angles) → N::Real
+    state_at_k(k, billiard::AbsBilliard; fundamental::Bool=true) → N::Real
 
-Returns the geometric area enclosed by the planar boundary curve `crv`, via
-Green's theorem `A = (1/2)|∫(x y' - y x')dt|`. The absolute value makes the
-result independent of the boundary parametrization's orientation.
-"""
-@inline area(crv::AbsCurve; rtol=1e-10) = abs(_area_integral(crv; rtol=rtol))/2
+Weyl's law state-counting function evaluated at wavenumber `k` — the inverse
+direction of [`k_at_state`](@ref) — provided under this name for symmetry
+with it (equivalent to [`weyl_law`](@ref)).
 
+## Keyword Arguments
+* `fundamental::Bool = true`: See [`k_at_state`](@ref).
 """
-    area(crv::CompositeCurve; rtol=1e-10) → A::Real
+state_at_k(k, A, L) = weyl_law(k, A, L)
+state_at_k(k, A, L, corner_angles) = weyl_law(k, A, L, corner_angles)
 
-Returns the geometric area enclosed by the composite boundary `crv`, summing
-the Green-theorem contributions of every constituent curve before taking the
-absolute value (preserving cancellation between oppositely oriented boundary
-components).
-"""
-function area(crv::CompositeCurve; rtol=1e-10)
-    T = typeof(crv.length)
-    I = zero(T)
-    @inbounds for subcrv in crv.subcurves
-        I += _area_integral(subcrv; rtol=rtol)
-    end
-    return abs(I)/2
+function state_at_k(k, billiard::AbsBilliard; fundamental::Bool=true)
+    curves = fundamental ? get_boundary_curves(billiard) : full_boundary(billiard)
+    A = fundamental ? fundamental_area(billiard) : area(billiard)
+    L = _boundary_length(curves)
+    angles = corner_angles(billiard; fundamental)
+    return isempty(angles) ? state_at_k(k, A, L) : state_at_k(k, A, L, angles)
 end
 
 """
-    area(curves::AbstractVector{<:AbsCurve}; rtol=1e-10) → A::Real
+    spectral_density(k, A, L) → dNdk::Real
+    spectral_density(k, billiard::AbsBilliard; fundamental::Bool=true) → dNdk::Real
 
-Returns the geometric area enclosed by a collection of planar boundary
-curves, summing oriented Green-theorem contributions before taking the
-absolute value.
+Derivative `dN/dk` of Weyl's law state-counting function,
+`(A*k - L/2)/(2π)` — the local mean density of states at wavenumber `k`,
+used to size adaptive wavenumber steps in [`compute_spectrum`](@ref).
+
+## Keyword Arguments
+* `fundamental::Bool = true`: See [`k_at_state`](@ref).
 """
-function area(curves::AbstractVector{<:AbsCurve}; rtol=1e-10)
-    isempty(curves) && return 0.0
-    T = typeof(first(curves).length)
-    I = zero(T)
-    @inbounds for crv in curves
-        I += _area_integral(crv; rtol=rtol)
-    end
-    return abs(I)/2
+spectral_density(k, A, L) = (A*k - L/2)/(2*pi)
+
+function spectral_density(k, billiard::AbsBilliard; fundamental::Bool=true)
+    curves = fundamental ? get_boundary_curves(billiard) : full_boundary(billiard)
+    A = fundamental ? fundamental_area(billiard) : area(billiard)
+    L = _boundary_length(curves)
+    return spectral_density(k, A, L)
 end
 
 """
-    area(billiard::AbsBilliard; kwargs...) → A::Real
+    k_range_for_states(billiard::AbsBilliard, N1::Int, N2::Int; fundamental::Bool=true) → (k1,k2)
 
-Returns the area of the complete physical billiard, using
-[`BilliardGeometry.full_boundary`](@ref) so the result is independent of any
-symmetry reduction represented by the billiard's fundamental domain.
+Wavenumber range `(k1,k2)` bracketing states `N1` to `N2` of the billiard's
+Weyl-law state-counting function, via two [`k_at_state`](@ref) calls.
+
+## Keyword Arguments
+* `fundamental::Bool = true`: See [`k_at_state`](@ref).
 """
-@inline area(billiard::AbsBilliard; kwargs...) = area(full_boundary(billiard); kwargs...)
-
-# How many-fold a discrete symmetry divides the physical area onto the
-# fundamental domain (used to estimate the fundamental-domain area below,
-# without needing a separate field on the billiard struct).
-@inline symmetry_reduction_factor(::AbsSymmetry) = 1
-@inline symmetry_reduction_factor(::BilliardGeometry.XAxisReflection) = 2
-@inline symmetry_reduction_factor(::BilliardGeometry.YAxisReflection) = 2
-@inline symmetry_reduction_factor(::BilliardGeometry.XYAxisReflection) = 4
-@inline symmetry_reduction_factor(::BilliardGeometry.DiagonalReflection) = 2
-@inline symmetry_reduction_factor(::BilliardGeometry.AntiDiagonalReflection) = 2
-@inline symmetry_reduction_factor(sym::BilliardGeometry.NFoldRotation) = sym.order
-# Composite reflection's fundamental-domain reduction factor is not tracked
-# per-irrep here; only used as a Weyl-window size estimate in BeynSolver, so
-# a conservative (unreduced) factor of 1 never invalidates the windowing.
-@inline symmetry_reduction_factor(::BilliardGeometry.CompositeReflection) = 1
-
-function maximal_symmetry(billiard::AbsBilliard)
-    isempty(billiard.symmetries) && return nothing
-    _, i = findmax(symmetry_reduction_factor, billiard.symmetries)
-    return billiard.symmetries[i]
-end
-
-@inline function symmetry_reduction_factor(billiard::AbsBilliard)
-    sym = maximal_symmetry(billiard)
-    return isnothing(sym) ? 1 : symmetry_reduction_factor(sym)
-end
-
-"""
-    fundamental_area(billiard::AbsBilliard) → A::Real
-
-Returns the area of the billiard's fundamental domain, obtained by dividing
-the full physical [`area`](@ref) by the highest-order discrete symmetry's
-[`symmetry_reduction_factor`](@ref).
-"""
-@inline function fundamental_area(billiard::AbsBilliard)
-    return area(billiard)/symmetry_reduction_factor(billiard)
+function k_range_for_states(billiard::AbsBilliard, N1::Int, N2::Int; fundamental::Bool=true)
+    return k_at_state(N1, billiard; fundamental), k_at_state(N2, billiard; fundamental)
 end

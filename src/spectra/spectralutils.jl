@@ -91,18 +91,44 @@ function overlap_and_merge!(k_left, ten_left, k_right, ten_right, control_left, 
     append!(control_left, [false for i in idx_last:length(k_right)])
 end
 
-function compute_spectrum(solver::AbsBasisSolver, basis::AbsBasis, billiard::AbsBilliard,k1,k2,dk; tol=1e-4, multithreaded = true)
+"""
+    compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, k1, k2, dk::Union{Real,Function}; tol=1e-4, multithreaded=true) → SpectralData
+
+Computes every [`AcceleratedBasisSolver`](@ref) eigenvalue candidate and its
+tension over the whole wavenumber range `[k1,k2]`, by sliding a window of
+half-width `dk` from `k1` to `k2` and resolving overlaps between consecutive
+windows with [`overlap_and_merge!`](@ref).
+
+## Arguments
+* `solver::AcceleratedBasisSolver`: The solver performing each windowed [`solve_spectrum`](@ref) diagonalization.
+* `basis::AbsBasis`: The basis used to approximate the eigenstates.
+* `billiard::AbsBilliard`: The billiard whose boundary is discretized.
+* `k1`: Lower wavenumber bound.
+* `k2`: Upper wavenumber bound.
+* `dk::Union{Real,Function}`: Window half-width, either a constant step or a function of the current wavenumber (e.g. sized adaptively via [`spectral_density`](@ref)).
+
+## Keyword Arguments
+* `tol::Real = 1e-4`: Tolerance forwarded to [`overlap_and_merge!`](@ref).
+* `multithreaded::Bool = true`: Forwarded to each window's [`solve_spectrum`](@ref) call.
+
+## Returns
+* `data::SpectralData`: Every retained `(k,ten)` pair across all windows, sorted by `k`.
+"""
+function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, k1, k2, dk::Union{Real,Function}; tol=1e-4, multithreaded=true)
     k0 = k1
+    Δk = dk isa Function ? dk(k0) : dk
     #initial computation
-    k_res, ten_res = solve_spectrum(solver, basis, billiard, k0, dk+tol)
+    k_res, ten_res = solve_spectrum(solver, basis, billiard, k0, Δk+tol; multithreaded)
     control = [false for i in 1:length(k_res)]
     while k0 < k2
-        k0 += dk
-        k_new, ten_new = solve_spectrum(solver, basis, billiard, k0, dk+tol)
-        overlap_and_merge!(k_res, ten_res, k_new, ten_new, control, k0-dk, k0; tol=tol)
+        k0_prev = k0
+        k0 += Δk
+        Δk = dk isa Function ? dk(k0) : dk
+        k_new, ten_new = solve_spectrum(solver, basis, billiard, k0, Δk+tol; multithreaded)
+        overlap_and_merge!(k_res, ten_res, k_new, ten_new, control, k0_prev, k0; tol=tol)
 
     end
-    return k_res, ten_res, control
+    return _finalize_spectrum(k_res, ten_res, control)
 end
 
 """
@@ -143,6 +169,27 @@ function SpectralData(k::Vector{T}, ten::Vector{T}, control::Vector{Bool}; ten2:
     return SpectralData(k, ten, control, minimum(k), maximum(k), ten2)
 end
 
+"""
+    _finalize_spectrum(ks::Vector{T}, ts::Vector{T}, control::Vector{Bool}; ten2::Union{Nothing,Vector{T}} = nothing) where {T<:Real} → SpectralData{T}
+
+Sorts `ks`/`ts`/`control` (and `ten2`, if given) by wavenumber and constructs
+[`SpectralData`](@ref), throwing `ArgumentError` if `ks` is empty. Shared tail
+used by every `compute_spectrum` method that constructs a `SpectralData`.
+
+## Description
+Safe to call from a single thread after a solver's own parallel region has
+already written into disjoint preallocated slots (one window/segment per
+index) — this is how e.g. [`BeynSolver`](@ref)/[`ExpandedBIMSolver`](@ref)
+already operate, so no concurrent access to `SpectralData` construction
+itself ever occurs; `_finalize_spectrum` does not add any new thread-safety
+mechanism, it only removes duplicated sort/construct/empty-check tails.
+"""
+function _finalize_spectrum(ks::Vector{T}, ts::Vector{T}, control::Vector{Bool}; ten2::Union{Nothing,Vector{T}}=nothing) where {T<:Real}
+    isempty(ks) && throw(ArgumentError("compute_spectrum found no candidates in the requested range"))
+    p = sortperm(ks)
+    return SpectralData(ks[p], ts[p], control[p]; ten2 = ten2===nothing ? nothing : ten2[p])
+end
+
 function merge_spectra(s1, s2; tol=1e-4)
     first = interval(s1.k_min-tol/2, s1.k_max+tol/2)
     second = interval(s2.k_min-tol/2, s2.k_max+tol/2)
@@ -170,31 +217,36 @@ function merge_spectra(s1, s2; tol=1e-4)
     return SpectralData(ks[p], ts[p], control[p])
 end
 
-function compute_spectrum(solver::AbsBasisSolver,basis::AbsBasis,billiard::AbsBilliard,N1::Int,N2::Int,dN::Int; N_expect = 2.0, tol=1e-4, multithreaded = false)
-    let solver=solver, basis=basis, billiard=billiard
-        N_intervals = range(N1-dN/2,N2+dN/2,step=dN)
-        #println(N_intervals)
-        if hasproperty(billiard,:angles)
-            k_intervals = [k_at_state(n, billiard.area, billiard.length, billiard.angles) for n in N_intervals]
-        else
-            k_intervals = [k_at_state(n, billiard.area, billiard.length) for n in N_intervals]
-        end
+"""
+    compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, N1::Int, N2::Int; N_expect::Real=1, tol=1e-4, multithreaded=true) → SpectralData
 
-        results = Vector{SpectralData}(undef,length(k_intervals)-1)
-        for i in 1:(length(k_intervals)-1)
-            k1 = k_intervals[i]
-            k2 = k_intervals[i+1]
-            dk = N_expect * 2.0*pi / (billiard.area * k1) #fix this
-            #println(k1)
-            #println(k2)
-            #println(dk)
-            k_res, ten_res, control = compute_spectrum(solver,basis,billiard,k1,k2,dk; multithreaded, tol)
-            #println(k_res)
-            results[i] = SpectralData(k_res, ten_res, control)
-        end
+Computes every [`AcceleratedBasisSolver`](@ref) eigenvalue candidate and its
+tension for states `N1` to `N2` of the billiard's Weyl-law state-counting
+function.
 
-        return reduce(merge_spectra, results)
-    end
+## Description
+The wavenumber range is obtained with [`k_range_for_states`](@ref), and the
+sliding-window half-width is sized adaptively via [`spectral_density`](@ref)
+so that each window expects `N_expect` states, before delegating to the
+`k1,k2,dk` method.
+
+## Arguments
+* `solver::AcceleratedBasisSolver`: The solver performing each windowed [`solve_spectrum`](@ref) diagonalization.
+* `basis::AbsBasis`: The basis used to approximate the eigenstates.
+* `billiard::AbsBilliard`: The billiard whose boundary is discretized.
+* `N1::Int`, `N2::Int`: Range of states to cover.
+
+## Keyword Arguments
+* `N_expect::Real = 1`: Target number of states per sliding window.
+* `tol::Real = 1e-4`, `multithreaded::Bool = true`: Forwarded to the `k1,k2,dk` method.
+
+## Returns
+* `data::SpectralData`: Every retained `(k,ten)` pair across `[k1,k2]`, sorted by `k`.
+"""
+function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, N1::Int, N2::Int; N_expect::Real=1, tol=1e-4, multithreaded=true)
+    k1, k2 = k_range_for_states(billiard, N1, N2)
+    dk = k -> N_expect / spectral_density(k, billiard)
+    return compute_spectrum(solver, basis, billiard, k1, k2, dk; tol, multithreaded)
 end
 
 ################################################################################
@@ -354,10 +406,36 @@ function compute_spectrum(solver::BeynSolver, billiard::Bi, k1, k2; Rmax::Real=1
     end
     ks = reduce(vcat, ks_win)
     tens = reduce(vcat, tens_win)
-    isempty(ks) && throw(ArgumentError("BeynSolver found no eigenvalue candidates in [$k1,$k2]"))
     control = fill(false, length(ks))
-    p = sortperm(ks)
-    return SpectralData(ks[p], tens[p], control[p])
+    return _finalize_spectrum(ks, tens, control)
+end
+
+"""
+    compute_spectrum(solver::BeynSolver, billiard::Bi, N1::Int, N2::Int; kwargs...) where {Bi<:AbsBilliard} → SpectralData
+
+Computes every [`BeynSolver`](@ref) eigenvalue candidate and its tension for
+states `N1` to `N2` of the billiard's Weyl-law state-counting function.
+
+## Description
+The wavenumber range is obtained with [`k_range_for_states`](@ref) (using the
+same fundamental/full-boundary convention as `solver.kernel.symmetry`, see
+[`k_range_for_states`](@ref)), then delegated to the `k1,k2` method.
+
+## Arguments
+* `solver::BeynSolver`: The [`BeynSolver`](@ref) whose fields configure every window.
+* `billiard::Bi`: The billiard whose boundary is discretized.
+* `N1::Int`, `N2::Int`: Range of states to cover.
+
+## Keyword Arguments
+* `kwargs...`: Forwarded to the `k1,k2` method (`Rmax`, `multithreaded`, `multithreaded_windows`).
+
+## Returns
+* `data::SpectralData`: Every retained `(k,ten)` pair across `[k1,k2]`, sorted by `k`.
+"""
+function compute_spectrum(solver::BeynSolver, billiard::Bi, N1::Int, N2::Int; kwargs...) where {Bi<:AbsBilliard}
+    fundamental = solver.kernel.symmetry!==nothing
+    k1, k2 = k_range_for_states(billiard, N1, N2; fundamental)
+    return compute_spectrum(solver, billiard, k1, k2; kwargs...)
 end
 
 """
@@ -454,9 +532,35 @@ function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::F
     end
     keep = k1T.<=ks_all.<=k2T
     ks_f = ks_all[keep]
-    isempty(ks_f) && throw(ArgumentError("ExpandedBIMSolver found no corrected roots in [$k1,$k2]"))
     tens_f = tens_all[keep]
     control_f = control[keep]
-    p = sortperm(ks_f)
-    return SpectralData(ks_f[p], tens_f[p], control_f[p])
+    return _finalize_spectrum(ks_f, tens_f, control_f)
+end
+
+"""
+    compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, N1::Int, N2::Int; kwargs...) where {Bi<:AbsBilliard} → SpectralData
+
+Computes every [`ExpandedBIMSolver`](@ref) locally-corrected root for states
+`N1` to `N2` of the billiard's Weyl-law state-counting function.
+
+## Description
+The wavenumber range is obtained with [`k_range_for_states`](@ref) (using the
+same fundamental/full-boundary convention as `solver.kernel.symmetry`, see
+[`k_range_for_states`](@ref)), then delegated to the `k1,k2` method.
+
+## Arguments
+* `solver::ExpandedBIMSolver`: The [`ExpandedBIMSolver`](@ref) performing each local correction.
+* `billiard::Bi`: The billiard whose boundary is discretized.
+* `N1::Int`, `N2::Int`: Range of states to cover.
+
+## Keyword Arguments
+* `kwargs...`: Forwarded to the `k1,k2` method (`dk`, `tol`, `spacing_frac`, `tolmax`, `local_window`, `seg_reuse_frac`, `multithreaded`).
+
+## Returns
+* `data::SpectralData{T}`: Every merged corrected root inside `[k1,k2]`, sorted by `k`.
+"""
+function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, N1::Int, N2::Int; kwargs...) where {Bi<:AbsBilliard}
+    fundamental = solver.kernel.symmetry!==nothing
+    k1, k2 = k_range_for_states(billiard, N1, N2; fundamental)
+    return compute_spectrum(solver, billiard, k1, k2; kwargs...)
 end
