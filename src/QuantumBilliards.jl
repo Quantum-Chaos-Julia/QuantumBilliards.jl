@@ -22,6 +22,9 @@ include("utils/macros.jl")
 include("utils/billiardutils.jl")
 export make_triangle_and_basis, adapt_basis
 
+include("states/symmetry/symmetrysector.jl")
+export SymmetrySector, symmetry_sector
+
 include("basis/planewaves/realplanewaves.jl")
 export RealPlaneWaves
 include("basis/fourierbessel/corneradapted.jl")

@@ -197,6 +197,49 @@ function RealPlaneWaves(dim::Int,
 end
 
 """
+    RealPlaneWaves(dim::Int, billiard::BilliardGeometry.AbsBilliard, sector::SymmetrySector; angle_arc=nothing, angle_shift=nothing, sampler = LinearNodes()) → basis::RealPlaneWaves
+
+Construct a [`RealPlaneWaves`](@ref) basis of dimension `dim` from a
+billiard's registered geometric symmetry group and a chosen
+[`SymmetrySector`](@ref) representation, instead of building `symmetries`/
+`sym_qnumbers` by hand.
+
+## Description
+Only `BilliardGeometry.XAxisReflection`/`YAxisReflection` generators of
+`billiard.symmetries` are consulted (matching the reflection axes
+[`RealPlaneWaves`](@ref) natively supports); `sector` must supply a real
+`±1` character for each one it constrains. If both an `x`- and a `y`-axis
+reflection are constrained by `sector` and `billiard.symmetries` also
+registers the corresponding `XYAxisReflection`, its character is derived
+automatically as the product of the two axis characters (matching
+[`RealPlaneWaves`](@ref)`(dim; sym_x, sym_y)`'s existing convention) — the
+caller only ever chooses characters for the two axis reflections.
+
+## Arguments
+* `dim`: Number of distinct angles to sample.
+* `billiard`: The billiard `sector`'s `sym_id`s are resolved against.
+* `sector`: The requested [`SymmetrySector`](@ref) representation.
+
+## Keyword arguments
+*  `angle_arc::Union{Real,Nothing} = nothing` : Angular range to sample; auto-adjusted based on the symmetries if not given.
+*  `angle_shift::Union{Real,Nothing} = nothing` : Angular offset; auto-adjusted based on the symmetries if not given.
+*  `sampler::AbsSampler = LinearNodes()` : Sampling strategy used to sample the angles.
+
+## Returns
+*  `basis` : A [`RealPlaneWaves`](@ref) basis whose symmetries/quantum numbers are derived from `billiard` and `sector`.
+"""
+function RealPlaneWaves(dim::Int, billiard::BilliardGeometry.AbsBilliard, sector::SymmetrySector;
+                       angle_arc::Union{Real,Nothing}=nothing, angle_shift::Union{Real,Nothing}=nothing,
+                       sampler=LinearNodes())
+    x_sym = findfirst(s -> s isa BilliardGeometry.XAxisReflection && haskey(sector.characters, s.sym_id), billiard.symmetries)
+    y_sym = findfirst(s -> s isa BilliardGeometry.YAxisReflection && haskey(sector.characters, s.sym_id), billiard.symmetries)
+    sym_x = isnothing(y_sym) ? nothing : Int(real(sector.characters[billiard.symmetries[y_sym].sym_id]))
+    sym_y = isnothing(x_sym) ? nothing : Int(real(sector.characters[billiard.symmetries[x_sym].sym_id]))
+    return RealPlaneWaves(dim; sym_x, sym_y, angle_arc, angle_shift, sampler)
+end
+
+
+"""
     RealPlaneWaves(dim::Int; sym_x::Union{Int,Nothing} = nothing, sym_y::Union{Int,Nothing} = nothing, angle_arc::Union{Real,Nothing} = nothing, angle_shift::Union{Real,Nothing} = nothing, sampler = LinearNodes()) → basis::RealPlaneWaves
 
 Main constructor for [`RealPlaneWaves`](@ref), specifying symmetries through the

@@ -93,6 +93,25 @@ _bim_grid_scale(solver::CompositeBIMSolver) = solver.component_solvers[1].pts_sc
 # included), which `boundary_components` does not account for.
 _group_boundary_by_domain_id(comp::Vector) = BilliardGeometry._group_curves_by_domain_id(comp)
 
+# Whether a connected boundary component group is a HOLE, using the curve's
+# own `orientation` field as the sole signal -- the same `orientation=-1`
+# marker `BilliardGeometry.MultiplyConnectedDomain`/`AnnularBilliard` already
+# use for the "inside outer AND outside every hole" `is_inside` semantics --
+# rather than the component's position in `groups` (component 1 is not
+# assumed to be the outer boundary just because it comes first: two disjoint
+# `orientation=1` boundaries, e.g. Step 7's two-copies smoke test, are both
+# correctly treated as independent outer boundaries and neither is reversed).
+# Every curve within one connected component must share the same
+# orientation; a mixed-orientation component is rejected rather than
+# silently guessed at.
+function _group_is_hole(group::Vector)
+    o = group[1].orientation
+    all(c.orientation == o for c in group) || throw(ArgumentError("Curves within one connected boundary component must share the same `orientation` field (found a mix); mixed-orientation components are not supported"))
+    o == 1 && return false
+    o == -1 && return true
+    throw(ArgumentError("Curve `orientation` must be ±1; found $o"))
+end
+
 # Dispatches boundary sampling of one connected component's curve group to the
 # assigned component solver's own private per-component evaluate-points
 # helper (unchanged from Steps 3/6), reused directly rather than duplicated.
@@ -346,14 +365,21 @@ one composite [`BoundaryPoints`](@ref) discretization.
 Connected boundary components are identified from the physical boundary
 curves' `domain_id` (the same field distinguishing subdomains of a
 multiply connected [`BilliardGeometry.AbsCompositeDomain`](@ref)), grouping
-in first-seen order. Component 1 is treated as the outer boundary and
-discretized as-is; components `2:end` are treated as holes and their curves
-are reversed (both order and per-curve parametrization, via
+in first-seen order. Whether a component is treated as a hole is decided by
+its curves' own `orientation` field (`orientation=-1`, the same marker
+[`BilliardGeometry.MultiplyConnectedDomain`](@ref)/[`BilliardGeometry.AnnularBilliard`](@ref)
+already use for the "inside outer AND outside every hole" `is_inside`
+semantics), not by component position — a component whose curves all have
+`orientation=1` is discretized as-is (an outer/independent physical
+boundary) regardless of whether it comes first or last in `groups`, while a
+component whose curves all have `orientation=-1` (a hole) has its curves
+reversed (both order and per-curve parametrization, via
 `BilliardGeometry._reverse_curve`) before discretization, so that the
 outward normal at every hole boundary point off `pts` points into the hole
 rather than into the physical domain (matching the sign convention already
 used by [`BilliardGeometry.full_boundary`](@ref) for orientation-reversing
-symmetry images).
+symmetry images). Every curve within one connected component must share the
+same `orientation` (see [`_group_is_hole`](@ref)).
 """
 function evaluate_points(solver::CompositeBIMSolver, billiard::Bi, k) where {Bi<:AbsBilliard}
     T = _bim_numeric_type(solver)
@@ -369,7 +395,8 @@ function evaluate_points(solver::CompositeBIMSolver, billiard::Bi, k) where {Bi<
     length(groups) == nc || throw(ArgumentError("Billiard boundary has $(length(groups)) connected component(s) (grouped by curve domain_id) but CompositeBIMSolver has $nc component solver(s)"))
     comp_pts = Vector{BoundaryPoints{T}}(undef, nc)
     @inbounds for a in 1:nc
-        group = a == 1 ? groups[a] : [BilliardGeometry._reverse_curve(c) for c in reverse(groups[a])]
+        grp = groups[a]
+        group = _group_is_hole(grp) ? [BilliardGeometry._reverse_curve(c) for c in reverse(grp)] : grp
         comp_pts[a] = _composite_component_points(solver.component_solvers[a], group, kT)
     end
     return _merge_composite_points(comp_pts)
