@@ -564,3 +564,107 @@ function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, N1::Int, N2::
     k1, k2 = k_range_for_states(billiard, N1, N2; fundamental)
     return compute_spectrum(solver, billiard, k1, k2; kwargs...)
 end
+
+################################################################################
+############# ACCELERATED-SEED / KERNEL-REFINED SPECTRUM COMPUTATION #########
+################################################################################
+
+"""
+    compute_spectrum_refined(solver::AcceleratedBIMSolver, billiard::Bi, k1, k2; dk_refine::Union{Real,Function} = (k -> 0.5/spectral_density(k, billiard)), seg_reuse_frac::Real = 0.95, multithreaded::Bool = true, seed_kwargs::NamedTuple = NamedTuple()) where {Bi<:AbsBilliard} → SpectralData
+
+Refines every [`AcceleratedBIMSolver`](@ref) seed candidate over `[k1,k2]` by
+bracketing each with `solver.kernel`'s own tension-minimizing [`solve_wavenumber`](@ref).
+
+## Description
+Seed candidates `(k,ten)` are first obtained exactly as [`compute_spectrum`](@ref)
+computes them for `solver` ([`BeynSolver`](@ref)'s contour-integral roots or
+[`ExpandedBIMSolver`](@ref)'s local Taylor-corrected roots), giving a cheap
+approximate location for every root in `[k1,k2]`. Each seed is then
+independently polished by bracketing it in a small window and minimizing the
+tension of the plain [`SweepBIMSolver`](@ref) `solver.kernel` with
+[`solve_wavenumber`](@ref) — a genuine single-wavenumber tension minimization,
+as opposed to the accelerated method's own approximate root-finding strategy
+— giving a higher-fidelity `(k0,t0)` for the same physical state.
+
+Since `solve_wavenumber(::SweepBIMSolver, ...)` would otherwise re-derive a
+fresh boundary discretization via `evaluate_points` on every single seed,
+seeds (already sorted by `k`, see [`compute_spectrum`](@ref)) are grouped
+into consecutive segments that reuse one discretization — sized for the
+segment's largest `k`, safely covering every smaller `k` in the segment — as
+long as `k<=k_segment_start/seg_reuse_frac`, exactly mirroring the
+segment-reuse already used by
+[`compute_spectrum(::ExpandedBIMSolver, ...)`](@ref) for its own
+trial-wavenumber grid. Refinement itself proceeds one seed at a time (not
+threaded across seeds): `solve_wavenumber`'s own `multithreaded` matrix
+construction already parallelizes the expensive part of each call, so
+threading the outer seed loop as well would nest thread parallelism.
+
+## Arguments
+* `solver::AcceleratedBIMSolver`: The [`AcceleratedBIMSolver`](@ref) ([`BeynSolver`](@ref) or [`ExpandedBIMSolver`](@ref)) whose `kernel` performs the refinement.
+* `billiard::Bi`: The billiard whose boundary is discretized.
+* `k1`, `k2`: Wavenumber range covered by the seed search.
+
+## Keyword Arguments
+* `dk_refine::Union{Real,Function} = (k -> 0.5/spectral_density(k, billiard))`: Refinement bracket half-width around each seed, either a constant or a function of `k` (defaults to half the local mean level spacing — wide enough to bracket the true root without reaching a neighboring one).
+* `seg_reuse_frac::Real = 0.95`: Seeds reuse the current segment's boundary discretization while `k<=k_segment_start/seg_reuse_frac`.
+* `multithreaded::Bool = true`: Forwarded to every `solve_wavenumber` call (matrix construction only).
+* `seed_kwargs::NamedTuple = NamedTuple()`: Extra keyword arguments forwarded to the seed search `compute_spectrum(solver, billiard, k1, k2; multithreaded, seed_kwargs...)` (e.g. `Rmax`/`multithreaded_windows` for [`BeynSolver`](@ref), `dk`/`tol`/`spacing_frac`/`tolmax`/`local_window`/`seg_reuse_frac` for [`ExpandedBIMSolver`](@ref)).
+
+## Returns
+* `data::SpectralData`: One refined `(k0,t0)` per seed, sorted by `k`; `control` is all `false` and `ten2` is `nothing`.
+"""
+function compute_spectrum_refined(solver::AcceleratedBIMSolver, billiard::Bi, k1, k2; dk_refine::Union{Real,Function}=(k -> 0.5/spectral_density(k, billiard)), seg_reuse_frac::Real=0.95, multithreaded::Bool=true, seed_kwargs::NamedTuple=NamedTuple()) where {Bi<:AbsBilliard}
+    0<seg_reuse_frac<=1 || throw(ArgumentError("seg_reuse_frac must satisfy 0<seg_reuse_frac<=1"))
+    seeds = compute_spectrum(solver, billiard, k1, k2; multithreaded, seed_kwargs...)
+    ks_seed = seeds.k
+    n = length(ks_seed)
+    T = eltype(ks_seed)
+    seg_reuse_fracT = T(seg_reuse_frac)
+    ks_ref = Vector{T}(undef, n)
+    tens_ref = Vector{T}(undef, n)
+    seg_first = 1
+    pts = evaluate_points(solver.kernel, billiard, ks_seed[1])
+    while seg_first<=n
+        seg_last = seg_first
+        while seg_last<n && ks_seed[seg_last+1]<=ks_seed[seg_first]/seg_reuse_fracT
+            seg_last += 1
+        end
+        seg_last!=seg_first && (pts = evaluate_points(solver.kernel, billiard, ks_seed[seg_last]))
+        @inbounds for i in seg_first:seg_last
+            k = ks_seed[i]
+            Δk = T(dk_refine isa Function ? dk_refine(k) : dk_refine)
+            ks_ref[i], tens_ref[i] = solve_wavenumber(solver.kernel, billiard, k, Δk; multithreaded, pts)
+        end
+        seg_first = seg_last+1
+    end
+    control = fill(false, n)
+    return _finalize_spectrum(ks_ref, tens_ref, control)
+end
+
+"""
+    compute_spectrum_refined(solver::AcceleratedBIMSolver, billiard::Bi, N1::Int, N2::Int; kwargs...) where {Bi<:AbsBilliard} → SpectralData
+
+Refines every [`AcceleratedBIMSolver`](@ref) seed candidate for states `N1` to
+`N2` of the billiard's Weyl-law state-counting function.
+
+## Description
+The wavenumber range is obtained with [`k_range_for_states`](@ref) (using the
+same fundamental/full-boundary convention as `solver.kernel.symmetry`, see
+[`k_range_for_states`](@ref)), then delegated to the `k1,k2` method.
+
+## Arguments
+* `solver::AcceleratedBIMSolver`: The [`AcceleratedBIMSolver`](@ref) whose `kernel` performs the refinement.
+* `billiard::Bi`: The billiard whose boundary is discretized.
+* `N1::Int`, `N2::Int`: Range of states to cover.
+
+## Keyword Arguments
+* `kwargs...`: Forwarded to the `k1,k2` method (`dk_refine`, `seg_reuse_frac`, `multithreaded`, `seed_kwargs`).
+
+## Returns
+* `data::SpectralData`: One refined `(k0,t0)` per seed, sorted by `k`.
+"""
+function compute_spectrum_refined(solver::AcceleratedBIMSolver, billiard::Bi, N1::Int, N2::Int; kwargs...) where {Bi<:AbsBilliard}
+    fundamental = solver.kernel.symmetry!==nothing
+    k1, k2 = k_range_for_states(billiard, N1, N2; fundamental)
+    return compute_spectrum_refined(solver, billiard, k1, k2; kwargs...)
+end

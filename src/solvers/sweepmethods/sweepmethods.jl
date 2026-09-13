@@ -85,16 +85,19 @@ function k_sweep(solver::SweepBasisSolver, basis::AbsBasis, billiard::AbsBilliar
 end
 
 """
-    solve_wavenumber(solver::SweepBIMSolver, billiard::AbsBilliard, k, dk; multithreaded::Bool = true) → (k0::Real, t0::Real)
+    solve_wavenumber(solver::SweepBIMSolver, billiard::AbsBilliard, k, dk; multithreaded::Bool = true, pts::Union{Nothing,BoundaryPoints} = nothing) → (k0::Real, t0::Real)
 
 Finds the wavenumber `k0` within `[k - dk/2, k + dk/2]` that minimizes the tension
 computed by the boundary-integral sweep `solver`, together with the minimal
 tension `t0`.
 
 ## Description
-Boundary points are generated once with [`evaluate_points`](@ref), and the
-tension `solve(solver, pts, k; multithreaded)` is minimized over `k` in the
-search window with `Optim.optimize`, exactly as
+Boundary points are generated once with [`evaluate_points`](@ref) (unless a
+precomputed discretization is passed via `pts`, letting a caller that refines
+many nearby wavenumbers, e.g. [`compute_spectrum_refined`](@ref), reuse a
+single discretization instead of paying for `evaluate_points` on every call),
+and the tension `solve(solver, pts, k; multithreaded)` is minimized over `k`
+in the search window with `Optim.optimize`, exactly as
 [`solve_wavenumber(::SweepBasisSolver, ...)`](@ref) does for basis-expansion
 solvers, but without a basis to resize.
 
@@ -106,15 +109,16 @@ solvers, but without a basis to resize.
 
 ## Keyword arguments
 * `multithreaded::Bool = true`: Whether the matrix construction is multithreaded.
+* `pts::Union{Nothing,BoundaryPoints} = nothing`: Optional precomputed boundary discretization (from `evaluate_points(solver, billiard, k')` at some `k'>=k`); when `nothing`, one is generated at `k`.
 
 ## Returns
 * `k0`: The wavenumber minimizing the tension within the search window.
 * `t0`: The minimal tension found at `k0`.
 """
-function solve_wavenumber(solver::SweepBIMSolver, billiard::Bi, k, dk; multithreaded::Bool=true) where {Bi<:AbsBilliard}
-    pts = evaluate_points(solver, billiard, k)
+function solve_wavenumber(solver::SweepBIMSolver, billiard::Bi, k, dk; multithreaded::Bool=true, pts::Union{Nothing,BoundaryPoints}=nothing) where {Bi<:AbsBilliard}
+    pts_ = pts===nothing ? evaluate_points(solver, billiard, k) : pts
     function f(k)
-        return solve(solver, pts, k; multithreaded)
+        return solve(solver, pts_, k; multithreaded)
     end
     res = optimize(f, k-0.5*dk, k+0.5*dk)
     k0, t0 = res.minimizer, res.minimum
