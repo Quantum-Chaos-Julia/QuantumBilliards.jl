@@ -1167,6 +1167,23 @@ end
     return T(imag(_cheb_clenshaw(P.c,t)))
 end
 
+struct DLPWavefunctionChebPlan
+    h1::ChebHankelPlanH
+end
+
+@inline function _eval_h1_dlp_cheb(pl::DLPWavefunctionChebPlan,r::T) where {T<:Real}
+    rf=Float64(r)
+    z=ComplexF64(pl.h1.k)*rf
+    az=abs(z)
+    if az<hankel_z_chebyshev_cutoff_small_z
+        return _small_h1_series(z)
+    elseif az<hankel_z_chebyshev_cutoff || rf<pl.h1.rmin || rf>pl.h1.rmax
+        return SpecialFunctions.besselh(1,1,z)
+    end
+    pidx,t=panel_t(pl.h1,rf)
+    return h1_at_r(pl.h1,pidx,t,rf)
+end
+
 #    CFIEWavefunctionChebPlan
 #
 # Chebyshev interpolation plan for CFIE wavefunction reconstruction.

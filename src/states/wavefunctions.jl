@@ -90,9 +90,19 @@ end
 @inline function _slp_chebyshev_plans(solver::BoundaryIntegralMethod,pts::BoundaryPoints{T},zj::AbstractVector{Complex{T}};tol::Real=1e-8,verbose::Bool=false) where {T<:Real}
     return chebyshev_params_slp(solver,pts,zj;tol=tol,verbose=verbose)
 end
-@inline function _slp_chebyshev_plans(solver::Union{DLP_kress,DLP_kress_global_corners},pts::BoundaryPoints{T},zj::AbstractVector{Complex{T}};tol::Real=1e-8,verbose::Bool=false) where {T<:Real}
+@inline function _slp_chebyshev_plans(solver::DLP,pts::BoundaryPoints{T},zj::AbstractVector{Complex{T}};tol::Real=1e-8,verbose::Bool=false) where {T<:Real}
     n,M,_,_,plans0,_,_,_,errs,_,_,_=chebyshev_params(solver,pts,zj;tol=tol,verbose=verbose)
     return n,M,plans0,errs
+end
+@inline function _dlp_wavefunction_chebyshev_plans(solver::DLP,pts::BoundaryPoints{T},zj::AbstractVector{Complex{T}};tol::Real=1e-8,verbose::Bool=false) where {T<:Real}
+    n,M,_,_,_,plans1,_,_,_,errs1,_,_=chebyshev_params(solver,pts,zj;tol=tol,verbose=verbose)
+    plans=[DLPWavefunctionChebPlan(plans1[i]) for i in eachindex(zj)]
+    return n,M,plans,errs1
+end
+@inline function _dlp_wavefunction_chebyshev_plans(solver::BoundaryIntegralMethod,pts::BoundaryPoints{T},zj::AbstractVector{Complex{T}};tol::Real=1e-8,verbose::Bool=false) where {T<:Real}
+    n,M,_,_,plans1,err1=chebyshev_params(solver,pts,zj;tol=tol,verbose=verbose)
+    plans=[DLPWavefunctionChebPlan(p) for p in plans1]
+    return n,M,plans,err1
 end
 @inline function _cfie_wavefunction_chebyshev_plans(solver::CFIE,pts::Vector{BoundaryPoints{T}},zj::AbstractVector{Complex{T}};tol::Real=1e-8,verbose::Bool=false) where {T<:Real}
     n,M,_,_,plans0,plans1,_,_,err0,err1,_,_=chebyshev_params(solver,pts,zj;tol=tol,verbose=verbose)
@@ -157,6 +167,63 @@ irrelevant for an eigenfunction.
 end
 
 """
+    ϕ_dlp(x::T,y::T,k::T,bd::BoundaryPoints{T},μ::AbstractVector;float32_bessel::Bool=false,use_chebyshev::Bool=false,cheb::Union{DLPWavefunctionChebPlan,Nothing}=nothing) where {T<:Real}
+
+Evaluate the interior double-layer potential
+
+    ψ(x)=∫∂Ω ∂G_k(x,q)/∂n_q μ(q) ds_q,
+
+with
+
+    G_k(x,q)=(i/4)H₀⁽¹⁾(k|x-q|).
+
+The supplied `μ` is the right-null DLP layer density, not the physical
+Neumann trace `∂ₙψ`.
+
+## Arguments
+* `x::T`: Evaluation x-coordinate.
+* `y::T`: Evaluation y-coordinate.
+* `k::T`: Wavenumber.
+* `bd::BoundaryPoints{T}`: Boundary discretization.
+* `μ::AbstractVector`: DLP layer density.
+
+## Keyword Arguments
+* `float32_bessel::Bool=false`: Use Float32 direct Hankel evaluation.
+* `use_chebyshev::Bool=false`: Use Chebyshev-interpolated `H₁⁽¹⁾`.
+* `cheb::Union{DLPWavefunctionChebPlan,Nothing}=nothing`: DLP wavefunction Chebyshev plan.
+
+## Returns
+* `ψ`: Interior DLP wavefunction value.
+"""
+@inline function ϕ_dlp(x::T,y::T,k::T,bd::BoundaryPoints{T},μ::AbstractVector;float32_bessel::Bool=false,use_chebyshev::Bool=false,cheb::Union{DLPWavefunctionChebPlan,Nothing}=nothing) where {T<:Real}
+    xy=bd.xy
+    normal=bd.normal
+    ds=bd.ds
+    S=promote_type(eltype(μ),Complex{T})
+    acc=zero(S)
+    kquarter=k*T(0.25)
+    @inbounds @fastmath for j in eachindex(μ)
+        p=xy[j]
+        dx=x-p[1]
+        dy=y-p[2]
+        r2=muladd(dx,dx,dy*dy)
+        r2==zero(T)&&continue
+        r=sqrt(r2)
+        n=normal[j]
+        inn=muladd(dx,n[1],dy*n[2])
+        h1=if use_chebyshev
+            _eval_h1_dlp_cheb(cheb,r)
+        elseif float32_bessel
+            Complex{T}(Bessels.hankelh1(1,Float32(k*r)))
+        else
+            Complex{T}(Bessels.hankelh1(1,k*r))
+        end
+        acc+=(im*kquarter)*h1*(inn/r)*μ[j]*ds[j]
+    end
+    return acc
+end
+
+"""
     wavefunctions(solver::Union{BoundaryIntegralMethod,DLP_kress,DLP_kress_global_corners},ks::Vector{T},vec_us::Vector{<:AbstractVector},vec_bdPoints::Vector{<:BoundaryPoints{T}},billiard::Bi;b::Union{Real,Symbol}=:auto,inside_only::Bool=true,fundamental::Bool=true,MIN_CHUNK::Int=4096,use_float_32::Bool=true,use_chebyshev::Bool=true,tol_cheb::Real=1e-8,cheb_verbose::Bool=true) where {Bi<:BilliardGeometry.AbsBilliard,T<:Real} → Tuple
 
 Reconstruct a batch of DLP eigenfunctions on a common Cartesian grid.
@@ -181,13 +248,14 @@ is used to construct one `H₀⁽¹⁾` plan for every wavenumber in the batch.
 * `tol_cheb::Real=1e-8`: Chebyshev interpolation tolerance.
 * `cheb_verbose::Bool=true`: Print Chebyshev tuning diagnostics.
 * `fundamental_domain::Bool=true`: Use the fundamental domain for inside/outside masking.
+* `use_layer_density::Bool=true`: Use the layer density for wavefunction reconstruction. If `false`, the wavefunction normal derivative is assumed. This determines which kernel is used in the reconstruction. For layer density DLP is used, for normal derivative SLP is used.
 
 ## Returns
 * `Psi2ds::Vector{Matrix}`: Reconstructed wavefunction matrices.
 * `x_grid::Vector{T}`: Common x grid.
 * `y_grid::Vector{T}`: Common y grid.
 """
-function wavefunctions(solver::Union{BoundaryIntegralMethod,DLP_kress,DLP_kress_global_corners},ks::Vector{T},vec_us::Vector{<:AbstractVector},vec_bdPoints::Vector{<:BoundaryPoints{T}},billiard::Bi;b::Union{Real,Symbol}=:auto,inside_only::Bool=true,MIN_CHUNK::Int=4096,use_float_32::Bool=true,use_chebyshev::Bool=true,tol_cheb::Real=1e-8,cheb_verbose::Bool=true,fundamental_domain::Bool=true) where {Bi<:BilliardGeometry.AbsBilliard,T<:Real}
+function wavefunctions(solver::Union{BoundaryIntegralMethod,DLP_kress,DLP_kress_global_corners},ks::Vector{T},vec_us::Vector{<:AbstractVector},vec_bdPoints::Vector{<:BoundaryPoints{T}},billiard::Bi;b::Union{Real,Symbol}=:auto,inside_only::Bool=true,MIN_CHUNK::Int=4096,use_float_32::Bool=true,use_chebyshev::Bool=true,tol_cheb::Real=1e-8,cheb_verbose::Bool=true,fundamental_domain::Bool=true,use_layer_density::Bool=true) where {Bi<:BilliardGeometry.AbsBilliard,T<:Real}
     k_max,idx_max=findmax(ks)
     comps=_boundary_components(billiard.full_boundary)[1]
     L=sum(c.length for c in comps)
@@ -204,9 +272,14 @@ function wavefunctions(solver::Union{BoundaryIntegralMethod,DLP_kress,DLP_kress_
     pts_masked_indices=findall(pts_mask)
     if use_chebyshev
         zj=Complex{T}.(ks)
-        cheb_npanels,cheb_M,plans0,errs=_slp_chebyshev_plans(solver,vec_bdPoints[idx_max],zj;tol=tol_cheb,verbose=cheb_verbose)
-        cheb_plans=[SLPWavefunctionChebPlan(p) for p in plans0]
-        @info "Using SLP wavefunction Cheb" cheb_npanels cheb_M max_err=maximum(errs)
+        if use_layer_density
+            npanels,M,cheb_plans,errs=_dlp_wavefunction_chebyshev_plans(solver,vec_bdPoints[idx_max],zj;tol=tol_cheb,verbose=cheb_verbose)
+            @info "Using DLP wavefunction Cheb" npanels M max_err=maximum(errs)
+        else
+            npanels,M,plans0,errs=_slp_chebyshev_plans(solver,vec_bdPoints[idx_max],zj;tol=tol_cheb,verbose=cheb_verbose)
+            cheb_plans=[SLPWavefunctionChebPlan(p) for p in plans0]
+            @info "Using SLP wavefunction Cheb" npanels M max_err=maximum(errs)
+        end
     else
         cheb_plans=fill(nothing,length(ks))
     end
@@ -216,6 +289,7 @@ function wavefunctions(solver::Union{BoundaryIntegralMethod,DLP_kress,DLP_kress_
     nmask=length(pts_masked_indices)
     NT_eff=max(1,min(NT,cld(nmask,MIN_CHUNK)))
     q,r=divrem(nmask,NT_eff)
+    ϕ(x,y,k,bd,u;kwargs...)=use_layer_density ? ϕ_dlp(x,y,k,bd,u;kwargs...) : ϕ_slp(x,y,k,bd,u;kwargs...)
     progress=Progress(length(ks),desc="Constructing wavefunction matrices...")
     @inbounds for i in eachindex(ks)
         Psi_flat=zeros(S,nx*ny)
@@ -229,7 +303,7 @@ function wavefunctions(solver::Union{BoundaryIntegralMethod,DLP_kress,DLP_kress_
                 idx=pts_masked_indices[jj]
                 ix=((idx-1)%nx)+1
                 iy=((idx-1)÷nx)+1
-                Psi_flat[idx]=ϕ_slp(x_grid[ix],y_grid[iy],k,bd,u;float32_bessel=use_float_32,use_chebyshev=use_chebyshev,cheb=use_chebyshev ? cheb_plans[i] : nothing)
+                Psi_flat[idx]=ϕ(x_grid[ix],y_grid[iy],k,bd,u;float32_bessel=use_float_32,use_chebyshev=use_chebyshev,cheb=use_chebyshev ? cheb_plans[i] : nothing)
             end
         end
         Psi2ds[i]=reshape(Psi_flat,nx,ny)
