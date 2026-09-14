@@ -96,22 +96,43 @@ end
 # entry's own `m` (never assuming `m=1`).
 ################################################################################
 
+# Guards against a SymmetrySector built against one billiard being reused
+# against another. sym_id is assigned purely by per-billiard registration
+# order (BilliardGeometry.SymmetryRegistry), not globally, so two distinct
+# billiard instances of the same symmetric family (e.g. two D2-symmetric
+# billiards) can and do assign colliding sym_ids — BilliardGeometry.symmetry_of
+# would then happily resolve against the *wrong* generator instead of
+# erroring. Require literal identity with the billiard the sector was built
+# for, which every legitimate call site already has on hand.
+function _check_sector_billiard(billiard::BilliardGeometry.AbsBilliard, sector::SymmetrySector)
+    sector.billiard === billiard || throw(ArgumentError(
+        "SymmetrySector was built against a different billiard instance than " *
+        "the one it is now being resolved against. sym_id assignment is " *
+        "per-billiard registration order, so a sector built for one billiard " *
+        "cannot safely be reused against another, even a geometrically " *
+        "identical one. Rebuild the sector with symmetry_sector(billiard, ...) " *
+        "using this exact billiard object."))
+    return nothing
+end
+
 """
     _resolve_bim_symmetry(billiard::BilliardGeometry.AbsBilliard, sector::SymmetrySector) → (symmetry, character::Tuple)
 
 Resolves `sector`'s per-`sym_id` characters, looked up against `billiard`'s
-own [`BilliardGeometry.SymmetryRegistry`](@ref) (`BilliardGeometry.symmetry_of`,
-which throws if `sector` names a `sym_id` `billiard` never registered — this
-is what closes the "sector built against the wrong billiard" gap), into the
-bare `(symmetry::BilliardGeometry.AbsSymmetry, character::Tuple)` pair
-consumed by [`DoubleLayerPotentialSolver`](@ref)/
+own [`BilliardGeometry.SymmetryRegistry`](@ref) (`BilliardGeometry.symmetry_of`),
+into the bare `(symmetry::BilliardGeometry.AbsSymmetry, character::Tuple)`
+pair consumed by [`DoubleLayerPotentialSolver`](@ref)/
 [`CombinedFieldIntegralEquationSolver`](@ref)'s unvalidated constructor
-keywords.
+keywords. `sector` must have been built against this exact `billiard`
+instance (checked by identity, since `sym_id` is only unique per-billiard,
+not globally) — this is what closes the "sector built against the wrong
+billiard" gap.
 
 An empty `sector` (no characters requested) resolves to the trivial
 representation, `(nothing, ())`.
 """
 function _resolve_bim_symmetry(billiard::BilliardGeometry.AbsBilliard, sector::SymmetrySector)
+    _check_sector_billiard(billiard, sector)
     isempty(sector.characters) && return nothing, ()
     gens = Pair{BilliardGeometry.AbsSymmetry,ComplexF64}[BilliardGeometry.symmetry_of(billiard.symmetries, id) => char for (id, char) in sector.characters]
     return _resolve_bim_symmetry(gens)

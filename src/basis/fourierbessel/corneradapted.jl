@@ -163,7 +163,7 @@ of Particular Solutions", for background.
 function CornerAdaptedFourierBessel(dim::Int64,corner_angle::T,origin::SVector{2,T},rot_angle::T;rotation_angle_discontinuity=zero(T)) where {T<:Real}
     cs=PolarCS(origin,rot_angle)
     nu=pi/corner_angle
-    return CornerAdaptedFourierBessel{Float64,Nothing}(cs,dim,corner_angle,nu,nothing,rotation_angle_discontinuity)
+    return CornerAdaptedFourierBessel{T,Nothing}(cs,dim,corner_angle,nu,nothing,rotation_angle_discontinuity)
 end
 
 """
@@ -187,7 +187,7 @@ coordinate system `cs` and attaching the given `symmetry`.
 """
 function CornerAdaptedFourierBessel(dim::Int64,corner_angle::T,cs::CoordinateSystem,symmetry::Union{Vector{Any},Nothing};rotation_angle_discontinuity=zero(T)) where {T<:Real}
     nu=pi/corner_angle
-    return CornerAdaptedFourierBessel{Float64,Nothing}(cs,dim,corner_angle,nu,symmetry,rotation_angle_discontinuity)
+    return CornerAdaptedFourierBessel{T,Nothing}(cs,dim,corner_angle,nu,symmetry,rotation_angle_discontinuity)
 end
 
 """
@@ -213,7 +213,7 @@ rotated by `rot_angle`, attaching the given `symmetry`.
 function CornerAdaptedFourierBessel(dim::Int64,corner_angle::T,origin::SVector{2,T},rot_angle::T,symmetry::Union{Vector{Any},Nothing};rotation_angle_discontinuity=zero(T)) where {T<:Real}
     cs=PolarCS(origin,rot_angle)
     nu=pi/corner_angle
-    return CornerAdaptedFourierBessel{Float64,Nothing}(cs,dim,corner_angle,nu,symmetry,rotation_angle_discontinuity)
+    return CornerAdaptedFourierBessel{T,Nothing}(cs,dim,corner_angle,nu,symmetry,rotation_angle_discontinuity)
 end
 
 """

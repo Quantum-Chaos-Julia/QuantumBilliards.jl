@@ -217,8 +217,8 @@ caller only ever chooses characters for the two axis reflections.
 
 ## Arguments
 * `dim`: Number of distinct angles to sample.
-* `billiard`: The billiard `sector`'s `sym_id`s are resolved against.
-* `sector`: The requested [`SymmetrySector`](@ref) representation.
+* `billiard`: The billiard `sector`'s `sym_id`s are resolved against. Must be the exact billiard instance `sector` was built for (checked by identity), since `sym_id` is only unique per-billiard.
+* `sector`: The requested [`SymmetrySector`](@ref) representation. Every character it constrains must correspond to an `XAxisReflection`/`YAxisReflection` generator — `RealPlaneWaves` has no representation for e.g. an `NFoldRotation` sector and raises an `ArgumentError` rather than silently ignoring it.
 
 ## Keyword arguments
 *  `angle_arc::Union{Real,Nothing} = nothing` : Angular range to sample; auto-adjusted based on the symmetries if not given.
@@ -231,10 +231,22 @@ caller only ever chooses characters for the two axis reflections.
 function RealPlaneWaves(dim::Int, billiard::BilliardGeometry.AbsBilliard, sector::SymmetrySector;
                        angle_arc::Union{Real,Nothing}=nothing, angle_shift::Union{Real,Nothing}=nothing,
                        sampler=LinearNodes())
+    _check_sector_billiard(billiard, sector)
     x_sym = findfirst(s -> s isa BilliardGeometry.XAxisReflection && haskey(sector.characters, s.sym_id), billiard.symmetries)
     y_sym = findfirst(s -> s isa BilliardGeometry.YAxisReflection && haskey(sector.characters, s.sym_id), billiard.symmetries)
     sym_x = isnothing(y_sym) ? nothing : Int(real(sector.characters[billiard.symmetries[y_sym].sym_id]))
     sym_y = isnothing(x_sym) ? nothing : Int(real(sector.characters[billiard.symmetries[x_sym].sym_id]))
+
+    consumed = Set{Int}()
+    isnothing(x_sym) || push!(consumed, billiard.symmetries[x_sym].sym_id)
+    isnothing(y_sym) || push!(consumed, billiard.symmetries[y_sym].sym_id)
+    unhandled = setdiff(keys(sector.characters), consumed)
+    isempty(unhandled) || throw(ArgumentError(
+        "RealPlaneWaves only supports XAxisReflection/YAxisReflection symmetry " *
+        "sectors; sector constrains sym_id(s) $(collect(unhandled)) (e.g. an " *
+        "NFoldRotation generator) that RealPlaneWaves has no representation " *
+        "for, instead of silently building the unrestricted basis."))
+
     return RealPlaneWaves(dim; sym_x, sym_y, angle_arc, angle_shift, sampler)
 end
 

@@ -190,13 +190,30 @@ function _finalize_spectrum(ks::Vector{T}, ts::Vector{T}, control::Vector{Bool};
     return SpectralData(ks[p], ts[p], control[p]; ten2 = ten2===nothing ? nothing : ten2[p])
 end
 
-function merge_spectra(s1, s2; tol=1e-4)
-    first = interval(s1.k_min-tol/2, s1.k_max+tol/2)
-    second = interval(s2.k_min-tol/2, s2.k_max+tol/2)
-    overlap = intersect_interval(first, second)  #this is the overlap interval
-    
-    idx_1 = [in_interval(k, overlap) for k in s1.k]
-    idx_2 = [in_interval(k, overlap) for k in s2.k]
+"""
+    merge_spectra(s1::SpectralData, s2::SpectralData; tol=1e-4) → SpectralData
+
+Merges two [`SpectralData`](@ref) computed over (possibly overlapping)
+wavenumber ranges into one, resolving any overlap between `s1` and `s2` with
+[`match_wavenumbers`](@ref) — the same overlap-resolution logic used
+internally by [`overlap_and_merge!`](@ref)/`compute_spectrum`.
+
+## Arguments
+* `s1::SpectralData`, `s2::SpectralData`: The two spectra to merge, in either order.
+
+## Keyword Arguments
+* `tol::Real = 1e-4`: Half-width padding applied to each spectrum's `[k_min,k_max]` range before intersecting, matching `compute_spectrum`'s own overlap tolerance.
+
+## Returns
+* `data::SpectralData`: The merged, sorted spectrum.
+"""
+function merge_spectra(s1::SpectralData, s2::SpectralData; tol=1e-4)
+    lo1, hi1 = s1.k_min-tol/2, s1.k_max+tol/2
+    lo2, hi2 = s2.k_min-tol/2, s2.k_max+tol/2
+    ov_lo, ov_hi = max(lo1,lo2), min(hi1,hi2) #overlap interval, may be empty if ov_lo > ov_hi
+
+    idx_1 = (s1.k .>= ov_lo) .& (s1.k .<= ov_hi)
+    idx_2 = (s2.k .>= ov_lo) .& (s2.k .<= ov_hi)
 
     ks1 = s1.k[idx_1]
     ts1 = s1.ten[idx_1]
