@@ -436,7 +436,7 @@ function _ebim_construct_matrices(cs::DoubleLayerPotentialSolver, pts::BoundaryP
         _ebim_fredholm_full_with_derivatives!(_dlp_kernel_entry_with_derivatives, A, dA, ddA, pts, Rmat, G, kT; multithreaded)
         return A, dA, ddA
     end
-    orbits = symmetry_index_orbits(T, pts.xy, cs.symmetry)
+    orbits = _fold_boundary(T, pts.xy, cs.symmetry, cs.character)
     m = fundamental_size(orbits)
     A = Matrix{Complex{T}}(undef, m, m)
     dA = similar(A)
@@ -459,7 +459,7 @@ function _ebim_construct_matrices(cs::CombinedFieldIntegralEquationSolver, pts::
         _ebim_fredholm_full_with_derivatives!(_cfie_kernel_entry_with_derivatives, A, dA, ddA, pts, Rmat, G, kT; multithreaded)
         return A, dA, ddA
     end
-    orbits = symmetry_index_orbits(T, pts.xy, cs.symmetry)
+    orbits = _fold_boundary(T, pts.xy, cs.symmetry, cs.character)
     m = fundamental_size(orbits)
     A = Matrix{Complex{T}}(undef, m, m)
     dA = similar(A)
@@ -491,7 +491,7 @@ function _ebim_construct_matrices(cs::CompositeBIMSolver{T}, pts::BoundaryPoints
         _composite_fredholm_full_with_derivatives!(A, dA, ddA, cs, comp_pts, Gs, Rmats, offs, kT; multithreaded)
         return A, dA, ddA
     end
-    orbits = symmetry_index_orbits(T, pts.xy, cs.symmetry)
+    orbits = _fold_boundary(T, pts.xy, cs.symmetry, cs.character)
     m = fundamental_size(orbits)
     g2c, g2l = _composite_global_to_local(offs)
     A = Matrix{Complex{T}}(undef, m, m)
@@ -533,7 +533,7 @@ function _ebim_construct_matrices_cheb(cs::DoubleLayerPotentialSolver, pts::Boun
         _ebim_fredholm_full_with_derivatives!(entry_fn, A, dA, ddA, pts, Rmat, G, kc; multithreaded)
         return A, dA, ddA
     end
-    orbits = symmetry_index_orbits(T, pts.xy, cs.symmetry)
+    orbits = _fold_boundary(T, pts.xy, cs.symmetry, cs.character)
     m = fundamental_size(orbits)
     A = Matrix{ComplexF64}(undef, m, m)
     dA = similar(A)
@@ -561,7 +561,7 @@ function _ebim_construct_matrices_cheb(cs::CombinedFieldIntegralEquationSolver, 
         _ebim_fredholm_full_with_derivatives!(entry_fn, A, dA, ddA, pts, Rmat, G, kc; multithreaded)
         return A, dA, ddA
     end
-    orbits = symmetry_index_orbits(T, pts.xy, cs.symmetry)
+    orbits = _fold_boundary(T, pts.xy, cs.symmetry, cs.character)
     m = fundamental_size(orbits)
     A = Matrix{ComplexF64}(undef, m, m)
     dA = similar(A)

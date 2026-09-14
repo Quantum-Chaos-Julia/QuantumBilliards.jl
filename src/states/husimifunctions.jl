@@ -72,6 +72,12 @@ function husimi_function(k,u,s,L; c = 10.0, w = 7.0)
     N = length(s)
     sig = one(k)/sqrt(k) #width of the gaussian
     x = s[s.<=w*sig]
+    x = x .- x[1] #shift so the window starts at physical offset 0, matching
+                  #the CircularVector slice below (s[1] is generally > 0 for
+                  #a midpoint-quadrature grid, not 0); without this shift `x`
+                  #and the physical sample offsets of `u_w` disagree by s[1],
+                  #which introduces a k*p*s[1] phase error that leaks
+                  #spurious signal into large |p| (worse at high k)
     idx = length(x) #do not change order here
     x = antisym_vec(x)
     a = one(k)/(2*pi*sqrt(pi*k)) #normalization factor in this version Hsimi is not noramlized to 1
@@ -85,7 +91,9 @@ function husimi_function(k,u,s,L; c = 10.0, w = 7.0)
     #construct evaluation points in q coordinate
     q_stride = length(s[s.<=sig/c])
     q_idx = collect(1:q_stride:N)
-    push!(q_idx,N) #add last point
+    if q_idx[end] != N
+        push!(q_idx,N) #add last point, only if not already covered by the stride
+    end
     qs = s[q_idx]
     #println(length(qs))
     H = zeros(typeof(k),length(qs),length(ps))

@@ -20,6 +20,7 @@ orientation-reversed after discretization.
 ## Attributes
 * `component_solvers`: Tuple with one [`SweepBIMSolver`](@ref) per connected boundary component, outer boundary first.
 * `symmetry`: Optional discrete symmetry shared by every component solver.
+* `character`: Tuple of one-dimensional irrep character(s) requested for `symmetry` (trivial representation, `()`, by default), shared by every component solver.
 
 ## API
 The following functions can be evaluated for this type:
@@ -38,9 +39,10 @@ The following functions can be evaluated for this type:
     bodies are not yet implemented; every method below raises an `error` until
     Step 2 of the migration plan lands.
 """
-struct CompositeBIMSolver{T<:Real,CS<:Tuple,Sy<:Union{AbsSymmetry,Nothing}} <: SweepBIMSolver
+struct CompositeBIMSolver{T<:Real,CS<:Tuple,Sy<:Union{AbsSymmetry,Nothing},Ch<:Tuple} <: SweepBIMSolver
     component_solvers::CS
     symmetry::Sy
+    character::Ch
 end
 
 """
@@ -50,7 +52,7 @@ Constructs a [`CompositeBIMSolver`](@ref) from one component solver per
 connected boundary component, outer boundary first.
 
 ## Arguments
-* `component_solvers`: One [`SweepBIMSolver`](@ref) instance per connected boundary component. Every component solver must share the same `symmetry`.
+* `component_solvers`: One [`SweepBIMSolver`](@ref) instance per connected boundary component. Every component solver must share the same `symmetry` and `character`.
 
 ## Returns
 * `solver`: A [`CompositeBIMSolver`](@ref) instance.
@@ -58,9 +60,10 @@ connected boundary component, outer boundary first.
 function CompositeBIMSolver(component_solvers::Vararg{SweepBIMSolver})
     isempty(component_solvers) && throw(ArgumentError("CompositeBIMSolver requires at least one component solver"))
     symmetry = component_solvers[1].symmetry
-    all(cs -> cs.symmetry == symmetry, component_solvers) || throw(ArgumentError("All component solvers passed to CompositeBIMSolver must share the same symmetry"))
+    character = component_solvers[1].character
+    all(cs -> cs.symmetry == symmetry && cs.character == character, component_solvers) || throw(ArgumentError("All component solvers passed to CompositeBIMSolver must share the same symmetry and character"))
     T = _bim_numeric_type(component_solvers[1])
-    return CompositeBIMSolver{T,typeof(component_solvers),typeof(symmetry)}(component_solvers, symmetry)
+    return CompositeBIMSolver{T,typeof(component_solvers),typeof(symmetry),typeof(character)}(component_solvers, symmetry, character)
 end
 
 _bim_numeric_type(solver::CompositeBIMSolver{T}) where {T} = T
@@ -412,6 +415,9 @@ for any symmetry-orbit folding onto a fundamental domain.
 function boundary_matrix_size(solver::CompositeBIMSolver, pts::BoundaryPoints)
     solver.symmetry === nothing && return boundary_matrix_size(pts)
     T = _bim_numeric_type(solver)
+    # Orbit membership/fundamental_size depends only on the symmetry group's
+    # permutation structure, never on the requested irrep character, so the
+    # trivial-representation call here is intentional (Step 16.1 audit).
     return fundamental_size(symmetry_index_orbits(T, pts.xy, solver.symmetry))
 end
 
@@ -435,7 +441,7 @@ function construct_matrices(solver::CompositeBIMSolver{T}, pts::BoundaryPoints{T
         kT = _bim_widen_k(T, k)
         nc = length(solver.component_solvers)
         N = length(pts)
-        @debug "Composite BIM matrix construction started" N kT nc symmetry=solver.symmetry
+        @debug "Composite BIM matrix construction started" N kT nc symmetry=solver.symmetry character=solver.character
         offs = _composite_offsets(pts, nc)
         comp_pts = [_composite_component_slice(pts, offs[a]:offs[a+1]-1, a) for a in 1:nc]
         Gs = Vector{BoundaryGeomCache{T}}(undef, nc)
@@ -459,7 +465,7 @@ function construct_matrices(solver::CompositeBIMSolver{T}, pts::BoundaryPoints{T
             return A
         else
             @timeit_debug "symmetry_orbits" begin
-                orbits = symmetry_index_orbits(T, pts.xy, solver.symmetry)
+                orbits = _fold_boundary(T, pts.xy, solver.symmetry, solver.character)
             end
             m = fundamental_size(orbits)
             g2c, g2l = _composite_global_to_local(offs)

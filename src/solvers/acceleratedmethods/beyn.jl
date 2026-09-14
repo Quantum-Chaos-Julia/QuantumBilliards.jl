@@ -221,7 +221,7 @@ function _construct_matrices_multi_k_cheb(cs::DoubleLayerPotentialSolver, pts::B
         _dlp_fredholm_full_multi_k_cheb!(Tbufs, pts, Rmat, G, zj, plans1, plansj1; multithreaded)
         return Tbufs
     else
-        orbits = symmetry_index_orbits(T, pts.xy, cs.symmetry)
+        orbits = _fold_boundary(T, pts.xy, cs.symmetry, cs.character)
         msize = fundamental_size(orbits)
         Tbufs = [Matrix{ComplexF64}(undef, msize, msize) for _ in zj]
         _dlp_fredholm_reduced_multi_k_cheb!(Tbufs, pts, Rmat, G, orbits, zj, plans1, plansj1; multithreaded)
@@ -243,7 +243,7 @@ function _construct_matrices_multi_k_cheb(cs::CombinedFieldIntegralEquationSolve
         _cfie_fredholm_full_multi_k_cheb!(Tbufs, pts, Rmat, G, zj, plans0, plans1, plansj0, plansj1; multithreaded)
         return Tbufs
     else
-        orbits = symmetry_index_orbits(T, pts.xy, cs.symmetry)
+        orbits = _fold_boundary(T, pts.xy, cs.symmetry, cs.character)
         msize = fundamental_size(orbits)
         Tbufs = [Matrix{ComplexF64}(undef, msize, msize) for _ in zj]
         _cfie_fredholm_reduced_multi_k_cheb!(Tbufs, pts, Rmat, G, orbits, zj, plans0, plans1, plansj0, plansj1; multithreaded)

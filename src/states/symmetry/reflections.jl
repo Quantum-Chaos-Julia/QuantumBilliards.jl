@@ -228,10 +228,5 @@ function apply_symmetries_to_boundary_points(
 
     full_s = cumsum(full_ds)
 
-    return BoundaryPoints{T}(
-        full_xy, full_normal,
-        T[], full_s, full_ds,
-        T[], T[], T[],
-        SVector{2,T}[]
-    )
+    return BoundaryPoints(full_xy; normal=full_normal, s=full_s, ds=full_ds)
 end

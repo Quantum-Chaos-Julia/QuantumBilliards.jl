@@ -160,10 +160,28 @@ function k_sweep(solver::SweepBIMSolver, billiard::Bi, ks; multithreaded::Bool=t
 end
 
 """
+    _fold_boundary(::Type{T}, xy, symmetry::AbsSymmetry, character::Tuple) where {T<:Real} → orbits::SymmetryOrbitMap{T}
+
+Bridges a BIM solver's stored `(symmetry, character::Tuple)` pair to
+[`symmetry_index_orbits`](@ref)'s per-generator-type trailing-argument
+shape: every symmetry type except [`CompositeReflection`](@ref) takes `N`
+separate scalar character arguments (splat-compatible with a stored
+`Tuple`), while `CompositeReflection` takes a single `Vector{Complex{T}}`
+argument instead. Exists solely because that underlying dispatch table is
+genuinely non-uniform across symmetry types (Step 16 of the migration
+plan), not as a speculative convenience layer.
+"""
+_fold_boundary(::Type{T}, xy, symmetry::AbsSymmetry, character::Tuple) where {T<:Real} =
+    symmetry_index_orbits(T, xy, symmetry, character...)
+_fold_boundary(::Type{T}, xy, symmetry::CompositeReflection, character::Tuple) where {T<:Real} =
+    symmetry_index_orbits(T, xy, symmetry, Complex{T}[character...])
+
+"""
     symmetrize_layer_density(solver::AbsBIMSolver, layer_density::AbstractVector, pts::BoundaryPoints, billiard::AbsBilliard) → full_density::Vector
 
 Expands a symmetry-reduced boundary density onto the complete physical
-boundary using `solver.symmetry`'s [`BilliardGeometry.SymmetryOrbitMap`](@ref).
+boundary using `solver.symmetry`/`solver.character`'s
+[`BilliardGeometry.SymmetryOrbitMap`](@ref).
 Generic across every [`AbsBIMSolver`](@ref) (`DoubleLayerPotentialSolver`,
 `CombinedFieldIntegralEquationSolver`, `CompositeBIMSolver`, ...): the
 folding depends only on `solver.symmetry`, never on the specific Fredholm
@@ -189,7 +207,7 @@ function symmetrize_layer_density(solver::AbsBIMSolver, layer_density::AbstractV
     Nfull = length(pts)
     length(layer_density) == Nfull && return layer_density
     solver.symmetry === nothing && throw(DimensionMismatch("Boundary data has length $(length(layer_density)); expected full length $Nfull because no symmetry is active"))
-    orbits = symmetry_index_orbits(T, pts.xy, solver.symmetry)
+    orbits = _fold_boundary(T, pts.xy, solver.symmetry, solver.character)
     Nred = fundamental_size(orbits)
     length(layer_density) == Nred || throw(DimensionMismatch("Boundary data has length $(length(layer_density)); expected reduced $Nred or full $Nfull"))
     S = promote_type(N, Complex{T})
@@ -237,7 +255,7 @@ own `_bim_normal_derivative` method instead of relying on this default.
 *  `u_raw` : The raw (fundamental-domain-length if `solver.symmetry !== nothing`) `∂ₙψ`, not yet symmetry-expanded or Rellich-normalized.
 """
 function _bim_normal_derivative(solver::AbsBIMSolver, pts::BoundaryPoints{T}, lvec::AbstractVector) where {T<:Real}
-    idx = solver.symmetry === nothing ? (1:length(lvec)) : symmetry_index_orbits(T, pts.xy, solver.symmetry).fundamental_indices
+    idx = solver.symmetry === nothing ? (1:length(lvec)) : _fold_boundary(T, pts.xy, solver.symmetry, solver.character).fundamental_indices
     return conj.(lvec) ./ pts.ds[idx]
 end
 

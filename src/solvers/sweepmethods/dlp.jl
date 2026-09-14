@@ -24,6 +24,7 @@ folds the discretization onto a fundamental domain via a
 * `min_pts`: Minimum number of boundary sampling points per component.
 * `grading`: [`BoundaryGrading`](@ref) strategy used to discretize the boundary.
 * `symmetry`: Optional `AbsSymmetry` used to fold the discretization onto a fundamental domain.
+* `character`: Tuple of one-dimensional irrep character(s) requested for `symmetry` (trivial representation, `()`, by default), passed as the trailing `character` argument(s) of [`BilliardGeometry.symmetry_index_orbits`](@ref) via [`_fold_boundary`](@ref).
 * `eps`: Relative tolerance used to determine the tension from the smallest singular value / nullspace residual.
 
 ## API
@@ -36,16 +37,17 @@ The following functions can be evaluated for this type:
 - [`solve_wavenumber`](@ref)
 - [`k_sweep`](@ref)
 """
-struct DoubleLayerPotentialSolver{T<:Real,G<:BoundaryGrading,Sy<:Union{AbsSymmetry,Nothing}} <: SweepBIMSolver
+struct DoubleLayerPotentialSolver{T<:Real,G<:BoundaryGrading,Sy<:Union{AbsSymmetry,Nothing},Ch<:Tuple} <: SweepBIMSolver
     pts_scaling_factor::Vector{T}
     min_pts::Int64
     grading::G
     symmetry::Sy
+    character::Ch
     eps::T
 end
 
 """
-    DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}; min_pts::Int = 200, grading::BoundaryGrading = SmoothPeriodicGrading(), symmetry::Union{Nothing,AbsSymmetry} = nothing, eps::T = T(1e-15)) where {T<:Real} → solver::DoubleLayerPotentialSolver{T}
+    DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}; min_pts::Int = 200, grading::BoundaryGrading = SmoothPeriodicGrading(), symmetry::Union{Nothing,AbsSymmetry} = nothing, character::Tuple = (), eps::T = T(1e-15)) where {T<:Real} → solver::DoubleLayerPotentialSolver{T}
 
 Constructs a [`DoubleLayerPotentialSolver`](@ref).
 
@@ -56,6 +58,7 @@ Constructs a [`DoubleLayerPotentialSolver`](@ref).
 * `min_pts::Int = 200`: Minimum number of boundary sampling points per component.
 * `grading::BoundaryGrading = SmoothPeriodicGrading()`: Boundary discretization/grading strategy, see [`BoundaryGrading`](@ref).
 * `symmetry::Union{Nothing,AbsSymmetry} = nothing`: Optional discrete symmetry used to fold the discretization onto a fundamental domain.
+* `character::Tuple = ()`: One-dimensional irrep character(s) requested for `symmetry` (trivial representation by default); unvalidated against `symmetry`, see the `(pts_scaling_factor, billiard, sector::SymmetrySector)` constructor overload below for a validated alternative.
 * `eps::T = T(1e-15)`: Relative tolerance used to determine the tension.
 
 ## Returns
@@ -64,9 +67,32 @@ Constructs a [`DoubleLayerPotentialSolver`](@ref).
 function DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}; min_pts::Int=200,
                                      grading::BoundaryGrading=SmoothPeriodicGrading(),
                                      symmetry::Union{Nothing,AbsSymmetry}=nothing,
+                                     character::Tuple=(),
                                      eps::T=T(1e-15)) where {T<:Real}
     bs = pts_scaling_factor isa T ? [pts_scaling_factor] : pts_scaling_factor
-    return DoubleLayerPotentialSolver{T,typeof(grading),typeof(symmetry)}(bs, min_pts, grading, symmetry, eps)
+    return DoubleLayerPotentialSolver{T,typeof(grading),typeof(symmetry),typeof(character)}(bs, min_pts, grading, symmetry, character, eps)
+end
+
+"""
+    DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::BilliardGeometry.AbsBilliard, sector::SymmetrySector; kwargs...) where {T<:Real} → solver::DoubleLayerPotentialSolver{T}
+
+Constructs a [`DoubleLayerPotentialSolver`](@ref) whose `symmetry`/`character`
+are resolved from a validated [`SymmetrySector`](@ref) built against
+`billiard` ([`_resolve_bim_symmetry`](@ref)), instead of the bare
+`symmetry=`/`character=` keywords above. Mirrors
+[`RealPlaneWaves`](@ref)`(dim, billiard, sector)`'s recommended, validated
+construction pattern (Step 15 of the migration plan). Supports every
+representation `RealPlaneWaves` supports for reflection symmetries, plus
+`NFoldRotation` sectors, which `RealPlaneWaves` does not. The one
+irreducible restriction: a lone `XYAxisReflection` character cannot
+determine a unique representation of a `D2` group on its own — specify the
+individual axis reflections instead (e.g. `symmetry_sector(billiard,
+XAxisReflection=>χx, YAxisReflection=>χy)`); see
+[`_resolve_bim_symmetry`](@ref) for why.
+"""
+function DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::BilliardGeometry.AbsBilliard, sector::SymmetrySector; kwargs...) where {T<:Real}
+    generator, character = _resolve_bim_symmetry(billiard, sector)
+    return DoubleLayerPotentialSolver(pts_scaling_factor; symmetry=generator, character=character, kwargs...)
 end
 
 _bim_numeric_type(::DoubleLayerPotentialSolver{T}) where {T} = T
@@ -289,6 +315,9 @@ symmetry-orbit folding onto a fundamental domain.
 function boundary_matrix_size(solver::DoubleLayerPotentialSolver, pts::BoundaryPoints)
     solver.symmetry === nothing && return boundary_matrix_size(pts)
     T = _bim_numeric_type(solver)
+    # Orbit membership/fundamental_size depends only on the symmetry group's
+    # permutation structure, never on the requested irrep character, so the
+    # trivial-representation call here is intentional (Step 16.1 audit).
     return fundamental_size(symmetry_index_orbits(T, pts.xy, solver.symmetry))
 end
 
@@ -302,7 +331,7 @@ function construct_matrices(solver::DoubleLayerPotentialSolver, pts::BoundaryPoi
         T = _bim_numeric_type(solver)
         kT = _bim_widen_k(T, k)
         N = length(pts)
-        @debug "DLP matrix construction started" N kT symmetry=solver.symmetry
+        @debug "DLP matrix construction started" N kT symmetry=solver.symmetry character=solver.character
         graded = _is_nontrivial_dlp_grading(pts)
         @timeit_debug "boundary_geom_cache" begin
             G = boundary_geom_cache(pts, graded)
@@ -321,7 +350,7 @@ function construct_matrices(solver::DoubleLayerPotentialSolver, pts::BoundaryPoi
             return A
         else
             @timeit_debug "symmetry_orbits" begin
-                orbits = symmetry_index_orbits(T, pts.xy, solver.symmetry)
+                orbits = _fold_boundary(T, pts.xy, solver.symmetry, solver.character)
             end
             m = fundamental_size(orbits)
             A = Matrix{Complex{T}}(undef, m, m)
