@@ -449,11 +449,7 @@ function boundary_function(solver::BoundaryIntegralMethod,pts::BoundaryPoints{T}
     n=_dlp_matrix_dim(pts,orbits)
     A=Matrix{Complex{T}}(undef,n,n)
     D=similar(A)
-    if isnothing(orbits)
-        @blas_1 adjoint_fredholm_matrix!(A,D,pts,nothing,k;multithreaded=true)
-    else
-        @blas_1 adjoint_fredholm_matrix!(A,D,pts,orbits,k;multithreaded=true)
-    end
+    @blas_1 adjoint_fredholm_matrix!(A,D,pts,nothing,k;multithreaded=true)
     _,u,_=smallest_nullvec_krylov!(A;nev=1,tol=1e-12,maxiter=2000,krylovdim=40)
     pts,u=symmetrize_layer_density(solver,u,pts,billiard)
     nrlz=_rellich(pts,u,k)
@@ -489,11 +485,7 @@ function boundary_function(solver::BoundaryIntegralMethod,pts::AbstractVector{<:
         n=_dlp_matrix_dim(pts[i],orbits)
         A=Matrix{Complex{T}}(undef,n,n)
         D=similar(A)
-        if isnothing(orbits)
-            @blas_1 adjoint_fredholm_matrix!(A,D,pts[i],nothing,ks[i];multithreaded=false)
-        else
-            @blas_1 adjoint_fredholm_matrix!(A,D,pts[i],orbits,ks[i];multithreaded=false)
-        end
+        @blas_1 adjoint_fredholm_matrix!(A,D,pts[i],nothing,ks[i];multithreaded=false)
         _,u,_=smallest_nullvec_krylov!(A;nev=1,tol=1e-12,maxiter=2000,krylovdim=40)
         pts_i,u=symmetrize_layer_density(solver,u,pts[i],billiard)
         nrlz=_rellich(pts_i,u,ks[i])
@@ -597,12 +589,8 @@ The operator represented is
 ## Returns
 * `Sσ::Vector{Complex{T}}`: Single-layer action in flattened full-boundary ordering.
 """
-function _cfie_slp_action(
-    pts::Vector{BoundaryPoints{T}},
-    σ::AbstractVector{Complex{T}},
-    ws::CFIEKressWorkspace{T},
-    k::T
-) where {T<:Real}
+function _cfie_slp_action(pts::Vector{BoundaryPoints{T}},σ::AbstractVector{Complex{T}},ws::CFIEKressWorkspace{T},
+k::T) where {T<:Real}
     length(σ)==ws.Ntot||throw(DimensionMismatch("Density has length $(length(σ)); expected $(ws.Ntot)"))
     out=zeros(Complex{T},ws.Ntot)
     @inbounds for a in eachindex(pts)
