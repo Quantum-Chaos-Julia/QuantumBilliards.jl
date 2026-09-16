@@ -301,7 +301,7 @@ permutation and therefore needs every symmetry image present in `pts`.
 """
 function evaluate_points(solver::DoubleLayerPotentialSolver, billiard::Bi, k) where {Bi<:AbsBilliard}
     T = _bim_numeric_type(solver)
-    comp = solver.symmetry === nothing ? get_boundary_curves(billiard) : full_boundary(billiard)
+    comp = full_boundary(billiard)
     isempty(comp) && error("Boundary cannot be empty.")
     return _dlp_evaluate_points(solver, solver.grading, comp, T(k))
 end
