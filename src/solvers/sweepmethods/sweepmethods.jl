@@ -172,7 +172,7 @@ genuinely non-uniform across symmetry types (Step 16 of the migration
 plan), not as a speculative convenience layer.
 """
 _fold_boundary(::Type{T}, xy, symmetry::AbsSymmetry, character::Tuple) where {T<:Real} =
-    symmetry_index_orbits(T, xy, symmetry, character...)
+    symmetry_index_orbits(T, xy, symmetry, Complex{T}.(character...))
 _fold_boundary(::Type{T}, xy, symmetry::CompositeReflection, character::Tuple) where {T<:Real} =
     symmetry_index_orbits(T, xy, symmetry, Complex{T}[character...])
 
