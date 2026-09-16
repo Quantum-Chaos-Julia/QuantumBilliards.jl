@@ -145,8 +145,8 @@ flags), together with the retained wavenumber range.
 * `k_max::T`: Maximum retained wavenumber.
 * `ten2::Union{Nothing,Vector{T}}`: Optional secondary tension/residual measure (e.g. [`BeynSolver`](@ref)'s normalized nonlinear residual `‖A(λ)φ‖`, alongside the primary `ten`); `nothing` when a solver reports only a single quality measure.
 """
-struct SpectralData{T}
-    k::Vector{T}
+struct SpectralData{K,T}
+    k::Vector{K}
     ten::Vector{T}
     control::Vector{Bool}
     k_min::T
@@ -163,7 +163,7 @@ wavenumbers.
 ## Keyword Arguments
 * `ten2::Union{Nothing,Vector{T}} = nothing`: Optional secondary tension/residual measure, see [`SpectralData`](@ref).
 """
-function SpectralData(k::Vector{T}, ten::Vector{T}, control::Vector{Bool}; ten2::Union{Nothing,Vector{T}}=nothing) where {T<:Real}
+function SpectralData(k::Vector{K}, ten::Vector{T}, control::Vector{Bool}; ten2::Union{Nothing,Vector{T}}=nothing) where {K<:Number,T<:Real}
     isempty(k) && throw(ArgumentError("Cannot construct SpectralData from an empty spectrum"))
     ten2===nothing || length(ten2)==length(k) || throw(DimensionMismatch("ten2 must have the same length as k"))
     return SpectralData(k, ten, control, minimum(k), maximum(k), ten2)
@@ -184,9 +184,9 @@ already operate, so no concurrent access to `SpectralData` construction
 itself ever occurs; `_finalize_spectrum` does not add any new thread-safety
 mechanism, it only removes duplicated sort/construct/empty-check tails.
 """
-function _finalize_spectrum(ks::Vector{T}, ts::Vector{T}, control::Vector{Bool}; ten2::Union{Nothing,Vector{T}}=nothing) where {T<:Real}
+function _finalize_spectrum(ks::Vector{K}, ts::Vector{T}, control::Vector{Bool}; ten2::Union{Nothing,Vector{T}}=nothing) where {K<:Number,T<:Real}
     isempty(ks) && throw(ArgumentError("compute_spectrum found no candidates in the requested range"))
-    p = sortperm(ks)
+    p = sortperm(real.(ks))
     return SpectralData(ks[p], ts[p], control[p]; ten2 = ten2===nothing ? nothing : ten2[p])
 end
 

@@ -415,14 +415,14 @@ eigensolve and residual-filtering pipeline.
     determinant inside the contour, not only physically real billiard
     eigenvalues; a genuinely complex root (with non-negligible imaginary
     part) can still pass the residual filter and is returned here as
-    `real(λ)`, matching `-develop`'s own filtering scope (contour
+    `λ`, matching `-develop`'s own filtering scope (contour
     containment + residual only). This is only observed with contour radii
     much larger than a single Weyl-window ([`plan_weyl_windows`](@ref))
     would produce; using Weyl-balanced windows avoids it in practice.
 """
 function solve(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true)
     λ, ts, _ = _beyn_solve_core(solver, pts, k0, dk; multithreaded)
-    return real.(λ), ts
+    return λ, ts
 end
 
 """
@@ -437,7 +437,7 @@ eigensolve and residual-filtering pipeline.
 """
 function solve_vectors(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true)
     λ, ts, Φ = _beyn_solve_core(solver, pts, k0, dk; multithreaded)
-    return real.(λ), ts, Φ
+    return λ, ts, Φ
 end
 
 """

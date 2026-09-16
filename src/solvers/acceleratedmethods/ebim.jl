@@ -674,7 +674,7 @@ function solve(solver::ExpandedBIMSolver, pts::BoundaryPoints, k; multithreaded:
     den = dot(u, dA*v)
     ε2 = abs(den)>eps(T) ? -T(0.5)*ε1^2*(num/den) : zero(ε1)
     corr = ε1+ε2
-    return real(k+corr), abs(corr)
+    return k+corr, abs(corr)
 end
 
 """
@@ -699,7 +699,7 @@ prior sweep's approximate roots; `dk` is unused, see [`solve_wavenumber`](@ref))
 function solve_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k, dk; multithreaded::Bool=true) where {Bi<:AbsBilliard}
     T = _bim_numeric_type(solver)
     n = length(k)
-    ks = Vector{T}(undef, n)
+    ks = Vector{Complex{T}}(undef, n)
     ts = Vector{T}(undef, n)
     @inbounds for i in 1:n
         ks[i], ts[i] = solve_wavenumber(solver, billiard, k[i], dk; multithreaded)
