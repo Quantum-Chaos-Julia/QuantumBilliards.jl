@@ -151,6 +151,44 @@
 @inline Bj(B::Matrix{ComplexF64}, N::Int, j::Int) = @view B[j*N+1:(j+1)*N,:]
 @inline Wj(W::Matrix{ComplexF64}, N::Int, j::Int) = @view W[j*N+1:(j+1)*N,:]
 
+"""
+    validate_polynomial(solver::SweepBIMSolver, pts, P::CORKPolynomial; nsample::Int=5, multithreaded::Bool=true) -> Float64
+
+Validate the Chebyshev approximation by comparing `P(t)` with directly
+constructed BIM Fredholm matrices at sample points across the polynomial
+interval. The reported error is
+
+    ‖P(t)-A(k₀+Δt)‖/‖A(k₀+Δt)‖.
+
+For symmetry-reduced problems the direct matrix is constructed using the same
+symmetry reduction as the polynomial.
+
+## Arguments
+- `solver::SweepBIMSolver`: BIM solver defining the direct Fredholm matrix.
+- `pts`: Boundary discretization used to construct the polynomial.
+- `P::CORKPolynomial`: Chebyshev polynomial to validate.
+- `nsample::Int`: Number of sample points in `[-1,1]`.
+- `multithreaded::Bool`: Whether direct matrix construction uses threading.
+
+## Returns
+- `Float64`: Maximum relative matrix error over all sample points.
+"""
+function validate_polynomial(solver::SweepBIMSolver, pts, P::CORKPolynomial; nsample::Int=5, multithreaded::Bool=true)::Float64
+    ts=collect(range(-1.0,1.0,length=nsample)); worst=0.0
+    @timeit_debug "CORK polynomial validation" begin
+        println("\nPOLYNOMIAL VALIDATION\n","-"^104)
+        for t in ts
+            k=P.k0+P.Δ*t
+            Ap=evaluate_cork_polynomial(P,t)
+            Ad=construct_matrices(solver,pts,k; multithreaded=multithreaded)
+            err=norm(Ap-Ad)/norm(Ad); worst=max(worst,err)
+            @printf("t=%+8.4f  k=%14.8f  relative error=%.3e\n",t,k,err)
+        end
+        @printf("worst relative error = %.3e\n",worst)
+    end
+    return worst
+end
+
 ################################################################################
 # CHEBYSHEV LINEARIZATION
 ################################################################################
