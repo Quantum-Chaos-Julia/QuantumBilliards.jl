@@ -165,8 +165,11 @@ wavenumbers.
 """
 function SpectralData(k::Vector{K}, ten::Vector{T}, control::Vector{Bool}; ten2::Union{Nothing,Vector{T}}=nothing) where {K<:Number,T<:Real}
     isempty(k) && throw(ArgumentError("Cannot construct SpectralData from an empty spectrum"))
-    ten2===nothing || length(ten2)==length(k) || throw(DimensionMismatch("ten2 must have the same length as k"))
-    return SpectralData(k, ten, control, minimum(k), maximum(k), ten2)
+    length(ten) == length(k) || throw(DimensionMismatch("ten must have the same length as k"))
+    length(control) == length(k) || throw(DimensionMismatch("control must have the same length as k"))
+    ten2 === nothing || length(ten2) == length(k) || throw(DimensionMismatch("ten2 must have the same length as k"))
+    imin = argmin(real.(k)); imax = argmax(real.(k))
+    return SpectralData(k, ten, control, k[imin], k[imax], ten2)
 end
 
 """
