@@ -152,6 +152,39 @@
 @inline Wj(W::Matrix{ComplexF64}, N::Int, j::Int) = @view W[j*N+1:(j+1)*N,:]
 
 """
+    evaluate_cork_polynomial(P::CORKPolynomial, t::Real) -> Matrix{ComplexF64}
+
+Evaluate the matrix Chebyshev polynomial
+
+    P(t)=Σⱼ₌₀ᵖ BⱼTⱼ(t)
+
+at the normalized coordinate `t` using the three-term recurrence
+`T₀(t)=1`, `T₁(t)=t`, and `Tⱼ₊₁(t)=2tTⱼ(t)-Tⱼ₋₁(t)`.
+
+## Arguments
+- `P::CORKPolynomial`: Chebyshev polynomial with vertically stacked
+  coefficients `[B₀;...;Bₚ]`.
+- `t::Real`: Normalized Chebyshev coordinate.
+
+## Returns
+- `Matrix{ComplexF64}`: Dense matrix `P(t)`.
+"""
+function evaluate_cork_polynomial(P::CORKPolynomial, t::Real)::Matrix{ComplexF64}
+    τ=Float64(t); A=copy(Bj(P.B,P.N,0))
+    P.p==0 && return A
+
+    Tm=1.0; Tn=τ
+    axpy!(Tn,Bj(P.B,P.N,1),A)
+
+    @inbounds for j=1:P.p-1
+        Tp=2τ*Tn-Tm
+        axpy!(Tp,Bj(P.B,P.N,j+1),A)
+        Tm,Tn=Tn,Tp
+    end
+    return A
+end
+
+"""
     validate_polynomial(solver::SweepBIMSolver, pts, P::CORKPolynomial; nsample::Int=5, multithreaded::Bool=true) -> Float64
 
 Validate the Chebyshev approximation by comparing `P(t)` with directly
