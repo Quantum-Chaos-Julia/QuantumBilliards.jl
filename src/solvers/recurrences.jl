@@ -371,9 +371,7 @@ satisfies `w.a[n+1]=Kᵢⱼ⁽ⁿ⁾(k)/n!`; the Fredholm transformation
     if i == j
         si = G.speed[i]; wi = pts.ws[i]; dval = ComplexF64(wi*G.kappa[i])
         a_log = wi*si/π
-        c = si*(-Rmat[i,i]*invtwopi + wi*(im/2 - Base.MathConstants.eulergamma/π +
-             invtwopi*log(4/si^2)))
-
+        c = si*(-Rmat[i,i]*invtwopi + wi*(im/2 - Base.MathConstants.eulergamma/π + invtwopi*log(4/si^2)))
         a[1] = dval + im*k*(c - a_log*log(k))
         p >= 1 && (a[2] = im*(c - a_log*(log(k) + 1)))
         @inbounds for n = 2:p

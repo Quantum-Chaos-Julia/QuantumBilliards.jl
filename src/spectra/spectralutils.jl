@@ -361,69 +361,70 @@ function overlap_and_merge_ebim!(k_left::Vector{K}, ten_left::Vector{T}, k_right
 end
 
 """
-    compute_spectrum(solver::BeynSolver, billiard::Bi, k1, k2; Rmax::Real = 1.0, multithreaded::Bool = true, multithreaded_windows::Bool = true) where {Bi<:AbsBilliard} → SpectralData
+    compute_spectrum(solver::BeynSolver, billiard::Bi, k1, k2; multithreaded::Bool=true, multithreaded_windows::Bool=true)
 
-Computes every [`BeynSolver`](@ref) eigenvalue candidate and its tension over
-the whole wavenumber range `[k1,k2]`, by covering the range with consecutive
-Weyl-balanced contour windows and concatenating each window's already-filtered
-[`solve`](@ref) result.
+Compute the spectrum over `[k1,k2]` using adjacent Weyl-sized Beyn contours.
 
-## Description
-`[k1,k2]` is covered with [`plan_weyl_windows`](@ref) (using `solver.m` as the
-target eigenvalue count per window and `Rmax` as the maximum contour radius),
-converted to contour centers/radii with [`beyn_disks_from_windows`](@ref).
-Boundary points for every window are generated up front (optionally
-multithreaded across windows via `multithreaded_windows`, since each
-window's own [`evaluate_points`](@ref) call is independent — unlike the
-per-contour-node loop inside [`construct_matrices`](@ref), which is
-deliberately left single-threaded to avoid nesting `Threads.@threads`
-regions). Each window is then solved sequentially with [`solve`](@ref) (which
-already performs contour-containment and residual filtering internally,
-using `solver`'s own `svd_tol`/`res_tol`/`auto_discard_spurious` fields), and
-every retained `(k,ten)` pair is concatenated across windows.
+The number of states per window and maximum contour radius are controlled by
+`solver.m` and `solver.Rmax`. Boundary discretizations are constructed for all
+windows before solving.
 
-Since [`plan_weyl_windows`](@ref) produces contiguous, non-overlapping
-windows by construction, no fuzzy overlap-resolution merge (unlike
-[`overlap_and_merge!`](@ref)/[`overlap_and_merge_ebim!`](@ref)) is performed
-here, matching `-develop`'s own `solve_spectrum_beyn` behavior; a genuine
-root sitting exactly at a window boundary could in principle be found (or
-missed) by at most one neighboring window, which is a negligible-probability
-edge case for Weyl-balanced windows in practice.
+When `solver.imag_k_check=true`, every window first undergoes only the projected
+Beyn solve. The resulting complex roots are globally ordered by
+`abs(imag(k))`, and explicit nonlinear-residual checks proceed from the most
+suspicious roots toward the real axis. After `solver.imag_k_pad` consecutive
+roots pass the residual criterion, the remaining roots are accepted without
+further residual matrix construction.
+
+When `solver.imag_k_check=false`, every candidate is explicitly
+residual-checked through the ordinary `solve` path.
+
+Complex Beyn eigenvalues are retained in both modes. In imaginary-`k` mode,
+`control=false` denotes an explicitly residual-checked root and `tens` contains
+its nonlinear residual, while `control=true` denotes a root accepted after
+early termination and `tens` contains `abs(imag(k))`.
 
 ## Arguments
-* `solver::BeynSolver`: The [`BeynSolver`](@ref) whose `m`/`nq`/`r`/`svd_tol`/`res_tol`/`auto_discard_spurious` fields configure every window.
-* `billiard::Bi`: The billiard whose boundary is discretized.
-* `k1`: Lower wavenumber bound.
-* `k2`: Upper wavenumber bound.
+* `solver::BeynSolver`: Beyn solver.
+* `billiard::Bi`: Billiard geometry.
+* `k1`: Lower endpoint of the requested spectrum.
+* `k2`: Upper endpoint of the requested spectrum.
 
 ## Keyword Arguments
-* `Rmax::Real = 1.0`: Maximum contour radius (caps the Weyl window width at `2*Rmax`).
-* `multithreaded::Bool = true`: Enable multithreaded boundary-matrix construction within each window.
-* `multithreaded_windows::Bool = true`: Enable multithreading across the independent per-window boundary-point evaluations.
+* `multithreaded::Bool=true`: Enable multithreaded matrix construction.
 
 ## Returns
-* `data::SpectralData{T}`: Every retained `(k,ten)` pair across all windows, sorted by `k` (`T` is the solver's own numeric type, from `_bim_numeric_type(solver)`); `control` is all `false` (no windows were merged), and `ten2` is `nothing`.
+The result of `_finalize_spectrum(ks, tens, control)`, with `ks` containing
+complex Beyn eigenvalues.
 """
-function compute_spectrum(solver::BeynSolver, billiard::Bi, k1, k2; Rmax::Real=1.0, multithreaded::Bool=true, multithreaded_windows::Bool=true) where {Bi<:AbsBilliard}
-    T = _bim_numeric_type(solver)
-    fundamental = solver.kernel.symmetry!==nothing
-    intervals = plan_weyl_windows(billiard, T(k1), T(k2); m=solver.m, Rmax=Rmax, fundamental=fundamental)
+function compute_spectrum(solver::BeynSolver, billiard::Bi, k1, k2; multithreaded::Bool=true) where {Bi<:AbsBilliard}
+    T = _bim_numeric_type(solver); fundamental = solver.kernel.symmetry !== nothing
+    intervals = plan_weyl_windows(billiard, T(k1), T(k2); m=solver.m, Rmax=solver.Rmax, fundamental=fundamental)
     isempty(intervals) && throw(ArgumentError("Spectrum interval [$k1,$k2] contains no Weyl windows"))
-    k0, R = beyn_disks_from_windows(intervals)
-    nw = length(k0)
-    pts_type = typeof(evaluate_points(solver, billiard, T(k1)))
-    all_pts = Vector{pts_type}(undef, nw)
-    @use_threads multithreading=multithreaded_windows for i in 1:nw
+    k0, R = beyn_disks_from_windows(intervals); nw = length(k0); pts_type = typeof(evaluate_points(solver, billiard, T(k1))); all_pts = Vector{pts_type}(undef, nw)
+    for i in 1:nw
         all_pts[i] = evaluate_points(solver, billiard, real(k0[i]))
     end
-    ks_win = Vector{Vector{T}}(undef, nw)
-    tens_win = Vector{Vector{T}}(undef, nw)
-    @inbounds for i in 1:nw
-        ks_win[i], tens_win[i] = solve(solver, all_pts[i], k0[i], 2*R[i]; multithreaded)
+    if !solver.imag_k_check
+        ks_win = Vector{Vector{Complex{T}}}(undef, nw); tens_win = Vector{Vector{T}}(undef, nw)
+        @inbounds for i in 1:nw
+            ks_win[i], tens_win[i] = solve(solver, all_pts[i], k0[i], 2R[i]; multithreaded)
+        end
+        ks = reduce(vcat, ks_win); tens = reduce(vcat, tens_win); control = fill(false, length(ks))
+        return _finalize_spectrum(ks, tens, control)
     end
-    ks = reduce(vcat, ks_win)
-    tens = reduce(vcat, tens_win)
-    control = fill(false, length(ks))
+    ks_all = Vector{Vector{Complex{T}}}(undef, nw); X_all = Vector{Matrix{Complex{T}}}(undef, nw)
+    @inbounds for i in 1:nw
+        ks_all[i], X_all[i] = _beyn_projected_solve(solver, all_pts[i], k0[i], 2R[i]; multithreaded)
+    end
+    idx_keep, residuals_all = _beyn_imag_k_check(solver, ks_all, X_all, all_pts; multithreaded)
+    n = sum(length, idx_keep); ks = Vector{Complex{T}}(undef, n); tens = Vector{T}(undef, n); control = Vector{Bool}(undef, n); p = 0
+    @inbounds for i in 1:nw
+        idx = idx_keep[i]; ri = residuals_all[i]
+        for q in eachindex(idx)
+            j = idx[q]; p += 1; ks[p] = ks_all[i][j]; control[p] = isnan(ri[q]); tens[p] = control[p] ? abs(imag(ks[p])) : ri[q]
+        end
+    end
     return _finalize_spectrum(ks, tens, control)
 end
 
@@ -582,106 +583,92 @@ function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, N1::Int, N2::
     return compute_spectrum(solver, billiard, k1, k2; kwargs...)
 end
 
-################################################################################
-############# ACCELERATED-SEED / KERNEL-REFINED SPECTRUM COMPUTATION #########
-################################################################################
-
 """
-    compute_spectrum_refined(solver::AcceleratedBIMSolver, billiard::Bi, k1, k2; dk_refine::Union{Real,Function} = (k -> 0.5/spectral_density(k, billiard)), seg_reuse_frac::Real = 0.95, multithreaded::Bool = true, seed_kwargs::NamedTuple = NamedTuple()) where {Bi<:AbsBilliard} → SpectralData
+    compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; multithreaded::Bool=true) where {Bi<:AbsBilliard} -> SpectralData
 
-Refines every [`AcceleratedBIMSolver`](@ref) seed candidate over `[k1,k2]` by
-bracketing each with `solver.kernel`'s own tension-minimizing [`solve_wavenumber`](@ref).
+Compute the complete CORK spectrum over `[k1,k2]` using adjacent Weyl-sized
+spectral windows.
 
 ## Description
-Seed candidates `(k,ten)` are first obtained exactly as [`compute_spectrum`](@ref)
-computes them for `solver` ([`BeynSolver`](@ref)'s contour-integral roots or
-[`ExpandedBIMSolver`](@ref)'s local Taylor-corrected roots), giving a cheap
-approximate location for every root in `[k1,k2]`. Each seed is then
-independently polished by bracketing it in a small window and minimizing the
-tension of the plain [`SweepBIMSolver`](@ref) `solver.kernel` with
-[`solve_wavenumber`](@ref) — a genuine single-wavenumber tension minimization,
-as opposed to the accelerated method's own approximate root-finding strategy
-— giving a higher-fidelity `(k0,t0)` for the same physical state.
+[`plan_weyl_windows`](@ref) partitions the requested range into adjacent
+intervals containing approximately `solver.nlevels` physical states while
+enforcing the maximum requested half-width `solver.Rmax`. For a local density
+`ρ(k)`, the intended scaling is approximately
 
-Since `solve_wavenumber(::SweepBIMSolver, ...)` would otherwise re-derive a
-fresh boundary discretization via `evaluate_points` on every single seed,
-seeds (already sorted by `k`, see [`compute_spectrum`](@ref)) are grouped
-into consecutive segments that reuse one discretization — sized for the
-segment's largest `k`, safely covering every smaller `k` in the segment — as
-long as `k<=k_segment_start/seg_reuse_frac`, exactly mirroring the
-segment-reuse already used by
-[`compute_spectrum(::ExpandedBIMSolver, ...)`](@ref) for its own
-trial-wavenumber grid. Refinement itself proceeds one seed at a time (not
-threaded across seeds): `solve_wavenumber`'s own `multithreaded` matrix
-construction already parallelizes the expensive part of each call, so
-threading the outer seed loop as well would nest thread parallelism.
+    Δ(k)=min(Rmax,nlevels/(2ρ(k))).
+
+Each interval `[a,b]` is solved about `k0=(a+b)/2` with full requested width
+`dk=b-a`. Internally CORK constructs its Chebyshev polynomial on the guarded
+half-width `(1+solver.guard)dk/2` and certifies the requested interval using
+converged roots immediately inside and outside both edges.
+
+Because every requested CORK interval is independently edge-certified,
+neighboring windows require no overlap/error-bar matching. Adjacent windows
+instead use deterministic half-open ownership `[a,b)`, with the final window
+owning its right endpoint, so a root on a shared boundary is retained exactly
+once.
 
 ## Arguments
-* `solver::AcceleratedBIMSolver`: The [`AcceleratedBIMSolver`](@ref) ([`BeynSolver`](@ref) or [`ExpandedBIMSolver`](@ref)) whose `kernel` performs the refinement.
-* `billiard::Bi`: The billiard whose boundary is discretized.
-* `k1`, `k2`: Wavenumber range covered by the seed search.
+- `solver::CORKSolver`: CORK solver. `solver.nlevels` controls the target number of levels per window and `solver.Rmax` the maximum requested half-width.
+- `billiard::Bi`: Billiard geometry.
+- `k1`: Lower endpoint of the requested spectrum.
+- `k2`: Upper endpoint of the requested spectrum.
 
 ## Keyword Arguments
-* `dk_refine::Union{Real,Function} = (k -> 0.5/spectral_density(k, billiard))`: Refinement bracket half-width around each seed, either a constant or a function of `k` (defaults to half the local mean level spacing — wide enough to bracket the true root without reaching a neighboring one).
-* `seg_reuse_frac::Real = 0.95`: Seeds reuse the current segment's boundary discretization while `k<=k_segment_start/seg_reuse_frac`.
-* `multithreaded::Bool = true`: Forwarded to every `solve_wavenumber` call (matrix construction only).
-* `seed_kwargs::NamedTuple = NamedTuple()`: Extra keyword arguments forwarded to the seed search `compute_spectrum(solver, billiard, k1, k2; multithreaded, seed_kwargs...)` (e.g. `Rmax`/`multithreaded_windows` for [`BeynSolver`](@ref), `dk`/`tol`/`spacing_frac`/`tolmax`/`local_window`/`seg_reuse_frac` for [`ExpandedBIMSolver`](@ref)).
+- `multithreaded::Bool=true`: Enable multithreaded CORK polynomial assembly.
 
 ## Returns
-* `data::SpectralData`: One refined `(k0,t0)` per seed, sorted by `k`; `control` is all `false` and `ten2` is `nothing`.
+- `SpectralData`: Complete sorted CORK spectrum over `[k1,k2]`. `ten` contains the CORK residual associated with each retained root and `control=false` because no overlap merge is required.
 """
-function compute_spectrum_refined(solver::AcceleratedBIMSolver, billiard::Bi, k1, k2; dk_refine::Union{Real,Function}=(k -> 0.5/spectral_density(k, billiard)), seg_reuse_frac::Real=0.95, multithreaded::Bool=true, seed_kwargs::NamedTuple=NamedTuple()) where {Bi<:AbsBilliard}
-    0<seg_reuse_frac<=1 || throw(ArgumentError("seg_reuse_frac must satisfy 0<seg_reuse_frac<=1"))
-    seeds = compute_spectrum(solver, billiard, k1, k2; multithreaded, seed_kwargs...)
-    ks_seed = seeds.k
-    n = length(ks_seed)
-    T = eltype(ks_seed)
-    seg_reuse_fracT = T(seg_reuse_frac)
-    ks_ref = Vector{T}(undef, n)
-    tens_ref = Vector{T}(undef, n)
-    seg_first = 1
-    pts = evaluate_points(solver.kernel, billiard, ks_seed[1])
-    while seg_first<=n
-        seg_last = seg_first
-        while seg_last<n && ks_seed[seg_last+1]<=ks_seed[seg_first]/seg_reuse_fracT
-            seg_last += 1
+function compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; multithreaded::Bool=true) where {Bi<:AbsBilliard}
+    T=_bim_numeric_type(solver); k1T=T(k1); k2T=T(k2); k1T<k2T || throw(ArgumentError("require k1<k2"))
+    fundamental=solver.kernel.symmetry!==nothing
+    intervals=plan_weyl_windows(billiard,k1T,k2T; m=solver.nlevels,Rmax=solver.Rmax,fundamental=fundamental)
+    isempty(intervals) && throw(ArgumentError("Spectrum interval [$k1,$k2] contains no Weyl windows"))
+    nw=length(intervals); ks_all=Complex{T}[]; tens_all=T[]
+    @inbounds for i=1:nw
+        a,b=intervals[i]; k0=(a+b)/2; dk=b-a
+        ks,tens=solve_spectrum(solver,billiard,k0,dk; multithreaded)
+        last_window=i==nw
+        @inbounds for j in eachindex(ks)
+            x=real(ks[j])
+            owned=last_window ? a<=x<=b : a<=x<b
+            owned || continue
+            push!(ks_all,ks[j]); push!(tens_all,tens[j])
         end
-        seg_last!=seg_first && (pts = evaluate_points(solver.kernel, billiard, ks_seed[seg_last]))
-        @inbounds for i in seg_first:seg_last
-            k = ks_seed[i]
-            Δk = T(dk_refine isa Function ? dk_refine(k) : dk_refine)
-            ks_ref[i], tens_ref[i] = solve_wavenumber(solver.kernel, billiard, k, Δk; multithreaded, pts)
-        end
-        seg_first = seg_last+1
     end
-    control = fill(false, n)
-    return _finalize_spectrum(ks_ref, tens_ref, control)
+    control=fill(false,length(ks_all))
+    return _finalize_spectrum(ks_all,tens_all,control)
 end
 
 """
-    compute_spectrum_refined(solver::AcceleratedBIMSolver, billiard::Bi, N1::Int, N2::Int; kwargs...) where {Bi<:AbsBilliard} → SpectralData
+    compute_spectrum(solver::CORKSolver, billiard::Bi, N1::Int, N2::Int; kwargs...) where {Bi<:AbsBilliard} -> SpectralData
 
-Refines every [`AcceleratedBIMSolver`](@ref) seed candidate for states `N1` to
-`N2` of the billiard's Weyl-law state-counting function.
+Compute the complete CORK spectrum corresponding to Weyl-law states `N1`
+through `N2`.
 
 ## Description
-The wavenumber range is obtained with [`k_range_for_states`](@ref) (using the
-same fundamental/full-boundary convention as `solver.kernel.symmetry`, see
-[`k_range_for_states`](@ref)), then delegated to the `k1,k2` method.
+The requested state range is converted to a wavenumber interval with
+[`k_range_for_states`](@ref), using the same full-boundary or fundamental-domain
+convention as `solver.kernel.symmetry`. The resulting interval is delegated to
+the `k1,k2` [`compute_spectrum`](@ref) method, which partitions it into
+approximately `solver.nlevels` states per CORK window subject to
+`Δ<=solver.Rmax`.
 
 ## Arguments
-* `solver::AcceleratedBIMSolver`: The [`AcceleratedBIMSolver`](@ref) whose `kernel` performs the refinement.
-* `billiard::Bi`: The billiard whose boundary is discretized.
-* `N1::Int`, `N2::Int`: Range of states to cover.
+- `solver::CORKSolver`: CORK solver.
+- `billiard::Bi`: Billiard geometry.
+- `N1::Int`: First requested Weyl-law state index.
+- `N2::Int`: Last requested Weyl-law state index.
 
 ## Keyword Arguments
-* `kwargs...`: Forwarded to the `k1,k2` method (`dk_refine`, `seg_reuse_frac`, `multithreaded`, `seed_kwargs`).
+- `kwargs...`: Forwarded to `compute_spectrum(solver,billiard,k1,k2;...)`.
 
 ## Returns
-* `data::SpectralData`: One refined `(k0,t0)` per seed, sorted by `k`.
+- `SpectralData`: Complete sorted CORK spectrum over the corresponding Weyl-law wavenumber interval.
 """
-function compute_spectrum_refined(solver::AcceleratedBIMSolver, billiard::Bi, N1::Int, N2::Int; kwargs...) where {Bi<:AbsBilliard}
-    fundamental = solver.kernel.symmetry!==nothing
-    k1, k2 = k_range_for_states(billiard, N1, N2; fundamental)
-    return compute_spectrum_refined(solver, billiard, k1, k2; kwargs...)
+function compute_spectrum(solver::CORKSolver, billiard::Bi, N1::Int, N2::Int; kwargs...) where {Bi<:AbsBilliard}
+    fundamental=solver.kernel.symmetry!==nothing
+    k1,k2=k_range_for_states(billiard,N1,N2; fundamental)
+    return compute_spectrum(solver,billiard,k1,k2; kwargs...)
 end

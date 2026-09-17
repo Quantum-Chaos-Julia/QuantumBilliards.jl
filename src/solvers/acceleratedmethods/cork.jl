@@ -208,17 +208,14 @@ symmetry reduction as the polynomial.
 """
 function validate_polynomial(solver::SweepBIMSolver, pts, P::CORKPolynomial; nsample::Int=5, multithreaded::Bool=true)::Float64
     ts=collect(range(-1.0,1.0,length=nsample)); worst=0.0
-    @timeit_debug "CORK polynomial validation" begin
-        println("\nPOLYNOMIAL VALIDATION\n","-"^104)
-        for t in ts
-            k=P.k0+P.Δ*t
-            Ap=evaluate_cork_polynomial(P,t)
-            Ad=construct_matrices(solver,pts,k; multithreaded=multithreaded)
-            err=norm(Ap-Ad)/norm(Ad); worst=max(worst,err)
-            @printf("t=%+8.4f  k=%14.8f  relative error=%.3e\n",t,k,err)
-        end
-        @printf("worst relative error = %.3e\n",worst)
+    println("\nPOLYNOMIAL VALIDATION\n","-"^104)
+    for t in ts
+        k=P.k0+P.Δ*t; Ap=evaluate_cork_polynomial(P,t)
+        Ad=construct_matrices(solver,pts,k; multithreaded=multithreaded)
+        err=norm(Ap-Ad)/norm(Ad); worst=max(worst,err)
+        @printf("t=%+8.4f  k=%14.8f  relative error=%.3e\n",t,k,err)
     end
+    @printf("worst relative error = %.3e\n",worst)
     return worst
 end
 
@@ -956,43 +953,12 @@ function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ
     return S,expand_clusters(last_phys),last_phys,last_all,last_roots,last_good,maxdim
 end
 
-################################################################################
-# PUBLIC SOLVER
-################################################################################
-
-"""
-    CORKSolver{T,K} <: AcceleratedBIMSolver
-
-Compact Chebyshev-CORK eigensolver wrapping a `SweepBIMSolver`. For requested
-full width `dk`, it uses `Δ=dk/2` and guarded half-width
-`Δpoly=(1+guard)Δ`. Only roots in the requested interval are returned; guard
-roots provide the neighboring states required for completeness checks.
-
-## Arguments
-- `kernel::K`: Wrapped DLP, CFIE, or composite BIM solver.
-- `p::Int`: Chebyshev polynomial degree.
-- `guard::T`: Relative enlargement of the requested interval.
-- `b::Int`: Block-Arnoldi block size.
-- `mstart::Int`: Initial compact Krylov dimension.
-- `mstep::Int`: Adaptive Krylov-dimension increment.
-- `maxdim::Int`: Maximum compact Krylov dimension.
-- `stable_checks::Int`: Required consecutive stable spectra.
-- `imag_tol::T`: Strict imaginary-part tolerance.
-- `edge_tol::T`: Normalized guarded-interval tolerance.
-- `res_tol::T`: Block-Arnoldi residual tolerance.
-- `stable_tol::T`: Root-drift tolerance.
-- `cluster_tol::T`: Ritz clustering distance.
-- `imag_search_tol::T`: Loose imaginary discovery strip.
-- `seed::Int`: Random initialization seed.
-- `validate::Bool`: Whether to validate the polynomial against direct matrices.
-
-## Returns
-- `CORKSolver{T,K}`: Configured accelerated BIM eigensolver.
-"""
 struct CORKSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
     kernel::K
     p::Int
     guard::T
+    nlevels::Int
+    Rmax::T
     b::Int
     mstart::Int
     mstep::Int
@@ -1009,45 +975,58 @@ struct CORKSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
 end
 
 """
-    CORKSolver(kernel::K; p::Int=10, guard::Real=0.15, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Real=1e-7, edge_tol::Real=1e-8, res_tol::Real=1e-8, stable_tol::Real=1e-8, cluster_tol::Real=1e-6, imag_search_tol::Real=1e-4, seed::Int=123, validate::Bool=true) where {K<:SweepBIMSolver} -> CORKSolver
+    CORKSolver(kernel::K; p::Int=14, guard::Real=0.15, nlevels::Int=150, Rmax::Real=0.8, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Real=1e-7, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, cluster_tol::Real=1e-6, imag_search_tol::Real=1e-4, seed::Int=123, validate::Bool=true) where {K<:SweepBIMSolver} -> CORKSolver
 
-Construct a Float64 CORK eigensolver and validate its block and adaptive
-dimension parameters.
+Construct a CORK solver for a BIM Fredholm nonlinear eigenvalue problem.
+
+For full-spectrum computations, `nlevels` is the target number of physical
+levels in each requested CORK window and `Rmax` is the maximum requested
+half-width `Δ`. The Chebyshev polynomial itself is constructed on the guarded
+half-width Δpoly=(1+guard)Δ,
+so `Rmax` limits the requested spectral interval rather than the polynomial
+interval.
 
 ## Arguments
-- `kernel::K`: Wrapped BIM solver.
-- `p::Int`: Chebyshev polynomial degree.
-- `guard::Real`: Relative polynomial guard width.
-- `b::Int`: Block-Arnoldi block size.
-- `mstart::Int`: Initial compact Krylov dimension.
-- `mstep::Int`: Adaptive dimension increment.
-- `maxdim::Int`: Maximum compact Krylov dimension.
-- `stable_checks::Int`: Required consecutive stable spectra.
-- `imag_tol::Real`: Strict imaginary-part tolerance.
-- `edge_tol::Real`: Guarded-interval tolerance.
-- `res_tol::Real`: Residual tolerance.
-- `stable_tol::Real`: Spectrum-drift tolerance.
-- `cluster_tol::Real`: Ritz clustering tolerance.
-- `imag_search_tol::Real`: Loose imaginary discovery tolerance.
-- `seed::Int`: Random initialization seed.
-- `validate::Bool`: Enable direct polynomial validation.
+- `kernel::K`: BIM kernel used to construct the Fredholm operator.
+
+## Keyword Arguments
+- `p::Int=14`: Chebyshev polynomial degree.
+- `guard::Real=0.15`: Relative enlargement of the requested interval used for polynomial construction and edge certification.
+- `nlevels::Int=150`: Target number of physical levels per full-spectrum CORK window.
+- `Rmax::Real=0.8`: Maximum requested CORK half-width `Δ`.
+- `b::Int=10`: CORK block size.
+- `mstart::Int=200`: Initial Krylov dimension.
+- `mstep::Int=100`: Krylov-dimension increment.
+- `maxdim::Int=1600`: Maximum Krylov dimension.
+- `stable_checks::Int=2`: Number of consecutive stable Ritz checks required for convergence.
+- `imag_tol::Real=1e-7`: Final imaginary-part tolerance in physical `k` units.
+- `edge_tol::Real=1e-8`: Edge-completeness tolerance.
+- `res_tol::Real=1e-10`: Ritz residual tolerance.
+- `stable_tol::Real=1e-9`: Spectrum-stability tolerance between successive checks.
+- `cluster_tol::Real=1e-6`: Ritz clustering tolerance.
+- `imag_search_tol::Real=1e-4`: Loose imaginary strip used when searching for physical Ritz roots.
+- `seed::Int=123`: Random seed used to initialize the block Krylov process.
+- `validate::Bool=true`: Validate the Chebyshev polynomial before the CORK iteration.
 
 ## Returns
-- `CORKSolver`: Configured CORK eigensolver.
+- `CORKSolver`: Configured CORK solver.
 """
-function CORKSolver(kernel::K; p::Int=10, guard::Real=0.15, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Real=1e-7, edge_tol::Real=1e-8, res_tol::Real=1e-8, stable_tol::Real=1e-8, cluster_tol::Real=1e-6, imag_search_tol::Real=1e-4, seed::Int=123, validate::Bool=true) where {K<:SweepBIMSolver}
-    T = _bim_numeric_type(kernel)
-    T === Float64 || throw(ArgumentError("CORKSolver currently requires a Float64 BIM kernel"))
-    p >= 2 || throw(ArgumentError("p must be at least 2; received p=$p"))
-    guard > 0 || throw(ArgumentError("guard must be positive; received guard=$guard"))
-    b > 0 || throw(ArgumentError("b must be positive; received b=$b"))
-    mstart % b == 0 || throw(ArgumentError("mstart must be divisible by b"))
-    mstep % b == 0 || throw(ArgumentError("mstep must be divisible by b"))
-    maxdim % b == 0 || throw(ArgumentError("maxdim must be divisible by b"))
-    mstart <= maxdim || throw(ArgumentError("mstart must not exceed maxdim"))
-    stable_checks >= 1 || throw(ArgumentError("stable_checks must be positive"))
-    return CORKSolver{T,K}(kernel,p,T(guard),b,mstart,mstep,maxdim,stable_checks,T(imag_tol),T(edge_tol),
-        T(res_tol),T(stable_tol),T(cluster_tol),T(imag_search_tol),seed,validate)
+function CORKSolver(kernel::K; p::Int=14, guard::Real=0.15, nlevels::Int=150, Rmax::Real=0.8, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Real=1e-7, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, cluster_tol::Real=1e-6, imag_search_tol::Real=1e-4, seed::Int=123, validate::Bool=true) where {K<:SweepBIMSolver}
+    T=_bim_numeric_type(kernel)
+    T===Float64 || throw(ArgumentError("CORKSolver currently requires a Float64 BIM kernel"))
+    p>=2 || throw(ArgumentError("p must be at least 2; received p=$p"))
+    guard>=0 || throw(ArgumentError("guard must be nonnegative; received guard=$guard"))
+    nlevels>0 || throw(ArgumentError("nlevels must be positive; received nlevels=$nlevels"))
+    Rmax>0 || throw(ArgumentError("Rmax must be positive; received Rmax=$Rmax"))
+    b>0 || throw(ArgumentError("b must be positive; received b=$b"))
+    mstart>0 || throw(ArgumentError("mstart must be positive; received mstart=$mstart"))
+    mstep>0 || throw(ArgumentError("mstep must be positive; received mstep=$mstep"))
+    maxdim>=mstart || throw(ArgumentError("maxdim must satisfy maxdim>=mstart"))
+    mstart%b==0 || throw(ArgumentError("mstart must be divisible by b"))
+    mstep%b==0 || throw(ArgumentError("mstep must be divisible by b"))
+    maxdim%b==0 || throw(ArgumentError("maxdim must be divisible by b"))
+    stable_checks>0 || throw(ArgumentError("stable_checks must be positive"))
+    return CORKSolver{T,K}(kernel,p,T(guard),nlevels,T(Rmax),b,mstart,mstep,maxdim,stable_checks,T(imag_tol),T(edge_tol),T(res_tol),T(stable_tol),T(cluster_tol),T(imag_search_tol),seed,validate)
 end
 
 _bim_numeric_type(::CORKSolver{T}) where {T} = T
@@ -1061,10 +1040,6 @@ evaluate_points(solver::CORKSolver, billiard::Bi, k) where {Bi<:AbsBilliard} =
     solver isa DoubleLayerPotentialSolver ? "DLP" :
     solver isa CombinedFieldIntegralEquationSolver ? "CFIE" :
     solver isa CompositeBIMSolver ? "CompositeBIM" : string(typeof(solver))
-
-################################################################################
-# SOLVE PIPELINE
-################################################################################
 
 """
     _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=true)
@@ -1086,12 +1061,11 @@ All progress and diagnostic printing is contained in `@timeit_debug`.
   guarded clusters, edge roots, edge flags, and final Krylov dimension.
 """
 function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=true)
-    k0f = Float64(k0); Δ = Float64(dk)/2
-    Δ > 0 || throw(ArgumentError("dk must be positive; received dk=$dk"))
-    Δpoly = Δ*(1+solver.guard)
-    k0f > Δpoly || throw(ArgumentError("CORK polynomial interval reaches k=0"))
-    kmin = k0f-Δ; kmax = k0f+Δ; kpmin = k0f-Δpoly; kpmax = k0f+Δpoly
-
+    k0f=Float64(k0); Δ=Float64(dk)/2
+    Δ>0 || throw(ArgumentError("dk must be positive; received dk=$dk"))
+    Δpoly=Δ*(1+solver.guard)
+    k0f>Δpoly || throw(ArgumentError("CORK polynomial interval reaches k=0"))
+    kmin=k0f-Δ; kmax=k0f+Δ; kpmin=k0f-Δpoly; kpmax=k0f+Δpoly
     @timeit_debug "CORK setup diagnostics" begin
         println("="^112)
         println("$(_cork_kernel_name(solver.kernel)) + ANALYTIC CHEBYSHEV + MULTIPLICITY/EDGE-CERTIFIED BLOCK CORK")
@@ -1099,43 +1073,30 @@ function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=t
         @printf("k0                   = %.8f\nrequested Δ          = %.8f\nguard                = %.3f\n",k0f,Δ,solver.guard)
         @printf("polynomial Δ         = %.8f\nrequested interval   = [%.8f, %.8f]\n",Δpoly,kmin,kmax)
         @printf("polynomial interval  = [%.8f, %.8f]\ndegree               = %d\n",kpmin,kpmax,solver.p)
-        @printf("imag_tol in k units  = %.3e\nimag search strip    = %.3e\nfull boundary points = %d\n",
-            solver.imag_tol,solver.imag_search_tol,length(pts))
+        @printf("imag_tol in k units  = %.3e\nimag search strip    = %.3e\nfull boundary points = %d\n",solver.imag_tol,solver.imag_search_tol,length(pts.xy))
         println("kernel               = ",typeof(solver.kernel))
         println("symmetry             = ",solver.kernel.symmetry)
         println("character            = ",solver.kernel.character)
     end
-
-    P,tbuild = build_cork_polynomial(solver.kernel,pts,k0f,Δpoly,solver.p; multithreaded=multithreaded)
-
+    P=nothing; tbuild=0.0
+    @timeit_debug "CORK polynomial construction" begin
+        P,tbuild=build_cork_polynomial(solver.kernel,pts,k0f,Δpoly,solver.p; multithreaded=multithreaded)
+    end
     @timeit_debug "CORK polynomial diagnostics" begin
-        @printf("CORK matrix size     = %d\nB build              = %.6f s\nB memory             = %.3f MiB\n",
-            P.N,tbuild,Base.summarysize(P.B)/2^20)
-        solver.kernel.symmetry !== nothing && @printf("dimension reduction  = %.3fx\n",length(pts)/P.N)
+        @printf("CORK matrix size     = %d\nB build              = %.6f s\nB memory             = %.3f MiB\n",P.N,tbuild,Base.summarysize(P.B)/2^20)
+        solver.kernel.symmetry!==nothing && @printf("dimension reduction  = %.3fx\n",length(pts.xy)/P.N)
     end
-
-    if solver.validate
-        @timeit_debug "CORK polynomial validation" begin
-            validate_polynomial(solver.kernel,pts,P; multithreaded=multithreaded)
-        end
+    solver.validate && validate_polynomial(solver.kernel,pts,P; multithreaded=multithreaded)
+    t=time_ns(); A0=get_A0(P.B,P.N,solver.p); ta0=(time_ns()-t)*1e-9
+    F=nothing; t=time_ns()
+    @blas_multi_then_1 MAX_BLAS_THREADS begin
+        F=lu(A0)
     end
-
-    t = time(); A0 = get_A0(P.B,P.N,solver.p); ta0 = time()-t
-    t = time()
-    @blas_multi_then_1 MAX_BLAS_THREADS F = lu(A0)
-    tfact = time()-t
-
+    tfact=(time_ns()-t)*1e-9
     @timeit_debug "CORK factorization diagnostics" begin
         @printf("\nP(0) assembly        = %.6f s\nLU                   = %.6f s\n\n",ta0,tfact)
     end
-
-    S,ks,clusters,allclusters,edge_roots,edge_good,mfinal = adaptive_cork(
-        P.B,F,solver.p,P.N;k0=k0f,Δ=Δ,Δpoly=Δpoly,b=solver.b,mstart=solver.mstart,
-        mstep=solver.mstep,maxdim=solver.maxdim,stable_checks=solver.stable_checks,
-        imag_tol=solver.imag_tol,edge_tol=solver.edge_tol,res_tol=solver.res_tol,
-        stable_tol=solver.stable_tol,cluster_tol=solver.cluster_tol,seed=solver.seed,
-        imag_search_tol=solver.imag_search_tol)
-
+    S,ks,clusters,allclusters,edge_roots,edge_good,mfinal=adaptive_cork(P.B,F,solver.p,P.N;k0=k0f,Δ=Δ,Δpoly=Δpoly,b=solver.b,mstart=solver.mstart,mstep=solver.mstep,maxdim=solver.maxdim,stable_checks=solver.stable_checks,imag_tol=solver.imag_tol,edge_tol=solver.edge_tol,res_tol=solver.res_tol,stable_tol=solver.stable_tol,cluster_tol=solver.cluster_tol,seed=solver.seed,imag_search_tol=solver.imag_search_tol)
     @timeit_debug "CORK final diagnostics" begin
         println("\n","="^112,"\nFINAL\n","="^112)
         @printf("Krylov dimension = %d\nphysical rank     = %d\noperator applies  = %d\n",mfinal,S.r,S.napply)
@@ -1143,19 +1104,15 @@ function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=t
         @printf("B_j GEMM          = %.6f s\nblock LU          = %.6f s\nChebyshev RHS      = %.6f s\n",S.cache,S.lu,S.rhs)
         @printf("physical SVD      = %.6f s\ncompact CGS2/QR   = %.6f s\n",S.phys,S.orth)
         print_edge_check(edge_roots,edge_good,k0f,Δ,solver.imag_tol,solver.res_tol)
-
         println("\n","="^112,"\nREQUESTED INTERVAL RITZ CLUSTERS\n","="^112)
         println("       Re(k)              Im(k)       mult  Ritz-count    residual       spread")
         for c in clusters
-            @printf("%18.12f  %+12.3e     %3d       %3d       %.3e     %.3e\n",
-                real(c.k),imag(c.k),c.multiplicity,c.ritz_count,c.residual,c.spread)
+            @printf("%18.12f  %+12.3e     %3d       %3d       %.3e     %.3e\n",real(c.k),imag(c.k),c.multiplicity,c.ritz_count,c.residual,c.spread)
         end
-
         println("\n","="^112,"\nGUARD ROOTS\n","="^112)
         print_edge_root("left-out",edge_roots[1],edge_good[1])
         print_edge_root("right-out",edge_roots[4],edge_good[4])
     end
-
     return P,S,ks,clusters,allclusters,edge_roots,edge_good,mfinal
 end
 
