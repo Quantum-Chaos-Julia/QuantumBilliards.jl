@@ -1,8 +1,3 @@
-include("chebyshevconfig.jl")
-include("verginisaraceno.jl")
-include("ebim.jl")
-include("beyn.jl")
-
 """
     evaluate_points(solver::AcceleratedBIMSolver, billiard::Bi, k) where {Bi<:AbsBilliard} → pts::BoundaryPoints
 

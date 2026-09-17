@@ -19,6 +19,7 @@ include("utils/coordinatesystems.jl")
 include("utils/geometryutils.jl")
 include("utils/typeutils.jl")
 include("utils/macros.jl")
+export use_threads, blas_multi, blas_1, blas_multi_then_1
 include("utils/billiardutils.jl")
 export make_triangle_and_basis, adapt_basis
 
@@ -42,7 +43,19 @@ include("solvers/decompositions.jl")
 include("solvers/matrixconstructors.jl")
 export basis_matrix, basis_and_gradient_matrices, dk_matrix
 
+include("solvers/sweepmethods/decompositionmethod.jl")
+include("solvers/sweepmethods/particularsolutions.jl")
+include("solvers/sweepmethods/boundarygrading.jl")
+include("solvers/sweepmethods/dlp.jl")
+include("solvers/sweepmethods/cfie.jl")
+include("solvers/sweepmethods/compositebim.jl")
 include("solvers/sweepmethods/sweepmethods.jl")
+include("solvers/acceleratedmethods/chebyshevconfig.jl")
+include("solvers/recurrences.jl")
+include("solvers/acceleratedmethods/verginisaraceno.jl")
+include("solvers/acceleratedmethods/ebim.jl")
+include("solvers/acceleratedmethods/beyn.jl")
+include("solvers/acceleratedmethods/cork.jl")
 include("solvers/acceleratedmethods/acceleratedmethods.jl")
 include("solvers/chebyshev/core.jl")
 include("solvers/chebyshev/bessels.jl")
@@ -56,7 +69,7 @@ export DecompositionMethodSolver
 export ParticularSolutionsMethod
 export BoundaryGrading, SmoothPeriodicGrading, CornerGrading, GlobalCornerGrading
 export DoubleLayerPotentialSolver, CombinedFieldIntegralEquationSolver, CompositeBIMSolver
-export ExpandedBIMSolver, BeynSolver
+export ExpandedBIMSolver, BeynSolver, CorkSolver
 export ChebyshevConfig
 export BoundaryPointsSM, BoundaryPointsDM
 export evaluate_points, construct_matrices, construct_matrices_benchmark

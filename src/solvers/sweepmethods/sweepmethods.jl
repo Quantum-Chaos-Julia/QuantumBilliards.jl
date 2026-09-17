@@ -1,10 +1,3 @@
-include("decompositionmethod.jl")
-include("particularsolutions.jl")
-include("boundarygrading.jl")
-include("dlp.jl")
-include("cfie.jl")
-include("compositebim.jl")
-
 """
     solve_wavenumber(solver::SweepBasisSolver, basis::AbsBasis, billiard::AbsBilliard, k, dk; multithreaded::Bool = true) → (k0::Real, t0::Real)
 

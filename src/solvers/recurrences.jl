@@ -1,0 +1,929 @@
+################################################################################
+# ANALYTIC CHEBYSHEV-CORK FOR BIM FREDHOLM NEPs
+# We solve the nonlinear eigenvalue problem A(k)u = 0 for k ∈ [k₀-Δ,k₀+Δ]. 
+# To avoid placing the requested edge roots directly at the edge of the polynomial 
+# approximation, use the guarded half-width
+#
+# Δₚ = (1 + guard)Δ
+#
+# and normalized coordinate t = (k-k₀)/Δₚ ∈ [-1,1]. Around k₀,
+#
+# A(k₀+δ) = Σₗ₌₀ᵖ Aₗδˡ + O(δᵖ⁺¹),  Aₗ = A⁽ˡ⁾(k₀)/l!,
+#
+# so with δ=Δₚt,
+#
+# A(k₀+Δₚt) = Σₗ₌₀ᵖ ΔₚˡAₗtˡ = Σⱼ₌₀ᵖ BⱼTⱼ(t) + O(Δₚᵖ⁺¹).
+#
+# The Taylor coefficients Aₗ are obtained analytically from Bessel/Hankel
+# differential recurrences. The Chebyshev coefficient matrices are stored vertically,
+#
+# B = [B₀;B₁;...;Bₚ],
+#
+# allowing [B₀U;...;BₚU] to be formed by one tall BLAS-3 multiplication in
+# the compact CORK iteration.
+#
+# Supported Fredholm operators are
+#
+#   DLP:        A(k) = I - D(k),
+#   CFIE:       A(k) = I - [D(k) + ikS(k)],
+#   Composite:  componentwise DLP/CFIE with smooth cross-component blocks.
+################################################################################
+
+"""
+    power_to_cheb(p::Int, Δ::Float64) -> Matrix{Float64}
+
+Construct the transformation from normalized Taylor/power coefficients to
+Chebyshev coefficients through degree `p`. It is defined by
+
+    Δˡtˡ = Σⱼ C[j+1,l+1]Tⱼ(t),
+
+so if `F(k₀+δ)=ΣₗFₗδˡ`, then `F(k₀+Δt)=ΣⱼBⱼTⱼ(t)` with
+
+    Bⱼ = Σₗ C[j+1,l+1]Fₗ.
+
+The columns are generated recursively using `tT₀=T₁` and
+`tTⱼ=(Tⱼ₋₁+Tⱼ₊₁)/2`, then column `l+1` is scaled by `Δˡ`.
+
+## Arguments
+- `p::Int`: Maximum polynomial degree.
+- `Δ::Float64`: Half-width used to scale the Taylor variable according to
+  `δ=Δt`.
+
+## Returns
+- `Matrix{Float64}`: The `(p+1)×(p+1)` transformation matrix `C` mapping
+  normalized Taylor/power coefficients to Chebyshev coefficients.
+"""
+function power_to_cheb(p::Int, Δ::Float64)::Matrix{Float64}
+    C = zeros(Float64, p + 1, p + 1); C[1,1] = 1.0
+    for l = 0:p-1
+        C[2,l+2] += C[1,l+1]
+        @inbounds for j = 1:l
+            c = C[j+1,l+1] / 2
+            C[j,l+2] += c; C[j+2,l+2] += c
+        end
+    end
+    s = 1.0
+    @inbounds for l = 0:p
+        C[:,l+1] .*= s; s *= Δ
+    end
+    return C
+end
+
+################################################################################
+# RADIAL TAYLOR RECURRENCES
+# Bessel/Hankel factors are obtained from their differential equations directly. 
+# For f(k)=kZ₁(kr), where Zν is Jν or Hν⁽¹⁾, the order-one Bessel equation gives
+#
+#                         f'' - f'/k + r²f = 0.
+#
+# With f(k+δ)=Σₙfₙδⁿ, fₙ=f⁽ⁿ⁾(k)/n!, coefficient matching gives
+#
+#   fₙ₊₂ = -[(n+1)(n-1)fₙ₊₁ + kr²fₙ + r²fₙ₋₁]/[k(n+2)(n+1)],
+#
+# where f₋₁=0. Since d[zZ₁(z)]/dz=zZ₀(z),
+#
+#                     f₀=kZ₁(kr),    f₁=krZ₀(kr).
+#
+# Similarly, y(k)=Z₀(kr) satisfies y''+y'/k+r²y=0 and hence
+#
+#   yₙ₊₂ = -[(n+1)²yₙ₊₁ + kr²yₙ + r²yₙ₋₁]/[k(n+2)(n+1)],
+#
+# with y₋₁=0, y₀=Z₀(kr), y₁=-rZ₁(kr). Finally, if f(k)=ky(k),
+#
+#                     f₀=ky₀,       fₙ=kyₙ+yₙ₋₁, n≥1.
+################################################################################
+
+"""
+    radial1_taylor!(f::Vector{ComplexF64}, k::Float64, r2::Float64, p::Int, f0::Union{ComplexF64,Float64}, f1::Union{ComplexF64,Float64}) -> Vector{ComplexF64}
+
+Compute the normalized Taylor coefficients `f[n+1]=f⁽ⁿ⁾(k)/n!` of
+`f(k)=kZ₁(kr)`, where `Z₁` may be `J₁` or `H₁⁽¹⁾`. The Bessel equation gives
+
+f'' - f'/k + r²f = 0,
+
+and therefore
+
+fₙ₊₂ = -[(n+1)(n-1)fₙ₊₁ + kr²fₙ + r²fₙ₋₁]/[k(n+2)(n+1)],
+
+with `f₋₁=0`. For Bessel/Hankel functions the initial values are
+`f₀=kZ₁(kr)` and `f₁=krZ₀(kr)`, following from
+`d[zZ₁(z)]/dz=zZ₀(z)`. After the initial special-function evaluations, all
+coefficients through degree `p` require only `O(p)` scalar arithmetic.
+
+## Arguments
+- `f::Vector{ComplexF64}`: Preallocated output vector of length at least
+  `p+1`.
+- `k::Float64`: Expansion point in wavenumber.
+- `r2::Float64`: Squared radial distance `r²`.
+- `p::Int`: Maximum Taylor degree.
+- `f0::Union{ComplexF64,Float64}`: Zeroth normalized Taylor coefficient
+  `f₀=kZ₁(kr)`.
+- `f1::Union{ComplexF64,Float64}`: First normalized Taylor coefficient
+  `f₁=krZ₀(kr)`.
+
+## Returns
+- `Vector{ComplexF64}`: The mutated vector `f` containing
+  `f[n+1]=f⁽ⁿ⁾(k)/n!` for `n=0,...,p`.
+"""
+@inline function radial1_taylor!(f::Vector{ComplexF64}, k::Float64, r2::Float64, p::Int, f0::Union{ComplexF64,Float64}, f1::Union{ComplexF64,Float64})::Vector{ComplexF64}
+    f[1] = f0; p == 0 && return f; f[2] = f1
+    @inbounds for n = 0:p-2
+        fm1 = n == 0 ? 0.0im : f[n]
+        f[n+3] = -((n+1)*(n-1)*f[n+2] + k*r2*f[n+1] + r2*fm1) / (k*(n+2)*(n+1))
+    end
+    return f
+end
+
+"""
+    radial0_taylor!(y::Vector{ComplexF64}, k::Float64, r2::Float64, p::Int, y0::Union{ComplexF64,Float64}, y1::Union{ComplexF64,Float64}) -> Vector{ComplexF64}
+
+Compute the normalized Taylor coefficients `y[n+1]=y⁽ⁿ⁾(k)/n!` of
+`y(k)=Z₀(kr)`, where `Z₀` may be `J₀` or `H₀⁽¹⁾`. The order-zero Bessel
+equation implies
+
+y'' + y'/k + r²y = 0,
+
+so
+
+yₙ₊₂ = -[(n+1)²yₙ₊₁ + kr²yₙ + r²yₙ₋₁]/[k(n+2)(n+1)],
+
+with `y₋₁=0`. The natural initial values are `y₀=Z₀(kr)` and
+`y₁=-rZ₁(kr)` because `Z₀'(z)=-Z₁(z)`.
+
+## Arguments
+- `y::Vector{ComplexF64}`: Preallocated output vector of length at least
+  `p+1`.
+- `k::Float64`: Expansion point in wavenumber.
+- `r2::Float64`: Squared radial distance `r²`.
+- `p::Int`: Maximum Taylor degree.
+- `y0::Union{ComplexF64,Float64}`: Zeroth normalized Taylor coefficient
+  `y₀=Z₀(kr)`.
+- `y1::Union{ComplexF64,Float64}`: First normalized Taylor coefficient
+  `y₁=-rZ₁(kr)`.
+
+## Returns
+- `Vector{ComplexF64}`: The mutated vector `y` containing
+  `y[n+1]=y⁽ⁿ⁾(k)/n!` for `n=0,...,p`.
+"""
+@inline function radial0_taylor!(y::Vector{ComplexF64}, k::Float64, r2::Float64, p::Int, y0::Union{ComplexF64,Float64}, y1::Union{ComplexF64,Float64})::Vector{ComplexF64}
+    y[1] = y0; p == 0 && return y; y[2] = y1
+    @inbounds for n = 0:p-2
+        ym1 = n == 0 ? 0.0im : y[n]
+        y[n+3] = -((n+1)^2*y[n+2] + k*r2*y[n+1] + r2*ym1) / (k*(n+2)*(n+1))
+    end
+    return y
+end
+
+"""
+    radial0_k_taylor!(f::Vector{ComplexF64}, y::Vector{ComplexF64}, k::Float64, r2::Float64, p::Int, y0::Union{ComplexF64,Float64}, y1::Union{ComplexF64,Float64}) -> Vector{ComplexF64}
+
+Compute normalized Taylor coefficients of `f(k)=kZ₀(kr)`. First
+[`radial0_taylor!`](@ref) constructs `y(k+δ)=Σₙyₙδⁿ`. Since
+
+(k+δ)y(k+δ) = ky₀ + Σₙ₌₁∞(kyₙ+yₙ₋₁)δⁿ,
+
+the desired coefficients are `f₀=ky₀` and `fₙ=kyₙ+yₙ₋₁` for `n≥1`.
+This supplies the `kJ₀(kr)` and `kH₀⁽¹⁾(kr)` series required by the CFIE.
+
+## Arguments
+- `f::Vector{ComplexF64}`: Preallocated output vector for the Taylor
+  coefficients of `kZ₀(kr)`.
+- `y::Vector{ComplexF64}`: Preallocated scratch vector used for the Taylor
+  coefficients of `Z₀(kr)`.
+- `k::Float64`: Expansion point in wavenumber.
+- `r2::Float64`: Squared radial distance `r²`.
+- `p::Int`: Maximum Taylor degree.
+- `y0::Union{ComplexF64,Float64}`: Zeroth coefficient `Z₀(kr)`.
+- `y1::Union{ComplexF64,Float64}`: First coefficient `-rZ₁(kr)`.
+
+## Returns
+- `Vector{ComplexF64}`: The mutated vector `f` containing the normalized
+  Taylor coefficients of `kZ₀(kr)` through degree `p`.
+"""
+@inline function radial0_k_taylor!(f::Vector{ComplexF64}, y::Vector{ComplexF64}, k::Float64, r2::Float64, p::Int, y0::Union{ComplexF64,Float64}, y1::Union{ComplexF64,Float64})::Vector{ComplexF64}
+    radial0_taylor!(y, k, r2, p, y0, y1); f[1] = k*y[1]
+    @inbounds @simd for n = 1:p
+        f[n+1] = k*y[n+1] + y[n]
+    end
+    return f
+end
+
+"""
+    TaylorWorkspace
+
+Reusable degree-`p` scratch storage for analytic DLP/CFIE Taylor assembly.
+`H1`, `J1`, `H0`, and `J0` store the k-weighted radial Taylor series;
+`yH0` and `yJ0` store the corresponding unweighted order-zero series. `a`
+contains the current raw kernel coefficients, `tmp` is an accumulation buffer,
+and `β` contains the transformed Chebyshev coefficients. A separate workspace
+is used by each assembly thread.
+
+## Arguments
+The fields are populated by [`TaylorWorkspace(p::Int)`](@ref):
+- `a::Vector{ComplexF64}`: Current raw kernel Taylor coefficients.
+- `tmp::Vector{ComplexF64}`: Temporary accumulation buffer.
+- `β::Vector{ComplexF64}`: Chebyshev coefficient buffer.
+- `H1::Vector{ComplexF64}`: Taylor coefficients of `kH₁⁽¹⁾`.
+- `J1::Vector{ComplexF64}`: Taylor coefficients of `kJ₁`.
+- `H0::Vector{ComplexF64}`: Taylor coefficients of `kH₀⁽¹⁾`.
+- `J0::Vector{ComplexF64}`: Taylor coefficients of `kJ₀`.
+- `yH0::Vector{ComplexF64}`: Unweighted `H₀⁽¹⁾` Taylor workspace.
+- `yJ0::Vector{ComplexF64}`: Unweighted `J₀` Taylor workspace.
+
+## Returns
+- `TaylorWorkspace`: Reusable scratch storage for analytic Taylor and
+  Taylor-to-Chebyshev assembly.
+"""
+struct TaylorWorkspace
+    a::Vector{ComplexF64}
+    tmp::Vector{ComplexF64}
+    β::Vector{ComplexF64}
+    H1::Vector{ComplexF64}
+    J1::Vector{ComplexF64}
+    H0::Vector{ComplexF64}
+    J0::Vector{ComplexF64}
+    yH0::Vector{ComplexF64}
+    yJ0::Vector{ComplexF64}
+end
+
+"""
+    TaylorWorkspace(p::Int) -> TaylorWorkspace
+
+Allocate the nine length-`p+1` scratch vectors required by the analytic
+Taylor kernels. The workspace contains no geometry-dependent data and can be
+reused for every source-target pair at fixed polynomial degree.
+
+## Arguments
+- `p::Int`: Maximum Taylor polynomial degree.
+
+## Returns
+- `TaylorWorkspace`: Workspace containing nine zero-initialized
+  `Vector{ComplexF64}` buffers of length `p+1`.
+"""
+function TaylorWorkspace(p::Int)::TaylorWorkspace
+    z() = zeros(ComplexF64, p + 1)
+    return TaylorWorkspace(z(), z(), z(), z(), z(), z(), z(), z(), z())
+end
+
+"""
+    _kernel_taylor!(w::TaylorWorkspace, pts, Rmat::Matrix{Float64}, G, k::Float64, p::Int, i::Int, j::Int) -> Vector{ComplexF64}
+
+Compute the normalized Taylor coefficients of the raw Kress-corrected DLP
+entry `Dᵢⱼ(k)`. For `i≠j`,
+
+    Dᵢⱼ = RᵢⱼL₁ + wⱼL₂,
+    L₁ = -(1/2π)(inn/r)kJ₁(kr),
+    L₂ = (i/2)(inn/r)kH₁⁽¹⁾(kr) - L₁logterm.
+
+Since all geometry factors are independent of `k`, the complete expansion is
+obtained from the `kJ₁` and `kH₁⁽¹⁾` coefficient sequences generated by
+[`radial1_taylor!`](@ref). For `i==j`, the exact Kress limit is
+`Dᵢᵢ=wᵢκᵢ`, so only the zeroth coefficient is nonzero.
+
+The returned workspace vector satisfies `w.a[n+1]=Dᵢⱼ⁽ⁿ⁾(k)/n!`. These are
+coefficients of the raw operator `D(k)`; the sign and identity in
+`A(k)=I-D(k)` are applied later during matrix assembly.
+
+## Arguments
+- `::DoubleLayerPotentialSolver`: DLP solver instance used for multiple
+  dispatch.
+- `w::TaylorWorkspace`: Reusable Taylor workspace.
+- `pts`: Boundary discretization data.
+- `Rmat::Matrix{Float64}`: Kress logarithmic quadrature matrix.
+- `G`: Precomputed geometry cache containing distances, logarithmic factors,
+  inner products, inverse distances, and curvature.
+- `k::Float64`: Taylor expansion wavenumber.
+- `p::Int`: Maximum Taylor degree.
+- `i::Int`: Target boundary index.
+- `j::Int`: Source boundary index.
+
+## Returns
+- `Vector{ComplexF64}`: `w.a`, containing the normalized Taylor coefficients
+  `Dᵢⱼ⁽ⁿ⁾(k)/n!` for `n=0,...,p`.
+"""
+@inline function _kernel_taylor!(::DoubleLayerPotentialSolver, w::TaylorWorkspace, pts, Rmat::Matrix{Float64}, G, k::Float64, p::Int, i::Int, j::Int)::Vector{ComplexF64}
+    a = w.a; fill!(a, 0)
+    if i == j
+        a[1] = ComplexF64(pts.ws[i]*G.kappa[i])
+        return a
+    end
+    invtwopi = inv(2π); r = G.R[i,j]; r2 = r*r; invr = G.invR[i,j]
+    lt = G.logterm[i,j]; inn = G.inner[i,j]; z = k*r
+    h0 = _bim_hankelh1(0,z); h1 = _bim_hankelh1(1,z)
+    j0 = _bim_besselj(0,z,h0); j1 = _bim_besselj(1,z,h1)
+    radial1_taylor!(w.H1,k,r2,p,k*h1,k*r*h0)
+    radial1_taylor!(w.J1,k,r2,p,k*j1,k*r*j0)
+    @inbounds @simd for l = 1:p+1
+        l1 = -invtwopi*inn*invr*w.J1[l]
+        l2 = im/2*inn*invr*w.H1[l] - l1*lt
+        a[l] = Rmat[i,j]*l1 + pts.ws[j]*l2
+    end
+    return a
+end
+
+"""
+    _kernel_taylor!(::CombinedFieldIntegralEquationSolver, w::TaylorWorkspace, pts, Rmat::Matrix{Float64}, G, k::Float64, p::Int, i::Int, j::Int) -> Vector{ComplexF64}
+
+Compute normalized Taylor coefficients of the raw combined-field entry
+`Kᵢⱼ(k)=Dᵢⱼ(k)+ikSᵢⱼ(k)`. For `i≠j`, the DLP contribution uses the same
+Kress split as [`dlp_kernel_taylor!`](@ref), while
+
+    ikM₁ = -(i/2π)sⱼ[kJ₀(kr)],
+    ikM₂ = -½sⱼ[kH₀⁽¹⁾(kr)] + (i/2π)sⱼlogterm[kJ₀(kr)].
+
+Thus the complete off-diagonal expansion is built from `kH₁⁽¹⁾`, `kJ₁`,
+`kH₀⁽¹⁾`, and `kJ₀`, generated analytically by the radial recurrences.
+
+For `i==j`, write `Sᵢᵢ(k)=cᵢ-aᵢlog k`, with
+
+    aᵢ = wᵢsᵢ/π,
+    cᵢ = sᵢ[-Rᵢᵢ/(2π)+wᵢ(i/2-γ/π+(1/2π)log(4/sᵢ²))].
+
+Then `Kᵢᵢ=wᵢκᵢ+ik(cᵢ-aᵢlog k)` and
+
+    K₀ = wᵢκᵢ + ik(cᵢ-aᵢlog k),
+    K₁ = i[cᵢ-aᵢ(log k+1)],
+    Kₙ = iaᵢ(-1)ⁿ⁺¹/[n(n-1)kⁿ⁻¹],    n≥2.
+
+Hence the singular diagonal is expanded in closed form. The returned vector
+satisfies `w.a[n+1]=Kᵢⱼ⁽ⁿ⁾(k)/n!`; the Fredholm transformation
+`A(k)=I-K(k)` is performed later.
+
+## Arguments
+- `::CombinedFieldIntegralEquationSolver`: CFIE solver instance used for
+  multiple dispatch.
+- `w::TaylorWorkspace`: Reusable Taylor workspace.
+- `pts`: Boundary discretization data.
+- `Rmat::Matrix{Float64}`: Kress logarithmic quadrature matrix.
+- `G`: Precomputed geometry cache containing the geometric quantities required
+  by the Kress DLP and single-layer splits.
+- `k::Float64`: Taylor expansion wavenumber.
+- `p::Int`: Maximum Taylor degree.
+- `i::Int`: Target boundary index.
+- `j::Int`: Source boundary index.
+
+## Returns
+- `Vector{ComplexF64}`: `w.a`, containing the normalized Taylor coefficients
+  `Kᵢⱼ⁽ⁿ⁾(k)/n!` of `K(k)=D(k)+ikS(k)` for `n=0,...,p`.
+"""
+@inline function _kernel_taylor!(::CombinedFieldIntegralEquationSolver, w::TaylorWorkspace, pts, Rmat::Matrix{Float64}, G, k::Float64, p::Int, i::Int, j::Int)::Vector{ComplexF64}
+    a = w.a; fill!(a, 0); invtwopi = inv(2π)
+    if i == j
+        si = G.speed[i]; wi = pts.ws[i]; dval = ComplexF64(wi*G.kappa[i])
+        a_log = wi*si/π
+        c = si*(-Rmat[i,i]*invtwopi + wi*(im/2 - Base.MathConstants.eulergamma/π +
+             invtwopi*log(4/si^2)))
+
+        a[1] = dval + im*k*(c - a_log*log(k))
+        p >= 1 && (a[2] = im*(c - a_log*(log(k) + 1)))
+        @inbounds for n = 2:p
+            a[n+1] = im*a_log*(-1)^(n+1)/(n*(n-1)*k^(n-1))
+        end
+        return a
+    end
+
+    r = G.R[i,j]; r2 = r*r; invr = G.invR[i,j]
+    lt = G.logterm[i,j]; inn = G.inner[i,j]; sj = G.speed[j]; wj = pts.ws[j]; z = k*r
+    h0 = _bim_hankelh1(0,z); h1 = _bim_hankelh1(1,z)
+    j0 = _bim_besselj(0,z,h0); j1 = _bim_besselj(1,z,h1)
+
+    radial1_taylor!(w.H1,k,r2,p,k*h1,k*r*h0)
+    radial1_taylor!(w.J1,k,r2,p,k*j1,k*r*j0)
+    radial0_k_taylor!(w.H0,w.yH0,k,r2,p,h0,-r*h1)
+    radial0_k_taylor!(w.J0,w.yJ0,k,r2,p,j0,-r*j1)
+
+    @inbounds @simd for l = 1:p+1
+        l1 = -invtwopi*inn*invr*w.J1[l]
+        l2 = im/2*inn*invr*w.H1[l] - l1*lt
+        dval = Rmat[i,j]*l1 + wj*l2
+        ikm1 = -im*invtwopi*sj*w.J0[l]
+        ikm2 = -0.5*sj*w.H0[l] + im*invtwopi*sj*lt*w.J0[l]
+        a[l] = dval + Rmat[i,j]*ikm1 + wj*ikm2
+    end
+    return a
+end
+
+"""
+    _kernel_taylor!(::DoubleLayerPotentialSolver, w::TaylorWorkspace, pts, xi::Float64, yi::Float64, k::Float64, p::Int, j::Int) -> Vector{ComplexF64}
+
+Compute normalized Taylor coefficients of a smooth cross-component DLP entry.
+For target `xᵢ=(xi,yi)` and source `xⱼ`,
+
+    Dᵢⱼ(k) = (i/2)wⱼ(inn/r)[kH₁⁽¹⁾(kr)],
+
+where `r=|xᵢ-xⱼ|` and `inn=nⱼ⋅(xᵢ-xⱼ)`. Since the two points belong to
+distinct physical boundary components, `r>0` and no Kress split is required.
+
+If
+
+    kH₁⁽¹⁾((k+δ)r) = Σₙhₙδⁿ,
+
+then
+
+    Dᵢⱼ(k+δ) = Σₙ[(i/2)wⱼ(inn/r)hₙ]δⁿ.
+
+The returned vector therefore satisfies `w.a[n+1]=Dᵢⱼ⁽ⁿ⁾(k)/n!`.
+
+## Arguments
+- `::DoubleLayerPotentialSolver`: DLP source-component solver used for
+  multiple dispatch.
+- `w::TaylorWorkspace`: Reusable Taylor workspace.
+- `pts`: Boundary data for the source component.
+- `xi::Float64`: Target x-coordinate.
+- `yi::Float64`: Target y-coordinate.
+- `k::Float64`: Taylor expansion wavenumber.
+- `p::Int`: Maximum Taylor degree.
+- `j::Int`: Local source index on the source component.
+
+## Returns
+- `Vector{ComplexF64}`: `w.a`, containing normalized Taylor coefficients of
+  the smooth cross-component DLP entry through degree `p`.
+"""
+@inline function _kernel_taylor!(::DoubleLayerPotentialSolver, w::TaylorWorkspace, pts, xi::Float64, yi::Float64, k::Float64, p::Int, j::Int)::Vector{ComplexF64}
+    a = w.a; fill!(a,0)
+    xj,yj = pts.xy[j]; dx = xi-xj; dy = yi-yj; r = hypot(dx,dy); r2 = r*r
+    tx,ty = pts.tangent[j]; inn = ty*dx-tx*dy; z = k*r
+    h0 = _bim_hankelh1(0,z); h1 = _bim_hankelh1(1,z)
+    radial1_taylor!(w.H1,k,r2,p,k*h1,k*r*h0)
+    c = pts.ws[j]*(im/2)*inn/r
+    @inbounds @simd for l = 1:p+1
+        a[l] = c*w.H1[l]
+    end
+    return a
+end
+
+"""
+    _kernel_taylor!(::CombinedFieldIntegralEquationSolver, w::TaylorWorkspace, pts, xi::Float64, yi::Float64, k::Float64, p::Int, j::Int) -> Vector{ComplexF64}
+
+Compute normalized Taylor coefficients of a smooth cross-component CFIE entry
+
+    Kᵢⱼ(k) = Dᵢⱼ(k)+ikSᵢⱼ(k).
+
+For distinct physical components,
+
+    Dᵢⱼ(k)   = c_D[kH₁⁽¹⁾(kr)],
+    ikSᵢⱼ(k) = c_S[kH₀⁽¹⁾(kr)],
+
+with
+
+    c_D = (i/2)wⱼinn/r,    c_S = -½wⱼsⱼ.
+
+Therefore, if `hₙ⁽¹⁾` and `hₙ⁽⁰⁾` are the normalized Taylor coefficients of
+`kH₁⁽¹⁾(kr)` and `kH₀⁽¹⁾(kr)`,
+
+    Kᵢⱼ,ₙ = c_Dhₙ⁽¹⁾+c_Shₙ⁽⁰⁾.
+
+The two radial sequences are generated analytically by
+[`radial1_taylor!`](@ref) and [`radial0_k_taylor!`](@ref).
+
+## Arguments
+- `::CombinedFieldIntegralEquationSolver`: CFIE source-component solver used
+  for multiple dispatch.
+- `w::TaylorWorkspace`: Reusable Taylor workspace.
+- `pts`: Boundary data for the source component.
+- `xi::Float64`: Target x-coordinate.
+- `yi::Float64`: Target y-coordinate.
+- `k::Float64`: Taylor expansion wavenumber.
+- `p::Int`: Maximum Taylor degree.
+- `j::Int`: Local source index on the source component.
+
+## Returns
+- `Vector{ComplexF64}`: `w.a`, containing normalized Taylor coefficients of
+  the smooth cross-component CFIE entry through degree `p`.
+"""
+@inline function _kernel_taylor!(::CombinedFieldIntegralEquationSolver, w::TaylorWorkspace, pts, xi::Float64, yi::Float64, k::Float64, p::Int, j::Int)::Vector{ComplexF64}
+    a = w.a; fill!(a,0)
+    xj,yj = pts.xy[j]; dx = xi-xj; dy = yi-yj; r = hypot(dx,dy); r2 = r*r
+    tx,ty = pts.tangent[j]; inn = ty*dx-tx*dy; sj = hypot(tx,ty); z = k*r
+    h0 = _bim_hankelh1(0,z); h1 = _bim_hankelh1(1,z)
+    radial1_taylor!(w.H1,k,r2,p,k*h1,k*r*h0)
+    radial0_k_taylor!(w.H0,w.yH0,k,r2,p,h0,-r*h1)
+    cD = pts.ws[j]*(im/2)*inn/r; cS = -pts.ws[j]*sj/2
+    @inbounds @simd for l = 1:p+1
+        a[l] = cD*w.H1[l]+cS*w.H0[l]
+    end
+    return a
+end
+
+"""
+    _taylor_cache(solver::Union{DoubleLayerPotentialSolver,CombinedFieldIntegralEquationSolver}, pts)
+
+Construct the geometry-dependent cache for analytic Taylor evaluation of a
+single-component BIM Fredholm matrix. The Kress matrix and geometry cache are
+formed once and reused for every source-target pair.
+
+## Arguments
+- `solver::Union{DoubleLayerPotentialSolver,CombinedFieldIntegralEquationSolver}`:
+  Single-component DLP or CFIE solver.
+- `pts`: Boundary discretization data used by the solver.
+
+## Returns
+- `NamedTuple`: Cache with fields `solver`, `pts`, `Rmat`, `G`, and `N`,
+  containing the solver, boundary data, Kress matrix, geometry cache, and
+  boundary matrix dimension.
+"""
+function _taylor_cache(solver::Union{DoubleLayerPotentialSolver,CombinedFieldIntegralEquationSolver}, pts)
+    N = length(pts.xy)
+    G = boundary_geom_cache(pts,_is_nontrivial_dlp_grading(pts))
+    Rmat = zeros(Float64,N,N); kress_R!(Rmat)
+    return (;solver,pts,Rmat,G,N)
+end
+
+"""
+    _taylor_cache(solver::CompositeBIMSolver, pts)
+
+Construct component-local geometry data for analytic Taylor evaluation of a
+composite BIM Fredholm matrix.
+
+For each physical component `a`, the cache contains its local boundary points,
+Kress matrix, and geometry cache. `g2c[i]` and `g2l[i]` map a global boundary
+index to its component and local index, allowing same-component and smooth
+cross-component interactions to be selected without rebuilding geometry.
+
+## Arguments
+- `solver::CompositeBIMSolver`: Composite solver containing one DLP or CFIE
+  component solver for each physical boundary component.
+- `pts`: Globally merged composite boundary discretization.
+
+## Returns
+- `NamedTuple`: Composite Taylor cache containing `solver`, `pts`,
+  component-local boundary data `comp_pts`, Kress matrices `Rmats`, geometry
+  caches `Gs`, global-to-component maps `g2c` and `g2l`, and global matrix
+  dimension `N`.
+"""
+function _taylor_cache(solver::CompositeBIMSolver, pts)
+    nc = length(solver.component_solvers); offs = _composite_offsets(pts,nc)
+    comp_pts = ntuple(a -> _composite_component_slice(pts,offs[a],a),nc)
+    Gs = ntuple(a -> boundary_geom_cache(comp_pts[a],_is_nontrivial_dlp_grading(comp_pts[a])),nc)
+    Rmats = ntuple(nc) do a
+        Na = length(comp_pts[a].xy)
+        Rmat = zeros(Float64,Na,Na); kress_R!(Rmat); Rmat
+    end
+    g2c,g2l = _composite_global_to_local(offs); N = length(pts.xy)
+    return (;solver,pts,comp_pts,Rmats,Gs,g2c,g2l,N)
+end
+
+"""
+    _kernel_taylor!(cache, w::TaylorWorkspace, k::Float64, p::Int, i::Int, j::Int) -> Vector{ComplexF64}
+
+Dispatch the evaluation of one raw BIM kernel Taylor series through the solver
+stored in `cache`. The cache contains all geometry-dependent quantities needed
+by the corresponding single-component or composite implementation.
+
+For the raw BIM operator
+
+Kᵢⱼ(k+δ) = Σₙ₌₀ᵖ Kᵢⱼ,ₙδⁿ + O(δᵖ⁺¹),
+
+the returned workspace vector satisfies
+
+w.a[n+1] = Kᵢⱼ,ₙ = Kᵢⱼ⁽ⁿ⁾(k)/n!.
+
+For a single-component DLP or CFIE solver, evaluation is forwarded to the
+Kress-corrected same-component kernel using the cached `Rmat` and geometry
+data `G`. For a [`CompositeBIMSolver`](@ref), the global indices are first
+mapped to their physical components and local indices, after which either the
+same-component Kress kernel or the smooth cross-component kernel is selected.
+
+This method returns coefficients of the raw operator `K(k)` rather than the
+Fredholm operator `A(k)=I-K(k)`.
+
+## Arguments
+- `cache`: Single-component or composite Taylor cache returned by
+  [`_taylor_cache`](@ref).
+- `w::TaylorWorkspace`: Reusable Taylor workspace.
+- `k::Float64`: Taylor expansion wavenumber.
+- `p::Int`: Maximum Taylor degree.
+- `i::Int`: Global target index.
+- `j::Int`: Global source index.
+
+## Returns
+- `Vector{ComplexF64}`: `w.a`, containing normalized Taylor coefficients of
+  the selected raw BIM kernel entry through degree `p`.
+"""
+@inline function _kernel_taylor!(cache, w::TaylorWorkspace, k::Float64, p::Int, i::Int, j::Int)::Vector{ComplexF64}
+    return _kernel_taylor!(cache.solver,w,cache,cache.pts,k,p,i,j)
+end
+
+"""
+    _kernel_taylor!(solver::Union{DoubleLayerPotentialSolver,CombinedFieldIntegralEquationSolver}, w::TaylorWorkspace, cache, pts, k::Float64, p::Int, i::Int, j::Int) -> Vector{ComplexF64}
+
+Evaluate one raw single-component BIM kernel Taylor series using precomputed
+geometry data.
+
+## Arguments
+- `solver::Union{DoubleLayerPotentialSolver,CombinedFieldIntegralEquationSolver}`:
+  Single-component DLP or CFIE solver selecting the analytic kernel by
+  multiple dispatch.
+- `w::TaylorWorkspace`: Reusable Taylor workspace.
+- `cache`: Taylor cache containing `Rmat` and `G`.
+- `pts`: Boundary discretization data.
+- `k::Float64`: Taylor expansion wavenumber.
+- `p::Int`: Maximum Taylor degree.
+- `i::Int`: Target boundary index.
+- `j::Int`: Source boundary index.
+
+## Returns
+- `Vector{ComplexF64}`: `w.a`, containing normalized Taylor coefficients of
+  the raw DLP or CFIE kernel entry through degree `p`.
+"""
+@inline function _kernel_taylor!(solver::Union{DoubleLayerPotentialSolver,CombinedFieldIntegralEquationSolver}, w::TaylorWorkspace, cache, pts, k::Float64, p::Int, i::Int, j::Int)::Vector{ComplexF64}
+    return _kernel_taylor!(solver,w,pts,cache.Rmat,cache.G,k,p,i,j)
+end
+
+"""
+    _kernel_taylor!(solver::CompositeBIMSolver, w::TaylorWorkspace, cache, pts, k::Float64, p::Int, gi::Int, gj::Int) -> Vector{ComplexF64}
+
+Evaluate normalized Taylor coefficients of one global composite BIM kernel
+entry. The global target and source indices are mapped to component-local
+indices using `g2c` and `g2l`.
+
+For a same-component interaction, the component solver evaluates its
+Kress-corrected DLP or CFIE kernel. For a cross-component interaction, the
+interaction is smooth and the solver belonging to the source component
+selects the corresponding direct DLP or CFIE Taylor kernel.
+
+## Arguments
+- `solver::CompositeBIMSolver`: Composite BIM solver containing the
+  component-specific DLP/CFIE solvers.
+- `w::TaylorWorkspace`: Reusable Taylor workspace.
+- `cache`: Composite Taylor cache containing component-local boundary data,
+  Kress matrices, geometry caches, and global-to-local maps.
+- `pts`: Globally merged composite boundary discretization.
+- `k::Float64`: Taylor expansion wavenumber.
+- `p::Int`: Maximum Taylor degree.
+- `gi::Int`: Global target boundary index.
+- `gj::Int`: Global source boundary index.
+
+## Returns
+- `Vector{ComplexF64}`: `w.a`, containing normalized Taylor coefficients of
+  the selected global raw composite BIM entry through degree `p`.
+"""
+@inline function _kernel_taylor!(solver::CompositeBIMSolver, w::TaylorWorkspace, cache, pts, k::Float64, p::Int, gi::Int, gj::Int)::Vector{ComplexF64}
+    ca = cache.g2c[gi]; cb = cache.g2c[gj]; ia = cache.g2l[gi]; jb = cache.g2l[gj]
+    ca == cb && return _kernel_taylor!(solver.component_solvers[ca],w,cache.comp_pts[ca],cache.Rmats[ca],cache.Gs[ca],k,p,ia,jb)
+    xi,yi = cache.comp_pts[ca].xy[ia]
+    return _kernel_taylor!(solver.component_solvers[cb],w,cache.comp_pts[cb],xi,yi,k,p,jb)
+end
+
+################################################################################
+# FREDHOLM TAYLOR COEFFICIENTS
+# The methods above return the raw BIM operator
+#
+#   K(k)=D(k)          for DLP,
+#   K(k)=D(k)+ikS(k)   for CFIE.
+#
+# All supported eigenproblems have Fredholm form
+#
+# A(k)=I-K(k).
+#
+# Hence, if
+#
+# Kᵢⱼ(k+δ)=Σₙ₌₀ᵖKᵢⱼ,ₙδⁿ,
+#
+# then
+#
+#   Aᵢⱼ,₀ = δᵢⱼ-Kᵢⱼ,₀,
+#   Aᵢⱼ,ₙ = -Kᵢⱼ,ₙ,    n≥1.
+#
+# `_fredholm_taylor!` is therefore the final analytic BIM interface.
+################################################################################
+
+"""
+    _fredholm_taylor!(cache, w::TaylorWorkspace, k::Float64, p::Int, i::Int, j::Int) -> Vector{ComplexF64}
+
+Compute normalized Taylor coefficients of one Fredholm-matrix entry,
+
+    Aᵢⱼ(k+δ) = Σₙ₌₀ᵖ Aᵢⱼ,ₙδⁿ + O(δᵖ⁺¹),
+    Aᵢⱼ,ₙ = Aᵢⱼ⁽ⁿ⁾(k)/n!.
+
+First [`_kernel_taylor!`](@ref) evaluates the corresponding raw BIM kernel
+coefficients. Since `A(k)=I-K(k)`, these are transformed in place as
+
+    Aᵢⱼ,₀ = δᵢⱼ-Kᵢⱼ,₀,
+    Aᵢⱼ,ₙ = -Kᵢⱼ,ₙ,    n≥1.
+
+Thus the returned workspace vector satisfies
+
+    w.a[n+1] = Aᵢⱼ⁽ⁿ⁾(k)/n!.
+
+This function forms the boundary between the analytic BIM recurrence machinery
+and the Taylor-to-Chebyshev polynomial assembly.
+
+## Arguments
+- `cache`: Single-component or composite Taylor cache.
+- `w::TaylorWorkspace`: Reusable Taylor workspace.
+- `k::Float64`: Taylor expansion wavenumber.
+- `p::Int`: Maximum Taylor degree.
+- `i::Int`: Target matrix index.
+- `j::Int`: Source matrix index.
+
+## Returns
+- `Vector{ComplexF64}`: `w.a`, containing the normalized Fredholm Taylor
+  coefficients `Aᵢⱼ⁽ⁿ⁾(k)/n!` for `n=0,...,p`.
+"""
+@inline function _fredholm_taylor!(cache, w::TaylorWorkspace, k::Float64, p::Int, i::Int, j::Int)::Vector{ComplexF64}
+    a = _kernel_taylor!(cache,w,k,p,i,j)
+    @inbounds @simd for l = 1:p+1
+        a[l] = -a[l]
+    end
+    i == j && (a[1] += 1)
+    return a
+end
+
+"""
+    taylor_to_cheb!(β::Vector{ComplexF64}, a::Vector{ComplexF64}, C::Matrix{Float64}) -> Vector{ComplexF64}
+
+Transform normalized Taylor coefficients about `k₀` into Chebyshev
+coefficients on the scaled interval `k=k₀+Δt`.
+
+    F(k₀+δ) = Σₗ₌₀ᵖ aₗδˡ
+
+and [`power_to_cheb`](@ref) has constructed `C` such that
+
+    Δˡtˡ = Σⱼ₌₀ᵖ C[j+1,l+1]Tⱼ(t),
+
+then
+
+    F(k₀+Δt) = Σⱼ₌₀ᵖ βⱼTⱼ(t),
+
+with β = Ca.
+
+## Arguments
+- `β::Vector{ComplexF64}`: Preallocated output vector for the Chebyshev
+  coefficients.
+- `a::Vector{ComplexF64}`: Normalized Taylor coefficient vector.
+- `C::Matrix{Float64}`: Taylor/power-to-Chebyshev transformation matrix
+  returned by [`power_to_cheb`](@ref).
+
+## Returns
+- `Vector{ComplexF64}`: The mutated vector `β` containing the Chebyshev
+  coefficients.
+"""
+@inline function taylor_to_cheb!(β::Vector{ComplexF64}, a::Vector{ComplexF64}, C::Matrix{Float64})::Vector{ComplexF64}
+    @blas_multi_then_1 MAX_BLAS_THREADS mul!(β,C,a)
+    return β
+end
+
+"""
+    build_B_full(cache, k::Float64, Δ::Float64, p::Int; multithreaded::Bool=true) -> Tuple{Matrix{ComplexF64},Float64}
+
+Assemble the vertically stacked Chebyshev coefficient matrices
+
+    B = [B₀;B₁;...;Bₚ]
+
+of the full Fredholm polynomial. Each matrix entry is first expanded
+analytically in Taylor coefficients and then transformed to Chebyshev
+coefficients by [`power_to_cheb`](@ref).
+
+## Arguments
+- `cache`: Single-component or composite Taylor cache.
+- `k::Float64`: Taylor expansion center `k₀`.
+- `Δ::Float64`: Half-width used in the normalized coordinate
+  `t=(k-k₀)/Δ`.
+- `p::Int`: Maximum polynomial degree.
+- `multithreaded::Bool=true`: Whether to parallelize the matrix assembly over
+  source columns using Julia threads.
+
+## Returns
+- `Tuple{Matrix{ComplexF64},Float64}`: The vertically stacked Chebyshev
+  coefficient matrix `B` and the elapsed assembly time in seconds.
+"""
+function build_B_full(cache, k::Float64, Δ::Float64, p::Int; multithreaded::Bool=true)::Tuple{Matrix{ComplexF64},Float64}
+    N = cache.N; C = power_to_cheb(p,Δ); B = zeros(ComplexF64,(p+1)*N,N)
+    work = [TaylorWorkspace(p) for _ = 1:Threads.maxthreadid()]; t0 = time()
+    @timeit_debug "Taylor-Chebyshev assembly" @use_threads multithreading=multithreaded for j = 1:N
+        w = work[Threads.threadid()]
+        @inbounds for i = 1:N
+            a = _fredholm_taylor!(cache,w,k,p,i,j)
+            taylor_to_cheb!(w.β,a,C)
+            @simd for q = 0:p
+                B[q*N+i,j] = w.β[q+1]
+            end
+        end
+    end
+    return B,time()-t0
+end
+
+"""
+    build_B_reduced(cache, orbits, k::Float64, Δ::Float64, p::Int; multithreaded::Bool=true) -> Tuple{Matrix{ComplexF64},Float64}
+
+Assemble the symmetry-reduced Chebyshev polynomial. The complete raw BIM
+source orbit is folded first, K̃ₐᵦ = Σⱼ∈orbit(β) χⱼ Kᵢⱼ,
+and the Fredholm identity is then added only once.
+
+## Arguments
+- `cache`: Single-component or composite Taylor cache for the full boundary.
+- `orbits`: Symmetry-orbit map containing the fundamental indices, global
+  orbit assignments, and symmetry phases.
+- `k::Float64`: Taylor expansion center `k₀`.
+- `Δ::Float64`: Half-width used in the normalized coordinate
+  `t=(k-k₀)/Δ`.
+- `p::Int`: Maximum polynomial degree.
+- `multithreaded::Bool=true`: Whether to parallelize the reduced matrix
+  assembly over fundamental source columns using Julia threads.
+
+## Returns
+- `Tuple{Matrix{ComplexF64},Float64}`: The vertically stacked
+  symmetry-reduced Chebyshev coefficient matrix `B` and the elapsed assembly
+  time in seconds.
+"""
+function build_B_reduced(cache, orbits, k::Float64, Δ::Float64, p::Int; multithreaded::Bool=true)::Tuple{Matrix{ComplexF64},Float64}
+    m = fundamental_size(orbits); fund = orbits.fundamental_indices
+    orbit_of = orbits.orbit_of; phase = orbits.phase; C = power_to_cheb(p,Δ)
+    B = zeros(ComplexF64,(p+1)*m,m); images = [Int[] for _ = 1:m]
+    @inbounds for j = eachindex(orbit_of)
+        push!(images[orbit_of[j]],j)
+    end
+    work = [TaylorWorkspace(p) for _ = 1:Threads.maxthreadid()]; t0 = time()
+    @timeit_debug "Taylor-Chebyshev assembly" @use_threads multithreading=multithreaded for bcol = 1:m
+        w = work[Threads.threadid()]
+        @inbounds for arow = 1:m
+            gi = fund[arow]; fill!(w.tmp,0)
+            for gj in images[bcol]
+                a = _kernel_taylor!(cache,w,k,p,gi,gj); χ = phase[gj]
+                @simd for l = 1:p+1
+                    w.tmp[l] -= χ*a[l]
+                end
+            end
+            arow == bcol && (w.tmp[1] += 1)
+            taylor_to_cheb!(w.β,w.tmp,C)
+            @simd for q = 0:p
+                B[q*m+arow,bcol] = w.β[q+1]
+            end
+        end
+    end
+    return B,time()-t0
+end
+
+"""
+    CORKPolynomial
+
+Chebyshev polynomial approximation of a BIM Fredholm nonlinear eigenvalue
+problem about the central wavenumber `k0`. The approximation is
+
+    A(k0 + Δt) ≈ Σⱼ₌₀ᵖ BⱼTⱼ(t),    t = (k-k0)/Δ,
+
+where the coefficient matrices are stored vertically as
+
+    B = [B₀;B₁;...;Bₚ].
+
+Each `Bⱼ` is an `N×N` matrix, so the stacked matrix `B` has dimensions
+`((p+1)N)×N`. The normalized variable `t` maps the polynomial interval
+`[k0-Δ,k0+Δ]` to `[-1,1]`.
+
+## Arguments
+- `B::Matrix{ComplexF64}`: Vertically stacked Chebyshev coefficient matrices
+  `[B₀;B₁;...;Bₚ]`.
+- `k0::Float64`: Central wavenumber of the polynomial approximation.
+- `Δ::Float64`: Half-width of the polynomial approximation interval.
+- `p::Int`: Chebyshev polynomial degree.
+- `N::Int`: Dimension of each coefficient matrix `Bⱼ`.
+
+## Returns
+- `CORKPolynomial`: Chebyshev representation of the Fredholm operator used by
+  the compact CORK eigensolver.
+"""
+struct CORKPolynomial
+    B::Matrix{ComplexF64}
+    k0::Float64
+    Δ::Float64
+    p::Int
+    N::Int
+end
+
+"""
+    build_cork_polynomial(solver::SweepBIMSolver, pts, k0::Float64, Δ::Float64, p::Int; multithreaded::Bool=true) -> Tuple{CORKPolynomial,Float64}
+
+Construct the analytic Chebyshev approximation to the BIM Fredholm operator.
+The solver determines the DLP/CFIE/composite kernel dispatch, while
+`_taylor_cache` constructs the corresponding geometry data.
+
+If no symmetry is present, the complete Fredholm polynomial is assembled.
+Otherwise the boundary is folded according to the solver symmetry and
+character and the symmetry-reduced polynomial is constructed.
+
+## Arguments
+- `solver::SweepBIMSolver`: DLP, CFIE, or composite BIM solver defining the
+  Fredholm operator and optional symmetry reduction.
+- `pts`: Boundary discretization at which the polynomial is constructed.
+- `k0::Float64`: Central wavenumber of the polynomial approximation.
+- `Δ::Float64`: Polynomial half-width defining `t=(k-k₀)/Δ`.
+- `p::Int`: Maximum Chebyshev polynomial degree.
+- `multithreaded::Bool=true`: Whether to use Julia threading during
+  Taylor-Chebyshev matrix assembly.
+
+## Returns
+- `Tuple{CORKPolynomial,Float64}`: The assembled `CORKPolynomial` and the
+  elapsed Taylor-Chebyshev assembly time in seconds.
+"""
+function build_cork_polynomial(solver::SweepBIMSolver, pts, k0::Float64, Δ::Float64, p::Int; multithreaded::Bool=true)::Tuple{CORKPolynomial,Float64}
+    cache = _taylor_cache(solver,pts)
+    if solver.symmetry === nothing
+        B,t = build_B_full(cache,k0,Δ,p; multithreaded=multithreaded)
+        return CORKPolynomial(B,k0,Δ,p,cache.N),t
+    end
+    orbits = _fold_boundary(Float64,pts.xy,solver.symmetry,solver.character)
+    N = fundamental_size(orbits)
+    B,t = build_B_reduced(cache,orbits,k0,Δ,p; multithreaded=multithreaded)
+    return CORKPolynomial(B,k0,Δ,p,N),t
+end
