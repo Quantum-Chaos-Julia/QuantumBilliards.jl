@@ -711,7 +711,7 @@ multiplicity.
 - `imag_search_tol::Float64`: Loose imaginary strip used during discovery.
 
 ## Returns
-- `Vector{RitzCluster}`: Sorted converged clusters in the guarded interval.
+- `Vector{RitzCluster}`: Sorted discovered clusters in the guarded interval, including clusters with zero converged multiplicity.
 """
 function ritz_clusters(S::CORKState, k0::Float64, Δpoly::Float64, m::Int; edge_tol::Float64=1e-8, res_tol::Float64=1e-8, cluster_tol::Float64=1e-6, imag_search_tol::Float64=1e-4)::Vector{RitzCluster}
     S.n == m || error("State dimension $(S.n) != requested m=$m")
@@ -744,8 +744,9 @@ function ritz_clusters(S::CORKState, k0::Float64, Δpoly::Float64, m::Int; edge_
         @blas_multi_then_1 MAX_BLAS_THREADS begin
             σ = sort(svdvals(Rn))
         end
-        mult = count(<=(res_tol), σ); mult == 0 && continue
-        push!(out, RitzCluster(kc, mult, length(g), σ[mult], spread))
+        mult = count(<=(res_tol), σ); 
+        ρ = mult > 0 ? σ[mult] : minimum(σ)
+        push!(out, RitzCluster(kc, mult, length(g), ρ, spread))
     end
     sort!(out, by = x -> real(x.k))
     return out
@@ -796,7 +797,7 @@ compared with the preceding Krylov dimension.
   clusters, all guarded clusters, requested edge roots, edge acceptance flags,
   and final Krylov dimension.
 """
-function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ::Float64, Δpoly::Float64, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Float64=1e-7, edge_tol::Float64=1e-8, res_tol::Float64=1e-8, stable_tol::Float64=1e-8, cluster_tol::Float64=1e-6, seed::Int=123, imag_search_tol::Float64=1e-4, verbose::Bool=false)    mstart % b == 0 || error("mstart must be divisible by block size")
+function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ::Float64, Δpoly::Float64, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Float64=1e-7, edge_tol::Float64=1e-8, res_tol::Float64=1e-8, stable_tol::Float64=1e-8, cluster_tol::Float64=1e-6, seed::Int=123, imag_search_tol::Float64=1e-4, verbose::Bool=false)
     mstart % b == 0 || error("mstart must be divisible by block size")
     S = init_cork(B, p, N; b = b, maxdim = maxdim, seed = seed)
     kmin = k0 - Δ; kmax = k0 + Δ; prev = Tuple{Float64,Float64,Float64}[]; nstable = 0; m = mstart; t0 = time_ns()
@@ -805,19 +806,19 @@ function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ
         extend!(S, B, F, m)
         allclusters = ritz_clusters(S, k0, Δpoly, m; edge_tol = edge_tol, res_tol = res_tol, cluster_tol = cluster_tol, imag_search_tol = imag_search_tol)
         requested = [c for c in allclusters if kmin <= real(c.k) <= kmax]
-        phys = [c for c in requested if abs(imag(c.k)) <= imag_tol && c.residual <= res_tol]
+        phys = [c for c in requested if c.multiplicity > 0 && abs(imag(c.k)) <= imag_tol && c.residual <= res_tol]
         ks = Tuple{Float64,Float64,Float64}[]
         for c in phys, _ = 1:c.multiplicity
             push!(ks, (real(c.k), imag(c.k), c.residual))
         end
         sort!(ks, by = first)
         edges = (isempty(requested) ? nothing : first(requested), isempty(requested) ? nothing : last(requested))
-        edge_good = (edges[1] !== nothing && abs(imag(edges[1].k)) <= imag_tol && edges[1].residual <= res_tol, edges[2] !== nothing && abs(imag(edges[2].k)) <= imag_tol && edges[2].residual <= res_tol)
+        edge_good = (edges[1] !== nothing && edges[1].multiplicity > 0 && abs(imag(edges[1].k)) <= imag_tol && edges[1].residual <= res_tol, edges[2] !== nothing && edges[2].multiplicity > 0 && abs(imag(edges[2].k)) <= imag_tol && edges[2].residual <= res_tol)
         edge_ok = all(edge_good)
         drift = length(prev) == length(ks) && !isempty(ks) ? maximum(abs(complex(ks[i][1], ks[i][2]) - complex(prev[i][1], prev[i][2])) for i = eachindex(ks)) : Inf
         nstable = isfinite(drift) && drift <= stable_tol ? nstable + 1 : 0
         maxmult = isempty(phys) ? 0 : maximum(c.multiplicity for c in phys); maxρ = isempty(phys) ? Inf : maximum(c.residual for c in phys)
-        verbose && @printf("m=%4d rank=%4d loc=%4d states=%4d mult=%2d maxρ=%9.2e drift=%9.2e stable=%d/%d edges=%s applies=%4d time=%7.3f\n", m, S.r, length(phys), length(ks), maxmult, maxρ, drift, nstable, stable_checks, edge_ok ? "PASS" : "FAIL", S.napply, (time_ns() - t0) * 1e-9)
+        verbose && @printf("m=%4d rank=%4d ritz=%4d conv=%4d states=%4d mult=%2d maxρ=%9.2e drift=%9.2e stable=%d/%d edges=%s applies=%4d time=%7.3f\n", m, S.r, length(requested), length(phys), length(ks), maxmult, maxρ, drift, nstable, stable_checks, edge_ok ? "PASS" : "FAIL", S.napply, (time_ns() - t0) * 1e-9)
         last_all = allclusters; last_phys = phys; last_ks = ks; last_edges = edges; last_good = edge_good
         if nstable >= stable_checks && edge_ok
             verbose && println("Requested Ritz spectrum stabilized and both requested edge roots pass.")
@@ -825,7 +826,7 @@ function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ
         end
         prev = ks; m += mstep
     end
-    @warn "Reached maxdim without spectrum stability and converged requested edge roots"
+    verbose && @warn "Reached maxdim without spectrum stability and converged requested edge roots"
     return S, last_ks, last_phys, last_all, last_edges, last_good, maxdim
 end
 
