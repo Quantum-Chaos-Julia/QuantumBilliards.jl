@@ -407,14 +407,14 @@ function compute_spectrum(solver::BeynSolver, billiard::Bi, k1, k2; multithreade
     end
     if !solver.imag_k_check
         ks_win = Vector{Vector{Complex{T}}}(undef, nw); tens_win = Vector{Vector{T}}(undef, nw)
-        @inbounds for i in 1:nw
+        @showprogress for i in 1:nw
             ks_win[i], tens_win[i] = solve(solver, all_pts[i], k0[i], 2R[i]; multithreaded)
         end
         ks = reduce(vcat, ks_win); tens = reduce(vcat, tens_win); control = fill(false, length(ks))
         return _finalize_spectrum(ks, tens, control)
     end
     ks_all = Vector{Vector{Complex{T}}}(undef, nw); X_all = Vector{Matrix{Complex{T}}}(undef, nw)
-    @inbounds for i in 1:nw
+    @showprogress for i in 1:nw
         ks_all[i], X_all[i] = _beyn_projected_solve(solver, all_pts[i], k0[i], 2R[i]; multithreaded)
     end
     idx_keep, residuals_all = _beyn_imag_k_check(solver, ks_all, X_all, all_pts; multithreaded)
@@ -621,24 +621,24 @@ once.
 - `SpectralData`: Complete sorted CORK spectrum over `[k1,k2]`. `ten` contains the CORK residual associated with each retained root and `control=false` because no overlap merge is required.
 """
 function compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; multithreaded::Bool=true) where {Bi<:AbsBilliard}
-    T=_bim_numeric_type(solver); k1T=T(k1); k2T=T(k2); k1T<k2T || throw(ArgumentError("require k1<k2"))
-    fundamental=solver.kernel.symmetry!==nothing
-    intervals=plan_weyl_windows(billiard,k1T,k2T; m=solver.nlevels,Rmax=solver.Rmax,fundamental=fundamental)
+    T = _bim_numeric_type(solver); k1T=T(k1); k2T=T(k2); k1T<k2T || throw(ArgumentError("require k1<k2"))
+    fundamental = solver.kernel.symmetry !== nothing
+    intervals= plan_weyl_windows(billiard, k1T, k2T; m=solver.nlevels,Rmax=solver.Rmax,fundamental=fundamental)
     isempty(intervals) && throw(ArgumentError("Spectrum interval [$k1,$k2] contains no Weyl windows"))
     nw=length(intervals); ks_all=Complex{T}[]; tens_all=T[]
-    @inbounds for i=1:nw
-        a,b=intervals[i]; k0=(a+b)/2; dk=b-a
-        ks,tens=solve_spectrum(solver,billiard,k0,dk; multithreaded)
-        last_window=i==nw
+    @showprogress for i=1:nw
+        a, b = intervals[i]; k0 = (a + b) / 2; dk = b - a
+        ks, tens=solve_spectrum(solver, billiard, k0, dk; multithreaded)
+        last_window= i==nw
         @inbounds for j in eachindex(ks)
-            x=real(ks[j])
-            owned=last_window ? a<=x<=b : a<=x<b
+            x = real(ks[j])
+            owned = last_window ? a<=x<=b : a<=x<b
             owned || continue
             push!(ks_all,ks[j]); push!(tens_all,tens[j])
         end
     end
-    control=fill(false,length(ks_all))
-    return _finalize_spectrum(ks_all,tens_all,control)
+    control = fill(false, length(ks_all))
+    return _finalize_spectrum(ks_all, tens_all, control)
 end
 
 """
@@ -668,7 +668,7 @@ approximately `solver.nlevels` states per CORK window subject to
 - `SpectralData`: Complete sorted CORK spectrum over the corresponding Weyl-law wavenumber interval.
 """
 function compute_spectrum(solver::CORKSolver, billiard::Bi, N1::Int, N2::Int; kwargs...) where {Bi<:AbsBilliard}
-    fundamental=solver.kernel.symmetry!==nothing
-    k1,k2=k_range_for_states(billiard,N1,N2; fundamental)
-    return compute_spectrum(solver,billiard,k1,k2; kwargs...)
+    fundamental = solver.kernel.symmetry !== nothing
+    k1, k2 = k_range_for_states(billiard, N1, N2; fundamental)
+    return compute_spectrum(solver, billiard, k1, k2; kwargs...)
 end

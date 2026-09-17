@@ -1,7 +1,7 @@
 name = "QuantumBilliards"
 uuid = "7c03dc60-f10f-4d5b-b776-32bcaab55394"
 version = "1.0.0-DEV"
-authors = ["Crt Lozej"]
+authors = ["Matic Orel, Crt Lozej"]
 
 [deps]
 Bessels = "0e736298-9ec6-45e8-9647-e4fc86a2fe38"
@@ -25,6 +25,7 @@ StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 TimerOutputs = "a759f4b9-e2f1-59dc-863e-4aeb61b1ea8f"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+ProgressMeter = "92933f4c-e287-5a05-a399-4b506db050ca"
 
 [compat]
 Bessels = "0.2.8 - 3"

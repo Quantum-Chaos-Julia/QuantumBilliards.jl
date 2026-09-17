@@ -11,6 +11,7 @@ using Random, Distributions
 using BilliardGeometry
 using KrylovKit
 using Printf
+using ProgressMeter
 
 #abstract types
 include("abstracttypes.jl")
