@@ -789,15 +789,15 @@ compared with the preceding Krylov dimension.
 - `cluster_tol::Float64`: Ritz clustering distance.
 - `seed::Int`: Random initialization seed.
 - `imag_search_tol::Float64`: Loose imaginary discovery strip.
+- `verbose::Bool=false`: Whether to enable verbose output during the CORK solve.
 
 ## Returns
 - `Tuple`: Final state, multiplicity-expanded spectrum, accepted requested
   clusters, all guarded clusters, requested edge roots, edge acceptance flags,
   and final Krylov dimension.
 """
-function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ::Float64, Δpoly::Float64, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Float64=1e-7, edge_tol::Float64=1e-8, res_tol::Float64=1e-8, stable_tol::Float64=1e-8, cluster_tol::Float64=1e-6, seed::Int=123, imag_search_tol::Float64=1e-4)
+function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ::Float64, Δpoly::Float64, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Float64=1e-7, edge_tol::Float64=1e-8, res_tol::Float64=1e-8, stable_tol::Float64=1e-8, cluster_tol::Float64=1e-6, seed::Int=123, imag_search_tol::Float64=1e-4, verbose::Bool=false)    mstart % b == 0 || error("mstart must be divisible by block size")
     mstart % b == 0 || error("mstart must be divisible by block size")
-    mstep % b == 0 || error("mstep must be divisible by block size")
     S = init_cork(B, p, N; b = b, maxdim = maxdim, seed = seed)
     kmin = k0 - Δ; kmax = k0 + Δ; prev = Tuple{Float64,Float64,Float64}[]; nstable = 0; m = mstart; t0 = time_ns()
     last_all = RitzCluster[]; last_phys = RitzCluster[]; last_ks = Tuple{Float64,Float64,Float64}[]; last_edges = (nothing, nothing); last_good = (false, false)
@@ -817,10 +817,10 @@ function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ
         drift = length(prev) == length(ks) && !isempty(ks) ? maximum(abs(complex(ks[i][1], ks[i][2]) - complex(prev[i][1], prev[i][2])) for i = eachindex(ks)) : Inf
         nstable = isfinite(drift) && drift <= stable_tol ? nstable + 1 : 0
         maxmult = isempty(phys) ? 0 : maximum(c.multiplicity for c in phys); maxρ = isempty(phys) ? Inf : maximum(c.residual for c in phys)
-        @timeit_debug "CORK adaptive diagnostics" @printf("m=%4d rank=%4d loc=%4d states=%4d mult=%2d maxρ=%9.2e drift=%9.2e stable=%d/%d edges=%s applies=%4d time=%7.3f\n", m, S.r, length(phys), length(ks), maxmult, maxρ, drift, nstable, stable_checks, edge_ok ? "PASS" : "FAIL", S.napply, (time_ns() - t0) * 1e-9)
+        verbose && @printf("m=%4d rank=%4d loc=%4d states=%4d mult=%2d maxρ=%9.2e drift=%9.2e stable=%d/%d edges=%s applies=%4d time=%7.3f\n", m, S.r, length(phys), length(ks), maxmult, maxρ, drift, nstable, stable_checks, edge_ok ? "PASS" : "FAIL", S.napply, (time_ns() - t0) * 1e-9)
         last_all = allclusters; last_phys = phys; last_ks = ks; last_edges = edges; last_good = edge_good
         if nstable >= stable_checks && edge_ok
-            @timeit_debug "CORK adaptive diagnostics" println("Requested Ritz spectrum stabilized and both requested edge roots pass.")
+            verbose && println("Requested Ritz spectrum stabilized and both requested edge roots pass.")
             return S, ks, phys, allclusters, edges, edge_good, m
         end
         prev = ks; m += mstep
@@ -857,6 +857,7 @@ Configuration for the analytic Chebyshev-CORK BIM eigensolver.
 - `imag_search_tol::T`: Loose imaginary discovery strip.
 - `seed::Int`: Random initialization seed.
 - `validate::Bool`: Whether to validate the Chebyshev polynomial.
+- `verbose::Bool`: Whether to enable verbose output during the CORK solve.
 
 ## Returns
 - `CORKSolver`: Configured solver.
@@ -880,10 +881,11 @@ struct CORKSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
     imag_search_tol::T
     seed::Int
     validate::Bool
+    verbose::Bool
 end
 
 """
-    CORKSolver(kernel::K; p::Int=14, guard::Real=0.15, nlevels::Int=150, Rmax::Real=0.8, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Real=1e-7, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, cluster_tol::Real=1e-6, imag_search_tol::Real=1e-4, seed::Int=123, validate::Bool=true) where {K<:SweepBIMSolver} -> CORKSolver
+    CORKSolver(kernel::K; p::Int=14, guard::Real=0.15, nlevels::Int=150, Rmax::Real=0.8, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Real=1e-7, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, cluster_tol::Real=1e-6, imag_search_tol::Real=1e-4, seed::Int=123, validate::Bool=true, verbose::Bool=false) where {K<:SweepBIMSolver} -> CORKSolver
 
 Construct a CORK solver for a BIM Fredholm nonlinear eigenvalue problem.
 
@@ -914,17 +916,17 @@ Ritz-discovery range outside the requested interval.
 - `imag_search_tol::Real=1e-4`: Loose imaginary discovery strip.
 - `seed::Int=123`: Random initialization seed.
 - `validate::Bool=true`: Validate the Chebyshev polynomial before CORK.
+- `verbose::Bool=false`: Whether to enable verbose output during the CORK solve.
 
 ## Returns
 - `CORKSolver`: Configured CORK solver.
 """
-function CORKSolver(kernel::K; p::Int=14, guard::Real=0.15, nlevels::Int=150, Rmax::Real=0.8, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Real=1e-7, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, cluster_tol::Real=1e-6, imag_search_tol::Real=1e-4, seed::Int=123, validate::Bool=true) where {K<:SweepBIMSolver}
+function CORKSolver(kernel::K; p::Int=14, guard::Real=0.15, nlevels::Int=150, Rmax::Real=0.8, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Real=1e-7, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, cluster_tol::Real=1e-6, imag_search_tol::Real=1e-4, seed::Int=123, validate::Bool=true, verbose::Bool=false) where {K<:SweepBIMSolver}
     T = _bim_numeric_type(kernel)
     T === Float64 || throw(ArgumentError("CORKSolver currently requires a Float64 BIM kernel"))
     p >= 2 || throw(ArgumentError("p must be at least 2; received p=$p"))
     guard >= 0 || throw(ArgumentError("guard must be nonnegative; received guard=$guard"))
     nlevels > 0 || throw(ArgumentError("nlevels must be positive; received nlevels=$nlevels"))
-    Rmax > 0 || throw(ArgumentError("Rmax must be positive; received Rmax=$Rmax"))
     b > 0 || throw(ArgumentError("b must be positive; received b=$b"))
     mstart > 0 || throw(ArgumentError("mstart must be positive; received mstart=$mstart"))
     mstep > 0 || throw(ArgumentError("mstep must be positive; received mstep=$mstep"))
@@ -933,7 +935,7 @@ function CORKSolver(kernel::K; p::Int=14, guard::Real=0.15, nlevels::Int=150, Rm
     mstep % b == 0 || throw(ArgumentError("mstep must be divisible by b"))
     maxdim % b == 0 || throw(ArgumentError("maxdim must be divisible by b"))
     stable_checks > 0 || throw(ArgumentError("stable_checks must be positive"))
-    return CORKSolver{T,K}(kernel, p, T(guard), nlevels, T(Rmax), b, mstart, mstep, maxdim, stable_checks, T(imag_tol), T(edge_tol), T(res_tol), T(stable_tol), T(cluster_tol), T(imag_search_tol), seed, validate)
+    return CORKSolver{T,K}(kernel, p, T(guard), nlevels, T(Rmax), b, mstart, mstep, maxdim, stable_checks, T(imag_tol), T(edge_tol), T(res_tol), T(stable_tol), T(cluster_tol), T(imag_search_tol), seed, validate, verbose)
 end
 
 _bim_numeric_type(::CORKSolver{T}) where {T} = T
@@ -953,6 +955,9 @@ analytic polynomial on `Δpoly=(1+guard)dk/2`, optionally validate it, factorize
 and its leftmost and rightmost discovered roots satisfy the strict physical
 tolerances.
 
+Diagnostic output is controlled exclusively by `solver.verbose`. Polynomial
+validation is controlled independently by `solver.validate`.
+
 ## Arguments
 - `solver::CORKSolver`: Configured CORK eigensolver.
 - `pts`: Boundary discretization at the expansion center.
@@ -971,23 +976,11 @@ function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=t
     Δpoly = Δ * (1 + solver.guard)
     k0f > Δpoly || throw(ArgumentError("CORK polynomial interval reaches k=0"))
     kmin = k0f - Δ; kmax = k0f + Δ; kpmin = k0f - Δpoly; kpmax = k0f + Δpoly
-    @timeit_debug "CORK setup diagnostics" begin
-        println("="^112)
-        println("$(_cork_kernel_name(solver.kernel)) + ANALYTIC CHEBYSHEV + MULTIPLICITY-AWARE BLOCK CORK")
-        println("="^112)
-        @printf("k0                   = %.8f\nrequested Δ          = %.8f\nguard                = %.3f\n", k0f, Δ, solver.guard)
-        @printf("polynomial Δ         = %.8f\nrequested interval   = [%.8f, %.8f]\n", Δpoly, kmin, kmax)
-        @printf("polynomial interval  = [%.8f, %.8f]\ndegree               = %d\n", kpmin, kpmax, solver.p)
-        @printf("imag_tol in k units  = %.3e\nimag search strip    = %.3e\nfull boundary points = %d\n", solver.imag_tol, solver.imag_search_tol, length(pts.xy))
-        println("kernel               = ", typeof(solver.kernel))
-        println("symmetry             = ", solver.kernel.symmetry)
-        println("character            = ", solver.kernel.character)
-    end
     P = nothing; tbuild = 0.0
     @timeit_debug "CORK polynomial construction" begin
         P, tbuild = build_cork_polynomial(solver.kernel, pts, k0f, Δpoly, solver.p; multithreaded = multithreaded)
     end
-    @timeit_debug "CORK polynomial diagnostics" begin
+    if solver.verbose
         @printf("CORK matrix size     = %d\nB build              = %.6f s\nB memory             = %.3f MiB\n", P.N, tbuild, Base.summarysize(P.B) / 2^20)
         solver.kernel.symmetry !== nothing && @printf("dimension reduction  = %.3fx\n", length(pts.xy) / P.N)
     end
@@ -998,9 +991,9 @@ function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=t
         F = lu(A0)
     end
     tfact = (time_ns() - t) * 1e-9
-    @timeit_debug "CORK factorization diagnostics" @printf("\nP(0) assembly        = %.6f s\nLU                   = %.6f s\n\n", ta0, tfact)
-    S, ks, clusters, allclusters, edge_roots, edge_good, mfinal = adaptive_cork(P.B, F, solver.p, P.N; k0 = k0f, Δ = Δ, Δpoly = Δpoly, b = solver.b, mstart = solver.mstart, mstep = solver.mstep, maxdim = solver.maxdim, stable_checks = solver.stable_checks, imag_tol = solver.imag_tol, edge_tol = solver.edge_tol, res_tol = solver.res_tol, stable_tol = solver.stable_tol, cluster_tol = solver.cluster_tol, seed = solver.seed, imag_search_tol = solver.imag_search_tol)
-    @timeit_debug "CORK final diagnostics" begin
+    solver.verbose && @printf("\nP(0) assembly        = %.6f s\nLU                   = %.6f s\n\n", ta0, tfact)
+    S, ks, clusters, allclusters, edge_roots, edge_good, mfinal = adaptive_cork(P.B, F, solver.p, P.N; k0 = k0f, Δ = Δ, Δpoly = Δpoly, b = solver.b, mstart = solver.mstart, mstep = solver.mstep, maxdim = solver.maxdim, stable_checks = solver.stable_checks, imag_tol = solver.imag_tol, edge_tol = solver.edge_tol, res_tol = solver.res_tol, stable_tol = solver.stable_tol, cluster_tol = solver.cluster_tol, seed = solver.seed, imag_search_tol = solver.imag_search_tol, verbose = solver.verbose)
+    if solver.verbose
         println("\n", "="^112, "\nFINAL\n", "="^112)
         @printf("Krylov dimension = %d\nphysical rank     = %d\noperator applies  = %d\n", mfinal, S.r, S.napply)
         @printf("root locations    = %d\nstates w/ mult.   = %d\n", length(clusters), length(ks))
