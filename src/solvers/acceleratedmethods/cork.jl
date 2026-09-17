@@ -453,9 +453,8 @@ function block_apply!(Z::Array{ComplexF64,3}, U::Matrix{ComplexF64}, W::Matrix{C
     Hphys .+= H2
 
     @blas_multi_then_1 MAX_BLAS_THREADS FY = svd(Y; full=false)
-    σ = FY.S; σ1 = isempty(σ) ? 0.0 : σ[1]
-    bp = count(>(max(σ1*1e-12,1e-14)),σ); rn = r+bp
-    rn <= size(U,2) || error("Physical rank $rn exceeds rmax=$(size(U,2))")
+    σ=FY.S; σ1=isempty(σ) ? 0.0 : σ[1]
+    bp=min(count(>(max(σ1*1e-12,1e-14)),σ),size(U,2)-r); rn=r+bp
 
     Cnew = if bp > 0
         @views U[:,r+1:rn] .= FY.U[:,1:bp]
