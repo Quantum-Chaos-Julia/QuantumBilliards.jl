@@ -10,6 +10,7 @@ using Logging, TimerOutputs
 using Random, Distributions
 using BilliardGeometry
 using KrylovKit
+using Printf
 
 #abstract types
 include("abstracttypes.jl")
