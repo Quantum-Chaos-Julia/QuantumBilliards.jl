@@ -760,7 +760,13 @@ with β = Ca.
   coefficients.
 """
 @inline function taylor_to_cheb!(β::Vector{ComplexF64}, a::Vector{ComplexF64}, C::Matrix{Float64})::Vector{ComplexF64}
-    @blas_multi_then_1 MAX_BLAS_THREADS mul!(β,C,a)
+    n=length(β); fill!(β,0)
+    @inbounds for l=1:n
+        al=a[l]
+        @simd for j=1:n
+            β[j]+=C[j,l]*al
+        end
+    end
     return β
 end
 
