@@ -70,7 +70,7 @@ export DecompositionMethodSolver
 export ParticularSolutionsMethod
 export BoundaryGrading, SmoothPeriodicGrading, CornerGrading, GlobalCornerGrading
 export DoubleLayerPotentialSolver, CombinedFieldIntegralEquationSolver, CompositeBIMSolver
-export ExpandedBIMSolver, BeynSolver, CorkSolver
+export ExpandedBIMSolver, BeynSolver, CORKSolver
 export ChebyshevConfig
 export BoundaryPointsSM, BoundaryPointsDM
 export evaluate_points, construct_matrices, construct_matrices_benchmark
