@@ -231,26 +231,31 @@ function get_A0(B::Matrix{ComplexF64}, N::Int, p::Int)::Matrix{ComplexF64}
 end
 
 """
-    cache_block!(W::Matrix{ComplexF64}, B::Matrix{ComplexF64}, U::Matrix{ComplexF64}, a::Int, b::Int) -> Float64
+    cache_block!(W::Matrix{ComplexF64}, B::Matrix{ComplexF64}, U::Matrix{ComplexF64}, N::Int, p::Int, a::Int, b::Int) -> Float64
 
-Cache all coefficient actions on `U[:,a:b]`. The vertically stacked storage
-gives `W[:,a:b]=B*U[:,a:b]`, simultaneously computing `BⱼU[:,a:b]` for
-every Chebyshev coefficient.
+Cache all Chebyshev coefficient actions on `U[:,a:b]` by evaluating the
+independent products `Wⱼ[:,a:b]=BⱼU[:,a:b]`, `j=0,...,p`, concurrently over
+the vertically stacked coefficient blocks.
 
 ## Arguments
 - `W::Matrix{ComplexF64}`: Vertically stacked coefficient-action cache.
 - `B::Matrix{ComplexF64}`: Vertically stacked Chebyshev coefficients.
 - `U::Matrix{ComplexF64}`: Common physical CORK basis.
+- `N::Int`: Physical Fredholm matrix dimension.
+- `p::Int`: Chebyshev polynomial degree.
 - `a::Int`: First physical basis column to cache.
 - `b::Int`: Last physical basis column to cache.
 
 ## Returns
-- `Float64`: Elapsed multiplication time in seconds.
+- `Float64`: Elapsed coefficient-caching time in seconds.
 """
-@inline function cache_block!(W::Matrix{ComplexF64}, B::Matrix{ComplexF64}, U::Matrix{ComplexF64}, a::Int, b::Int)::Float64
+@inline function cache_block!(W::Matrix{ComplexF64}, B::Matrix{ComplexF64}, U::Matrix{ComplexF64}, N::Int, p::Int, a::Int, b::Int)::Float64
     a > b && return 0.0
-    t = time_ns()
-    @blas_multi_then_1 MAX_BLAS_THREADS mul!(@view(W[:,a:b]), B, @view(U[:,a:b]))
+    X = @view U[:,a:b]; t = time_ns()
+    @blas_1 Threads.@threads :static for j = 0:p
+        rows = j * N + 1:(j + 1) * N
+        mul!(@view(W[rows,a:b]), @view(B[rows,:]), X)
+    end
     return (time_ns() - t) * 1e-9
 end
 
@@ -441,7 +446,7 @@ function block_apply!(Z::Array{ComplexF64,3}, U::Matrix{ComplexF64}, W::Matrix{C
         bp = 0; rn = r; Cnew = zeros(ComplexF64, 0, b)
     end
     tphys = (time_ns() - t) * 1e-9
-    tcache = bp > 0 ? cache_block!(W, B, U, r + 1, rn) : 0.0
+    tcache = bp > 0 ? cache_block!(W, B, U, N, p, r + 1, rn) : 0.0
     fill!(Z, 0); @views Z[1:r,1:p,:] .+= γ; @views Z[1:r,1,:] .+= Hphys
     bp > 0 && (@views Z[r + 1:rn,1,:] .+= Cnew)
     s = -1.0
@@ -556,7 +561,7 @@ function init_cork(B::Matrix{ComplexF64}, p::Int, N::Int; b::Int=10, maxdim::Int
     Z0f = zeros(ComplexF64, cd, b); pack!(Z0f, Z0, rmax, p, b)
     bn, _ = compact_block_qr!(Z0f, b); bn == b || error("Initial block breakdown")
     unpack!(Z0, Z0f, rmax, p, b); @views G[:,:,1:b] .= Z0; Gf[:,1:b] .= Z0f
-    tc = cache_block!(W, B, U, 1, r)
+    tc = cache_block!(W, B, U, N, p, 1, r)
     return CORKState(U, W, G, Gf, Hb, zeros(ComplexF64, rmax, p, b), zeros(ComplexF64, cd, b), zeros(ComplexF64, rmax, p, b), zeros(ComplexF64, cd, b), zeros(ComplexF64, maxdim + b, b), zeros(ComplexF64, maxdim + b, b), r, b, b, p, N, rmax, maxdim, false, tc, 0.0, 0.0, 0.0, 0.0, 0)
 end
 
