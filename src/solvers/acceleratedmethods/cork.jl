@@ -31,12 +31,6 @@
 # iteration. Projected inverse eigenvalues are mapped back to wavenumbers by
 #
 #                         μ → t=1/μ → k=k₀+Δₚt.
-#
-# Nearby Ritz values are clustered, physical multiplicities are determined
-# from the block-Arnoldi residual, and convergence requires both a stable
-# requested spectrum and converged leftmost and rightmost roots inside the
-# requested interval.
-#
 # ==============================================================================
 # API AND FUNCTION-CALL CHAIN
 # ==============================================================================
@@ -130,20 +124,8 @@
 #                     ├─ edge check            # Test the leftmost and rightmost requested roots
 #                     └─ stability check       # Measure spectral drift from the previous m
 #
-# `adaptive_cork` stops only when:
-#
-#   1. the multiplicity-expanded requested spectrum is stable for
-#      `stable_checks` consecutive Krylov dimensions, and
-#   2. the leftmost and rightmost discovered roots inside the requested
-#      interval satisfy the strict physical tolerances.
-#
-# Nearest-root call:
-#
-# solve_wavenumber(solver,billiard,k0,dk)      # Find the root nearest k₀
-# │
-# ├─ evaluate_points(solver,billiard,k0)      # Build boundary points at k₀
-# ├─ solve(solver,pts,k0,dk)                  # Run the same complete CORK chain
-# └─ findmin(abs.(ks.-k0))                    # Select the nearest accepted root
+# `adaptive_cork` stops only when the leftmost and rightmost discovered roots inside the requested
+#  interval satisfy the strict physical tolerances.
 # ==============================================================================
 
 # Views of the j-th Chebyshev coefficient and cached coefficient action.
@@ -758,8 +740,7 @@ function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ
         end
         prev = ks; m += mstep
     end
-    verbose && @warn "Reached maxdim without spectrum stability and converged requested edge roots"
-    return S,last_ks,last_phys,last_all,last_edges,last_good,maxdim
+    @error "Reached maxdim without spectrum stability and converged requested edge roots"
 end
 
 ################################################################################
