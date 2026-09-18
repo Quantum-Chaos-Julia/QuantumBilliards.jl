@@ -1001,29 +1001,6 @@ function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=t
     tfact = (time_ns() - t) * 1e-9
     solver.verbose && @printf("\nP(0) assembly        = %.6f s\nLU                   = %.6f s\n\n", ta0, tfact)
     S, ks, clusters, allclusters, edge_roots, edge_good, mfinal = adaptive_cork(P.B, F, solver.p, P.N; k0 = k0f, Δ = Δ, Δpoly = Δpoly, b = solver.b, mstart = solver.mstart, mstep = solver.mstep, maxdim = solver.maxdim, stable_checks = solver.stable_checks, imag_tol = solver.imag_tol, edge_tol = solver.edge_tol, res_tol = solver.res_tol, stable_tol = solver.stable_tol, cluster_tol = solver.cluster_tol, seed = solver.seed, imag_search_tol = solver.imag_search_tol, verbose = solver.verbose)
-    if solver.verbose
-        println("\n", "="^112, "\nFINAL\n", "="^112)
-        @printf("Krylov dimension = %d\nphysical rank     = %d\noperator applies  = %d\n", mfinal, S.r, S.napply)
-        @printf("root locations    = %d\nstates w/ mult.   = %d\n", length(clusters), length(ks))
-        @printf("B_j GEMM          = %.6f s\nblock LU          = %.6f s\nChebyshev RHS      = %.6f s\n", S.cache, S.lu, S.rhs)
-        @printf("physical SVD      = %.6f s\ncompact CGS2/QR   = %.6f s\n", S.phys, S.orth)
-        println("\n", "="^112, "\nREQUESTED INTERVAL RITZ CLUSTERS\n", "="^112)
-        println("       Re(k)              Im(k)       mult  Ritz-count    residual       spread")
-        for c in clusters
-            @printf("%18.12f  %+12.3e     %3d       %3d       %.3e     %.3e\n", real(c.k), imag(c.k), c.multiplicity, c.ritz_count, c.residual, c.spread)
-        end
-        println("\n", "="^112, "\nREQUESTED EDGE ROOTS\n", "="^112)
-        names = ("leftmost", "rightmost")
-        for i = 1:2
-            c = edge_roots[i]
-            if c === nothing
-                @printf("%-12s MISSING\n", names[i])
-            else
-                @printf("%-12s k=%16.10f Im=%+10.3e ρ=%10.3e mult=%2d Ritz=%2d %s\n", names[i], real(c.k), imag(c.k), c.residual, c.multiplicity, c.ritz_count, edge_good[i] ? "PASS" : "FAIL")
-            end
-        end
-        @printf("requested interval = [%.10f, %.10f]\nimag_tol           = %.3e\nres_tol            = %.3e\nedge status        = %s\n", kmin, kmax, solver.imag_tol, solver.res_tol, all(edge_good) ? "PASS" : "FAIL")
-    end
     return P, S, ks, clusters, allclusters, edge_roots, edge_good, mfinal
 end
 
