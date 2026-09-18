@@ -282,37 +282,26 @@ function compact_project_cgs2!(Z::Matrix{ComplexF64}, G::Matrix{ComplexF64}, n::
 end
 
 """
-
     compact_block_qr!(Z::Matrix{ComplexF64}, b::Int) -> Tuple{Int,Matrix{ComplexF64}}
 
-Normalize a projected compact residual block and detect block-Arnoldi
-breakdown. After projection against the existing basis, the residual must
-become the next orthonormal block of compact CORK vectors, while its `R`
-factor supplies the subdiagonal block of the projected Hessenberg matrix.
-A QR factorization `Z=QR` therefore serves both purposes. The numerical block
-rank is estimated from `diag(R)` using tol=max(10⁻¹² maxᵢ|Rᵢᵢ|,10⁻¹⁴).
-If fewer than `b` independent directions remain, the detected rank is returned
-so the caller can identify block breakdown; otherwise `Z` is overwritten by
-the first `b` orthonormal columns of `Q`.
+Compute the thin Householder QR factorization `Z₀ = Z*R` of a compact CORK
+block. The input matrix is overwritten by the orthonormal factor `Q`.
 
 ## Arguments
-- `Z::Matrix{ComplexF64}`: Projected compact residual block.
-- `b::Int`: Required block-Arnoldi block size.
+- `Z::Matrix{ComplexF64}`: Compact block, overwritten by the thin orthonormal factor `Q`.
+- `b::Int`: Block size.
 
 ## Returns
-- `Tuple{Int,Matrix{ComplexF64}}`: Detected block rank and leading `b×b`
-  Hessenberg factor `R`.
+- `Int`: Numerical block rank.
+- `Matrix{ComplexF64}`: Upper-triangular `b × b` factor `R`.
 """
 function compact_block_qr!(Z::Matrix{ComplexF64}, b::Int)::Tuple{Int,Matrix{ComplexF64}}
-    F = nothing
-    @blas_multi_then_1 MAX_BLAS_THREADS begin
-        F = qr(Z)
-    end
-    R = Matrix(F.R)[1:b,1:b]; d = abs.(diag(R))
-    bn = count(>(max(maximum(d) * 1e-12, 1e-14)), d)
-    bn == b || return bn, R
-    @blas_multi_then_1 MAX_BLAS_THREADS copyto!(Z, F.Q * Matrix{ComplexF64}(I, size(Z, 1), b))
-    return b, R
+    F = qr!(Z)
+    R = Matrix(F.R)[1:b,1:b]
+    Q = Matrix(F.Q[:,1:b])
+    copyto!(Z, Q)
+    d = abs.(diag(R)); tol = maximum(size(Z)) * eps(Float64) * maximum(d)
+    return count(>(tol), d), R
 end
 
 """
