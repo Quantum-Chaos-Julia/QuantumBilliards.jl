@@ -417,6 +417,7 @@ function block_apply!(Z::Array{ComplexF64,3}, U::Matrix{ComplexF64}, W::Matrix{C
     copyto!(Y, RHS); t = time_ns()
     @blas_multi_then_1 MAX_BLAS_THREADS ldiv!(F, Y)
     tlu = (time_ns() - t) * 1e-9; t = time_ns()
+    ynorm0 = norm(Y)
     @blas_multi_then_1 MAX_BLAS_THREADS begin
         mul!(Hphys, adjoint(@view(U[:,1:r])), Y)
         mul!(Y, @view(U[:,1:r]), Hphys, -1 + 0im, 1 + 0im)
@@ -427,6 +428,16 @@ function block_apply!(Z::Array{ComplexF64,3}, U::Matrix{ComplexF64}, W::Matrix{C
         mul!(Y, @view(U[:,1:r]), H2, -1 + 0im, 1 + 0im)
     end
     Hphys .+= H2
+    ynorm = norm(Y)
+    GU = Matrix{ComplexF64}(undef, r, r); leakmat = Matrix{ComplexF64}(undef, r, b)
+    @blas_multi_then_1 MAX_BLAS_THREADS begin
+        mul!(GU, adjoint(@view(U[:,1:r])), @view(U[:,1:r]))
+        mul!(leakmat, adjoint(@view(U[:,1:r])), Y)
+    end
+    @inbounds for i = 1:r
+        GU[i,i] -= 1
+    end
+    orthU = opnorm(GU); leak = norm(leakmat) / max(ynorm, eps(Float64))
     remaining = size(U, 2) - r
     if remaining > 0
         FY = nothing
@@ -435,7 +446,7 @@ function block_apply!(Z::Array{ComplexF64,3}, U::Matrix{ComplexF64}, W::Matrix{C
         end
         σ = FY.S; σ1 = isempty(σ) ? 0.0 : σ[1]; tol = max(σ1 * 1e-12, 1e-14)
         bp = min(count(>(tol), σ), remaining); rn = r + bp
-        @printf("physical SVD: r=%4d -> %4d  bp=%2d/%2d  tol=%.3e  σ =", r, rn, bp, b, tol)
+        @printf("physical: r=%4d -> %4d bp=%2d/%2d ||Y0||=%.3e ||Y⊥||=%.3e ratio=%.3e orthU=%.3e leak=%.3e tol=%.3e σ =", r, rn, bp, b, ynorm0, ynorm, ynorm / max(ynorm0, eps(Float64)), orthU, leak, tol)
         for q = 1:length(σ)
             @printf(" %.3e", σ[q])
         end
@@ -448,7 +459,7 @@ function block_apply!(Z::Array{ComplexF64,3}, U::Matrix{ComplexF64}, W::Matrix{C
         end
     else
         bp = 0; rn = r; Cnew = zeros(ComplexF64, 0, b)
-        @printf("physical SVD: r=%4d -> %4d  bp=%2d/%2d  physical basis full\n", r, rn, bp, b)
+        @printf("physical: r=%4d -> %4d bp=%2d/%2d ||Y0||=%.3e ||Y⊥||=%.3e ratio=%.3e orthU=%.3e leak=%.3e physical basis full\n", r, rn, bp, b, ynorm0, ynorm, ynorm / max(ynorm0, eps(Float64)), orthU, leak)
     end
     tphys = (time_ns() - t) * 1e-9
     tcache = bp > 0 ? cache_block!(W, B, U, r + 1, rn) : 0.0
