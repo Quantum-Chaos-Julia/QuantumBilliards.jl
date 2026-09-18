@@ -428,29 +428,15 @@ function block_apply!(Z::Array{ComplexF64,3}, U::Matrix{ComplexF64}, W::Matrix{C
         mul!(Y, @view(U[:,1:r]), H2, -1 + 0im, 1 + 0im)
     end
     Hphys .+= H2
-    ynorm = norm(Y)
-    GU = Matrix{ComplexF64}(undef, r, r); leakmat = Matrix{ComplexF64}(undef, r, b)
-    @blas_multi_then_1 MAX_BLAS_THREADS begin
-        mul!(GU, adjoint(@view(U[:,1:r])), @view(U[:,1:r]))
-        mul!(leakmat, adjoint(@view(U[:,1:r])), Y)
-    end
-    @inbounds for i = 1:r
-        GU[i,i] -= 1
-    end
-    orthU = opnorm(GU); leak = norm(leakmat) / max(ynorm, eps(Float64))
+    ynorm = norm(Y); saturated = ynorm <= 1000eps(Float64) * max(ynorm0, 1.0)
     remaining = size(U, 2) - r
-    if remaining > 0
+    if remaining > 0 && !saturated
         FY = nothing
         @blas_multi_then_1 MAX_BLAS_THREADS begin
             FY = svd(Y; full = false)
         end
-        σ = FY.S; σ1 = isempty(σ) ? 0.0 : σ[1]; tol = max(σ1 * 1e-12, 1e-14)
-        bp = min(count(>(tol), σ), remaining); rn = r + bp
-        @printf("physical: r=%4d -> %4d bp=%2d/%2d ||Y0||=%.3e ||Y⊥||=%.3e ratio=%.3e orthU=%.3e leak=%.3e tol=%.3e σ =", r, rn, bp, b, ynorm0, ynorm, ynorm / max(ynorm0, eps(Float64)), orthU, leak, tol)
-        for q = 1:length(σ)
-            @printf(" %.3e", σ[q])
-        end
-        println()
+        σ = FY.S; σ1 = isempty(σ) ? 0.0 : σ[1]
+        bp = min(count(>(max(σ1 * 1e-12, 1e-14)), σ), remaining); rn = r + bp
         if bp > 0
             @views U[:,r + 1:rn] .= FY.U[:,1:bp]
             Cnew = Diagonal(σ[1:bp]) * FY.Vt[1:bp,:]
@@ -459,7 +445,6 @@ function block_apply!(Z::Array{ComplexF64,3}, U::Matrix{ComplexF64}, W::Matrix{C
         end
     else
         bp = 0; rn = r; Cnew = zeros(ComplexF64, 0, b)
-        @printf("physical: r=%4d -> %4d bp=%2d/%2d ||Y0||=%.3e ||Y⊥||=%.3e ratio=%.3e orthU=%.3e leak=%.3e physical basis full\n", r, rn, bp, b, ynorm0, ynorm, ynorm / max(ynorm0, eps(Float64)), orthU, leak)
     end
     tphys = (time_ns() - t) * 1e-9
     tcache = bp > 0 ? cache_block!(W, B, U, r + 1, rn) : 0.0
