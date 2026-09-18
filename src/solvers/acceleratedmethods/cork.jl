@@ -631,16 +631,19 @@ end
 ################################################################################
 
 """
-    ritz_roots(S::CORKState, k0::Float64, Δpoly::Float64, m::Int; edge_tol::Float64=1e-8, imag_search_tol::Float64=1e-4) -> Vector{Tuple{Float64,Float64,Float64}}
+    ritz_roots(S::CORKState, k0::Float64, Δpoly::Float64, m::Int; edge_tol::Float64=1e-8, imag_search_tol::Float64=1e-4) -> Tuple{Vector{Tuple{Float64,Float64,Float64}},Matrix{ComplexF64}}
 
-Extract individual Ritz roots from the projected inverse linearization.
-Every projected eigenvalue is mapped independently by
-`μ→t=1/μ→k=k₀+Δpoly*t`; nearby Ritz values are never merged, averaged, or
-interpreted as physical multiplicities.
+Extract individual Ritz roots and their projected right eigenvectors from the
+projected inverse linearization. Every projected eigenvalue is mapped
+independently by `μ→t=1/μ→k=k₀+Δpoly*t`; nearby Ritz values are never merged,
+averaged, or interpreted as physical multiplicities.
 
 For a projected right eigenpair `Hv=μv`, the block-Arnoldi residual estimate is
 
     ρ=‖Htail*v‖/max(1,|μ|).
+
+The returned Ritz-vector columns remain in exactly the same order as the
+returned roots.
 
 ## Arguments
 - `S::CORKState`: Persistent CORK state at dimension `m`.
@@ -651,26 +654,55 @@ For a projected right eigenpair `Hv=μv`, the block-Arnoldi residual estimate is
 - `imag_search_tol::Float64`: Loose imaginary strip used during discovery.
 
 ## Returns
-- `Vector{Tuple{Float64,Float64,Float64}}`: Individual Ritz roots as `(Re(k),Im(k),ρ)`, sorted by real and imaginary parts.
+- `Vector{Tuple{Float64,Float64,Float64}}`: Individual Ritz roots as `(Re(k),Im(k),ρ)`.
+- `Matrix{ComplexF64}`: Corresponding projected right Ritz vectors.
 """
-function ritz_roots(S::CORKState, k0::Float64, Δpoly::Float64, m::Int; edge_tol::Float64=1e-8, imag_search_tol::Float64=1e-4)::Vector{Tuple{Float64,Float64,Float64}}
+function ritz_roots(S::CORKState, k0::Float64, Δpoly::Float64, m::Int; edge_tol::Float64=1e-8, imag_search_tol::Float64=1e-4)::Tuple{Vector{Tuple{Float64,Float64,Float64}},Matrix{ComplexF64}}
     S.n == m || error("State dimension $(S.n) != requested m=$m")
     S.pending || error("Arnoldi tail missing")
     H = Matrix(@view S.Hb[1:m,1:m]); E = nothing
     @blas_multi_then_1 MAX_BLAS_THREADS begin
         E = eigen(H)
     end
-    tail = @view S.Hb[m + 1:m + S.b,1:m]; out = Tuple{Float64,Float64,Float64}[]
+    tail = @view S.Hb[m + 1:m + S.b,1:m]; roots = Tuple{Float64,Float64,Float64}[]; inds = Int[]
     for j = eachindex(E.values)
         μ = E.values[j]; abs(μ) > 1e-14 || continue
         t = inv(μ); k = ComplexF64(k0 + Δpoly*t)
         -1 - edge_tol <= real(t) <= 1 + edge_tol || continue
         abs(imag(k)) <= imag_search_tol || continue
         ρ = norm(tail*@view(E.vectors[:,j]))/max(1.0,abs(μ))
-        push!(out,(real(k),imag(k),ρ))
+        push!(roots,(real(k),imag(k),ρ)); push!(inds,j)
     end
-    sort!(out,by=x -> (x[1],x[2]))
-    return out
+    perm = sortperm(roots,by=x -> (x[1],x[2]))
+    return roots[perm],Matrix{ComplexF64}(E.vectors[:,inds[perm]])
+end
+
+"""
+    reconstruct_cork_eigenvectors(S::CORKState, V::Matrix{ComplexF64}, m::Int) -> Matrix{ComplexF64}
+
+Reconstruct Fredholm smallest singular vectors u : A(v)u(v) = 0 from projected CORK Ritz vectors.
+
+## Arguments
+- `S::CORKState`: Final persistent CORK state.
+- `V::Matrix{ComplexF64}`: Projected Ritz vectors, one column per accepted root.
+- `m::Int`: Final compact Krylov dimension.
+
+## Returns
+- `Matrix{ComplexF64}`: Normalized Fredholm smallest singular vectors, with column `j` corresponding to Ritz-vector column `j`.
+"""
+function reconstruct_cork_eigenvectors(S::CORKState, V::Matrix{ComplexF64}, m::Int)::Matrix{ComplexF64}
+    size(V,1) == m || throw(DimensionMismatch("Ritz vectors have $(size(V,1)) rows but m=$m"))
+    q = size(V,2); q == 0 && return zeros(ComplexF64,S.N,0)
+    G0 = @view S.G[1:S.r,1,1:m]; U = @view S.U[:,1:S.r]
+    C = zeros(ComplexF64,S.r,q); Ψ = zeros(ComplexF64,S.N,q)
+    @blas_multi_then_1 MAX_BLAS_THREADS begin
+        mul!(C,G0,V); mul!(Ψ,U,C)
+    end
+    @inbounds for j = 1:q
+        nrm = norm(@view Ψ[:,j]); nrm > 0 || error("Zero reconstructed CORK singular vector for column $j")
+        @views Ψ[:,j] ./= nrm
+    end
+    return Ψ
 end
 
 ################################################################################
@@ -678,7 +710,7 @@ end
 ################################################################################
 
 """
-    adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ::Float64, Δpoly::Float64, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Float64=1e-7, edge_tol::Float64=1e-8, res_tol::Float64=1e-8, stable_tol::Float64=1e-8, seed::Int=123, imag_search_tol::Float64=1e-4, verbose::Bool=false)
+    adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ::Float64, Δpoly::Float64, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Float64=1e-7, edge_tol::Float64=1e-8, res_tol::Float64=1e-8, stable_tol::Float64=1e-8, seed::Int=123, imag_search_tol::Float64=1e-4, eigenvectors::Bool=false, verbose::Bool=false)
 
 Grow one persistent CORK factorization until the individually retained Ritz
 spectrum in `[k₀-Δ,k₀+Δ]` is stable for `stable_checks` consecutive Krylov
@@ -687,7 +719,9 @@ physical tolerances.
 
 Every projected Ritz eigenvalue is treated independently. Nearby Ritz values
 are never merged, averaged, deduplicated, or expanded according to an inferred
-multiplicity.
+multiplicity. If `eigenvectors=true`, physical Fredholm eigenvectors are
+reconstructed once from the final accepted projected Ritz vectors after
+convergence.
 
 ## Arguments
 - `B::Matrix{ComplexF64}`: Vertically stacked Chebyshev coefficients.
@@ -708,24 +742,25 @@ multiplicity.
 - `stable_tol::Float64`: Maximum accepted root drift.
 - `seed::Int`: Random initialization seed.
 - `imag_search_tol::Float64`: Loose imaginary discovery strip.
+- `eigenvectors::Bool`: Whether to reconstruct final physical Fredholm eigenvectors.
 - `verbose::Bool`: Whether to enable verbose CORK diagnostics.
 
 ## Returns
-- `Tuple`: Final state, accepted individual spectrum, all requested Ritz roots,
-  all guarded Ritz roots, requested edge roots, edge acceptance flags, and
-  final Krylov dimension.
+- `Tuple`: Final state, accepted individual spectrum, optional physical
+  eigenvector matrix, all requested Ritz roots, all guarded Ritz roots,
+  requested edge roots, edge acceptance flags, and final Krylov dimension.
 """
-function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ::Float64, Δpoly::Float64, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Float64=1e-7, edge_tol::Float64=1e-8, res_tol::Float64=1e-8, stable_tol::Float64=1e-8, seed::Int=123, imag_search_tol::Float64=1e-4, verbose::Bool=false)
+function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ::Float64, Δpoly::Float64, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Float64=1e-7, edge_tol::Float64=1e-8, res_tol::Float64=1e-8, stable_tol::Float64=1e-8, seed::Int=123, imag_search_tol::Float64=1e-4, eigenvectors::Bool=false, verbose::Bool=false)
     mstart % b == 0 || error("mstart must be divisible by block size")
     S = init_cork(B,p,N;b=b,maxdim=maxdim,seed=seed)
     kmin = k0 - Δ; kmax = k0 + Δ; prev = Tuple{Float64,Float64,Float64}[]; nstable = 0; m = mstart; t0 = time_ns()
-    last_all = Tuple{Float64,Float64,Float64}[]; last_phys = Tuple{Float64,Float64,Float64}[]; last_ks = Tuple{Float64,Float64,Float64}[]; last_edges = (nothing,nothing); last_good = (false,false)
     while m <= maxdim
         extend!(S,B,F,m)
-        allroots = ritz_roots(S,k0,Δpoly,m;edge_tol=edge_tol,imag_search_tol=imag_search_tol)
-        requested = [x for x in allroots if kmin <= x[1] <= kmax]
-        phys = [x for x in requested if abs(x[2]) <= imag_tol && x[3] <= res_tol]
-        ks = copy(phys)
+        allroots,Vall = ritz_roots(S,k0,Δpoly,m;edge_tol=edge_tol,imag_search_tol=imag_search_tol)
+        requested_inds = findall(x -> kmin <= x[1] <= kmax,allroots)
+        requested = allroots[requested_inds]; Vrequested = @view Vall[:,requested_inds]
+        phys_inds = findall(x -> abs(x[2]) <= imag_tol && x[3] <= res_tol,requested)
+        phys = requested[phys_inds]; Vphys = @view Vrequested[:,phys_inds]; ks = copy(phys)
         edges = (isempty(requested) ? nothing : first(requested),isempty(requested) ? nothing : last(requested))
         edge_good = (edges[1] !== nothing && abs(edges[1][2]) <= imag_tol && edges[1][3] <= res_tol,edges[2] !== nothing && abs(edges[2][2]) <= imag_tol && edges[2][3] <= res_tol)
         edge_ok = all(edge_good)
@@ -733,48 +768,20 @@ function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ
         nstable = isfinite(drift) && drift <= stable_tol ? nstable + 1 : 0
         maxρ = isempty(phys) ? Inf : maximum(x[3] for x in phys)
         verbose && @printf("m=%4d rank=%4d ritz=%4d conv=%4d states=%4d maxρ=%9.2e drift=%9.2e stable=%d/%d edges=%s applies=%4d time=%7.3f\n",m,S.r,length(requested),length(phys),length(ks),maxρ,drift,nstable,stable_checks,edge_ok ? "PASS" : "FAIL",S.napply,(time_ns()-t0)*1e-9)
-        last_all = allroots; last_phys = phys; last_ks = ks; last_edges = edges; last_good = edge_good
         if nstable >= stable_checks && edge_ok
+            Ψ = eigenvectors ? reconstruct_cork_eigenvectors(S,Matrix{ComplexF64}(Vphys),m) : nothing
             verbose && println("Requested Ritz spectrum stabilized and both requested edge roots pass.")
-            return S,ks,phys,allroots,edges,edge_good,m
+            return S,ks,Ψ,requested,allroots,edges,edge_good,m
         end
         prev = ks; m += mstep
     end
-    @error "Reached maxdim without spectrum stability and converged requested edge roots"
+    error("Reached maxdim without spectrum stability and converged requested edge roots")
 end
 
 ################################################################################
 # SOLVER AND PUBLIC API
 ################################################################################
 
-"""
-    CORKSolver{T,K} <: AcceleratedBIMSolver
-
-Configuration for the analytic Chebyshev-CORK BIM eigensolver.
-
-## Arguments
-- `kernel::K`: Wrapped BIM solver.
-- `p::Int`: Chebyshev polynomial degree.
-- `guard::T`: Relative polynomial-interval enlargement.
-- `nlevels::Int`: Target number of levels per full-spectrum window.
-- `Rmax::T`: Maximum requested half-width.
-- `b::Int`: Block-Arnoldi block size.
-- `mstart::Int`: Initial Krylov dimension.
-- `mstep::Int`: Krylov-dimension increment.
-- `maxdim::Int`: Maximum Krylov dimension.
-- `stable_checks::Int`: Required consecutive stable spectra.
-- `imag_tol::T`: Strict physical imaginary-part tolerance.
-- `edge_tol::T`: Guarded-interval Ritz extraction tolerance.
-- `res_tol::T`: Ritz residual tolerance.
-- `stable_tol::T`: Spectrum-stability tolerance.
-- `imag_search_tol::T`: Loose imaginary discovery strip.
-- `seed::Int`: Random initialization seed.
-- `validate::Bool`: Whether to validate the Chebyshev polynomial.
-- `verbose::Bool`: Whether to enable verbose output during the CORK solve.
-
-## Returns
-- `CORKSolver`: Configured solver.
-"""
 struct CORKSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
     kernel::K
     p::Int
@@ -792,6 +799,7 @@ struct CORKSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
     stable_tol::T
     imag_search_tol::T
     seed::Int
+    eigenvectors::Bool
     validate::Bool
     verbose::Bool
 end
@@ -828,11 +836,12 @@ Ritz-discovery range outside the requested interval.
 - `seed::Int=123`: Random initialization seed.
 - `validate::Bool=true`: Validate the Chebyshev polynomial before CORK.
 - `verbose::Bool=false`: Whether to enable verbose output during the CORK solve.
+- `eigenvectors::Bool=false`: Whether to compute eigenvectors (for the smallest singular vectors) along with eigenvalues.
 
 ## Returns
 - `CORKSolver`: Configured CORK solver.
 """
-function CORKSolver(kernel::K; p::Int=14, guard::Real=0.15, nlevels::Int=150, Rmax::Real=0.8, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Real=1e-7, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, seed::Int=123, validate::Bool=true, verbose::Bool=false) where {K<:SweepBIMSolver}
+function CORKSolver(kernel::K; p::Int=14, guard::Real=0.15, nlevels::Int=200, Rmax::Real=0.8, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=1, imag_tol::Real=1e-7, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, seed::Int=123, eigenvectors::Bool=false, validate::Bool=true, verbose::Bool=false) where {K<:SweepBIMSolver}
     T = _bim_numeric_type(kernel)
     T === Float64 || throw(ArgumentError("CORKSolver currently requires a Float64 BIM kernel"))
     p >= 2 || throw(ArgumentError("p must be at least 2; received p=$p"))
@@ -846,7 +855,7 @@ function CORKSolver(kernel::K; p::Int=14, guard::Real=0.15, nlevels::Int=150, Rm
     mstep % b == 0 || throw(ArgumentError("mstep must be divisible by b"))
     maxdim % b == 0 || throw(ArgumentError("maxdim must be divisible by b"))
     stable_checks > 0 || throw(ArgumentError("stable_checks must be positive"))
-    return CORKSolver{T,K}(kernel, p, T(guard), nlevels, T(Rmax), b, mstart, mstep, maxdim, stable_checks, T(imag_tol), T(edge_tol), T(res_tol), T(stable_tol), T(imag_search_tol), seed, validate, verbose)
+    return CORKSolver{T,K}(kernel,p,T(guard),nlevels,T(Rmax),b,mstart,mstep,maxdim,stable_checks,T(imag_tol),T(edge_tol),T(res_tol),T(stable_tol),T(imag_search_tol),seed,eigenvectors,validate,verbose)
 end
 
 _bim_numeric_type(::CORKSolver{T}) where {T} = T
@@ -858,16 +867,11 @@ evaluate_points(solver::CORKSolver, billiard::Bi, k) where {Bi<:AbsBilliard} = e
 @inline _cork_kernel_name(solver)::String = solver isa DoubleLayerPotentialSolver ? "DLP" : solver isa CombinedFieldIntegralEquationSolver ? "CFIE" : solver isa CompositeBIMSolver ? "CompositeBIM" : string(typeof(solver))
 
 """
-    _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=true)
+    _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=true, eigenvectors::Bool=false)
 
-Execute the complete CORK pipeline on `[k₀-dk/2,k₀+dk/2]`: construct the
-analytic polynomial on `Δpoly=(1+guard)dk/2`, optionally validate it, factorize
-`P(0)`, and run persistent adaptive CORK until the requested spectrum is stable
-and its leftmost and rightmost discovered roots satisfy the strict physical
-tolerances.
-
-Diagnostic output is controlled exclusively by `solver.verbose`. Polynomial
-validation is controlled independently by `solver.validate`.
+Execute the complete CORK pipeline on `[k₀-dk/2,k₀+dk/2]`. If
+`eigenvectors=true`, reconstruct the physical Fredholm smallest singular vectors from the
+final accepted projected Ritz vectors without additional Fredholm SVDs.
 
 ## Arguments
 - `solver::CORKSolver`: Configured CORK eigensolver.
@@ -877,9 +881,9 @@ validation is controlled independently by `solver.validate`.
 - `multithreaded::Bool`: Whether polynomial assembly uses Julia threads.
 
 ## Returns
-- `Tuple`: Polynomial, final state, expanded spectrum, accepted clusters, all
-  guarded clusters, requested edge roots, their acceptance flags, and final
-  Krylov dimension.
+- `Tuple`: Polynomial, final state, accepted spectrum, optional physical
+  eigenvector matrix, requested Ritz roots, all guarded Ritz roots, requested
+  edge roots, edge acceptance flags, and final Krylov dimension.
 """
 function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=true)
     k0f = Float64(k0); Δ = Float64(dk) / 2
@@ -903,8 +907,8 @@ function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=t
     end
     tfact = (time_ns() - t) * 1e-9
     solver.verbose && @printf("\nP(0) assembly        = %.6f s\nLU                   = %.6f s\n\n", ta0, tfact)
-    S, ks, clusters, allclusters, edge_roots, edge_good, mfinal = adaptive_cork(P.B, F, solver.p, P.N; k0 = k0f, Δ = Δ, Δpoly = Δpoly, b = solver.b, mstart = solver.mstart, mstep = solver.mstep, maxdim = solver.maxdim, stable_checks = solver.stable_checks, imag_tol = solver.imag_tol, edge_tol = solver.edge_tol, res_tol = solver.res_tol, stable_tol = solver.stable_tol, seed = solver.seed, imag_search_tol = solver.imag_search_tol, verbose = solver.verbose)
-    return P, S, ks, clusters, allclusters, edge_roots, edge_good, mfinal
+    S, ks, Ψ, requested, allroots, edge_roots, edge_good,mfinal = adaptive_cork(P.B,F,solver.p,P.N;k0=k0f,Δ=Δ,Δpoly=Δpoly,b=solver.b,mstart=solver.mstart,mstep=solver.mstep,maxdim=solver.maxdim,stable_checks=solver.stable_checks,imag_tol=solver.imag_tol,edge_tol=solver.edge_tol,res_tol=solver.res_tol,stable_tol=solver.stable_tol,seed=solver.seed,imag_search_tol=solver.imag_search_tol,eigenvectors=solver.eigenvectors,verbose=solver.verbose)
+    return P, S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal
 end
 
 """
@@ -921,13 +925,33 @@ roots according to their inferred physical multiplicity.
 - `multithreaded::Bool`: Whether polynomial assembly uses Julia threads.
 
 ## Returns
-- `Tuple{Vector{ComplexF64},Vector{Float64}}`: Multiplicity-expanded
-  wavenumbers and their CORK residual estimates.
+- `Tuple{Vector{ComplexF64},Vector{Float64}}`: wavenumbers and their CORK residual estimates.
 """
 function solve(solver::CORKSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true)
-    _, _, ks, _, _, _, _, _ = _cork_solve_core(solver, pts, k0, dk; multithreaded = multithreaded)
+    P, S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = _cork_solve_core(solver, pts, k0, dk; multithreaded = multithreaded)
     λ = ComplexF64[complex(x[1], x[2]) for x in ks]; ts = Float64[x[3] for x in ks]
     return λ, ts
+end
+
+"""
+    solve_vectors(solver::CORKSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true)
+
+Compute all accepted roots and their corresponding eigenvectors (smallest singular vectors of the Fredholm matrix) in `[k₀-dk/2,k₀+dk/2]`.
+
+## Arguments
+- `solver::CORKSolver`: Configured CORK eigensolver.
+- `pts::BoundaryPoints`: Boundary discretization at the expansion center.
+- `k0`: Requested interval center.
+- `dk`: Full requested spectral width.
+- `multithreaded::Bool`: Whether polynomial assembly uses Julia threads.
+
+## Returns
+- `Tuple{Vector{ComplexF64},Vector{Float64},Matrix{ComplexF64}}`: wavenumbers, their CORK residual estimates, and the corresponding eigenvectors.
+"""
+function solve_vectors(solver::CORKSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true) where {Bi<:AbsBilliard}
+    P, S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = _cork_solve_core(solver, pts, k0, dk; multithreaded = multithreaded)
+    λ = ComplexF64[complex(x[1], x[2]) for x in ks]; ts = Float64[x[3] for x in ks]
+    return λ, ts, Ψ
 end
 
 """
