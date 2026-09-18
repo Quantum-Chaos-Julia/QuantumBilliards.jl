@@ -645,61 +645,20 @@ function extend!(S::CORKState, B::Matrix{ComplexF64}, F, m::Int)::Nothing
 end
 
 ################################################################################
-# RITZ ROOTS AND MULTIPLICITY
+# RITZ ROOTS
 ################################################################################
 
 """
-    RitzCluster
+    ritz_roots(S::CORKState, k0::Float64, Δpoly::Float64, m::Int; edge_tol::Float64=1e-8, imag_search_tol::Float64=1e-4) -> Vector{Tuple{Float64,Float64,Float64}}
 
-Cluster of nearby projected Ritz values representing one physical root
-location. Multiplicity is inferred from converged singular directions of the
-block-Arnoldi residual.
+Extract individual Ritz roots from the projected inverse linearization.
+Every projected eigenvalue is mapped independently by
+`μ→t=1/μ→k=k₀+Δpoly*t`; nearby Ritz values are never merged, averaged, or
+interpreted as physical multiplicities.
 
-## Arguments
-- `k::ComplexF64`: Clustered physical wavenumber.
-- `multiplicity::Int`: Converged physical multiplicity.
-- `ritz_count::Int`: Number of projected Ritz values in the cluster.
-- `residual::Float64`: Largest accepted residual singular value.
-- `spread::Float64`: Maximum member distance from the cluster center.
+For a projected right eigenpair `Hv=μv`, the block-Arnoldi residual estimate is
 
-## Returns
-- `RitzCluster`: Multiplicity-aware physical Ritz cluster.
-"""
-struct RitzCluster
-    k::ComplexF64
-    multiplicity::Int
-    ritz_count::Int
-    residual::Float64
-    spread::Float64
-end
-
-# Group nearby complex Ritz values after ordering by real part.
-function _cluster_indices(vals::Vector{ComplexF64}, tol::Float64)::Vector{Vector{Int}}
-    isempty(vals) && return Vector{Vector{Int}}()
-    order = sortperm(real.(vals)); groups = Vector{Vector{Int}}(); g = Int[order[1]]
-    for q in order[2:end]
-        kc = sum(vals[j] for j in g) / length(g)
-        if abs(vals[q] - kc) <= tol
-            push!(g, q)
-        else
-            push!(groups, g); g = Int[q]
-        end
-    end
-    push!(groups, g)
-    return groups
-end
-
-"""
-    ritz_clusters(S::CORKState, k0::Float64, Δpoly::Float64, m::Int; edge_tol::Float64=1e-8, res_tol::Float64=1e-8, cluster_tol::Float64=1e-6, imag_search_tol::Float64=1e-4) -> Vector{RitzCluster}
-
-Extract multiplicity-aware roots from the projected inverse linearization.
-Projected eigenvalues are mapped by `μ→t=1/μ→k=k₀+Δpoly*t`; candidates
-outside the guarded polynomial interval or loose imaginary discovery strip
-are discarded.
-
-For each cluster, the final block-Arnoldi row gives the residual. The number
-of residual singular values below `res_tol` determines the converged physical
-multiplicity.
+    ρ=‖Htail*v‖/max(1,|μ|).
 
 ## Arguments
 - `S::CORKState`: Persistent CORK state at dimension `m`.
@@ -707,49 +666,28 @@ multiplicity.
 - `Δpoly::Float64`: Guarded polynomial half-width.
 - `m::Int`: Active compact Krylov dimension.
 - `edge_tol::Float64`: Tolerance on the normalized guarded interval.
-- `res_tol::Float64`: Residual singular-value tolerance.
-- `cluster_tol::Float64`: Absolute Ritz clustering distance.
 - `imag_search_tol::Float64`: Loose imaginary strip used during discovery.
 
 ## Returns
-- `Vector{RitzCluster}`: Sorted discovered clusters in the guarded interval, including clusters with zero converged multiplicity.
+- `Vector{Tuple{Float64,Float64,Float64}}`: Individual Ritz roots as `(Re(k),Im(k),ρ)`, sorted by real and imaginary parts.
 """
-function ritz_clusters(S::CORKState, k0::Float64, Δpoly::Float64, m::Int; edge_tol::Float64=1e-8, res_tol::Float64=1e-8, cluster_tol::Float64=1e-6, imag_search_tol::Float64=1e-4)::Vector{RitzCluster}
+function ritz_roots(S::CORKState, k0::Float64, Δpoly::Float64, m::Int; edge_tol::Float64=1e-8, imag_search_tol::Float64=1e-4)::Vector{Tuple{Float64,Float64,Float64}}
     S.n == m || error("State dimension $(S.n) != requested m=$m")
     S.pending || error("Arnoldi tail missing")
     H = Matrix(@view S.Hb[1:m,1:m]); E = nothing
     @blas_multi_then_1 MAX_BLAS_THREADS begin
         E = eigen(H)
     end
-    tail = @view S.Hb[m + 1:m + S.b,1:m]
-    inds = Int[]; kvals = ComplexF64[]
+    tail = @view S.Hb[m + 1:m + S.b,1:m]; out = Tuple{Float64,Float64,Float64}[]
     for j = eachindex(E.values)
         μ = E.values[j]; abs(μ) > 1e-14 || continue
-        t = inv(μ); k = ComplexF64(k0 + Δpoly * t)
+        t = inv(μ); k = ComplexF64(k0 + Δpoly*t)
         -1 - edge_tol <= real(t) <= 1 + edge_tol || continue
         abs(imag(k)) <= imag_search_tol || continue
-        push!(inds, j); push!(kvals, k)
+        ρ = norm(tail*@view(E.vectors[:,j]))/max(1.0,abs(μ))
+        push!(out,(real(k),imag(k),ρ))
     end
-    isempty(inds) && return RitzCluster[]
-    out = RitzCluster[]
-    for g in _cluster_indices(kvals, cluster_tol)
-        js = inds[g]; kc = sum(kvals[q] for q in g) / length(g)
-        spread = maximum(abs(kvals[q] - kc) for q in g); Rn = nothing
-        @blas_multi_then_1 MAX_BLAS_THREADS begin
-            Rn = copy(tail * @view(E.vectors[:,js]))
-        end
-        @inbounds for q = 1:length(js)
-            Rn[:,q] ./= max(1.0, abs(E.values[js[q]]))
-        end
-        σ = nothing
-        @blas_multi_then_1 MAX_BLAS_THREADS begin
-            σ = sort(svdvals(Rn))
-        end
-        mult = count(<=(res_tol), σ); 
-        ρ = mult > 0 ? σ[mult] : minimum(σ)
-        push!(out, RitzCluster(kc, mult, length(g), ρ, spread))
-    end
-    sort!(out, by = x -> real(x.k))
+    sort!(out,by=x -> (x[1],x[2]))
     return out
 end
 
@@ -758,18 +696,16 @@ end
 ################################################################################
 
 """
-    adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ::Float64, Δpoly::Float64, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Float64=1e-7, edge_tol::Float64=1e-8, res_tol::Float64=1e-8, stable_tol::Float64=1e-8, cluster_tol::Float64=1e-6, seed::Int=123, imag_search_tol::Float64=1e-4)
+    adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ::Float64, Δpoly::Float64, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Float64=1e-7, edge_tol::Float64=1e-8, res_tol::Float64=1e-8, stable_tol::Float64=1e-8, seed::Int=123, imag_search_tol::Float64=1e-4, verbose::Bool=false)
 
-Grow one persistent CORK factorization until the multiplicity-expanded
+Grow one persistent CORK factorization until the individually retained Ritz
 spectrum in `[k₀-Δ,k₀+Δ]` is stable for `stable_checks` consecutive Krylov
-dimensions and the leftmost and rightmost discovered Ritz roots inside the
-requested interval satisfy the strict physical tolerances.
+dimensions and its leftmost and rightmost discovered roots satisfy the strict
+physical tolerances.
 
-At each dimension, Ritz clusters are extracted over the guarded polynomial
-interval. Clusters inside the requested interval are inspected before strict
-physical filtering so an unconverged outermost requested root cannot disappear
-from the edge test. Accepted roots are then expanded by multiplicity and
-compared with the preceding Krylov dimension.
+Every projected Ritz eigenvalue is treated independently. Nearby Ritz values
+are never merged, averaged, deduplicated, or expanded according to an inferred
+multiplicity.
 
 ## Arguments
 - `B::Matrix{ComplexF64}`: Vertically stacked Chebyshev coefficients.
@@ -786,49 +722,44 @@ compared with the preceding Krylov dimension.
 - `stable_checks::Int`: Required consecutive stable spectra.
 - `imag_tol::Float64`: Strict physical imaginary-part tolerance.
 - `edge_tol::Float64`: Normalized guarded-interval tolerance.
-- `res_tol::Float64`: Residual singular-value tolerance.
+- `res_tol::Float64`: Ritz residual tolerance.
 - `stable_tol::Float64`: Maximum accepted root drift.
-- `cluster_tol::Float64`: Ritz clustering distance.
 - `seed::Int`: Random initialization seed.
 - `imag_search_tol::Float64`: Loose imaginary discovery strip.
-- `verbose::Bool=false`: Whether to enable verbose output during the CORK solve.
+- `verbose::Bool`: Whether to enable verbose CORK diagnostics.
 
 ## Returns
-- `Tuple`: Final state, multiplicity-expanded spectrum, accepted requested
-  clusters, all guarded clusters, requested edge roots, edge acceptance flags,
-  and final Krylov dimension.
+- `Tuple`: Final state, accepted individual spectrum, all requested Ritz roots,
+  all guarded Ritz roots, requested edge roots, edge acceptance flags, and
+  final Krylov dimension.
 """
-function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ::Float64, Δpoly::Float64, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Float64=1e-7, edge_tol::Float64=1e-8, res_tol::Float64=1e-8, stable_tol::Float64=1e-8, cluster_tol::Float64=1e-6, seed::Int=123, imag_search_tol::Float64=1e-4, verbose::Bool=false)
+function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ::Float64, Δpoly::Float64, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Float64=1e-7, edge_tol::Float64=1e-8, res_tol::Float64=1e-8, stable_tol::Float64=1e-8, seed::Int=123, imag_search_tol::Float64=1e-4, verbose::Bool=false)
     mstart % b == 0 || error("mstart must be divisible by block size")
-    S = init_cork(B, p, N; b = b, maxdim = maxdim, seed = seed)
+    S = init_cork(B,p,N;b=b,maxdim=maxdim,seed=seed)
     kmin = k0 - Δ; kmax = k0 + Δ; prev = Tuple{Float64,Float64,Float64}[]; nstable = 0; m = mstart; t0 = time_ns()
-    last_all = RitzCluster[]; last_phys = RitzCluster[]; last_ks = Tuple{Float64,Float64,Float64}[]; last_edges = (nothing, nothing); last_good = (false, false)
+    last_all = Tuple{Float64,Float64,Float64}[]; last_phys = Tuple{Float64,Float64,Float64}[]; last_ks = Tuple{Float64,Float64,Float64}[]; last_edges = (nothing,nothing); last_good = (false,false)
     while m <= maxdim
-        extend!(S, B, F, m)
-        allclusters = ritz_clusters(S, k0, Δpoly, m; edge_tol = edge_tol, res_tol = res_tol, cluster_tol = cluster_tol, imag_search_tol = imag_search_tol)
-        requested = [c for c in allclusters if kmin <= real(c.k) <= kmax]
-        phys = [c for c in requested if c.multiplicity > 0 && abs(imag(c.k)) <= imag_tol && c.residual <= res_tol]
-        ks = Tuple{Float64,Float64,Float64}[]
-        for c in phys, _ = 1:c.multiplicity
-            push!(ks, (real(c.k), imag(c.k), c.residual))
-        end
-        sort!(ks, by = first)
-        edges = (isempty(requested) ? nothing : first(requested), isempty(requested) ? nothing : last(requested))
-        edge_good = (edges[1] !== nothing && edges[1].multiplicity > 0 && abs(imag(edges[1].k)) <= imag_tol && edges[1].residual <= res_tol, edges[2] !== nothing && edges[2].multiplicity > 0 && abs(imag(edges[2].k)) <= imag_tol && edges[2].residual <= res_tol)
+        extend!(S,B,F,m)
+        allroots = ritz_roots(S,k0,Δpoly,m;edge_tol=edge_tol,imag_search_tol=imag_search_tol)
+        requested = [x for x in allroots if kmin <= x[1] <= kmax]
+        phys = [x for x in requested if abs(x[2]) <= imag_tol && x[3] <= res_tol]
+        ks = copy(phys)
+        edges = (isempty(requested) ? nothing : first(requested),isempty(requested) ? nothing : last(requested))
+        edge_good = (edges[1] !== nothing && abs(edges[1][2]) <= imag_tol && edges[1][3] <= res_tol,edges[2] !== nothing && abs(edges[2][2]) <= imag_tol && edges[2][3] <= res_tol)
         edge_ok = all(edge_good)
-        drift = length(prev) == length(ks) && !isempty(ks) ? maximum(abs(complex(ks[i][1], ks[i][2]) - complex(prev[i][1], prev[i][2])) for i = eachindex(ks)) : Inf
+        drift = length(prev) == length(ks) && !isempty(ks) ? maximum(abs(complex(ks[i][1],ks[i][2])-complex(prev[i][1],prev[i][2])) for i = eachindex(ks)) : Inf
         nstable = isfinite(drift) && drift <= stable_tol ? nstable + 1 : 0
-        maxmult = isempty(phys) ? 0 : maximum(c.multiplicity for c in phys); maxρ = isempty(phys) ? Inf : maximum(c.residual for c in phys)
-        verbose && @printf("m=%4d rank=%4d ritz=%4d conv=%4d states=%4d mult=%2d maxρ=%9.2e drift=%9.2e stable=%d/%d edges=%s applies=%4d time=%7.3f\n", m, S.r, length(requested), length(phys), length(ks), maxmult, maxρ, drift, nstable, stable_checks, edge_ok ? "PASS" : "FAIL", S.napply, (time_ns() - t0) * 1e-9)
-        last_all = allclusters; last_phys = phys; last_ks = ks; last_edges = edges; last_good = edge_good
+        maxρ = isempty(phys) ? Inf : maximum(x[3] for x in phys)
+        verbose && @printf("m=%4d rank=%4d ritz=%4d conv=%4d states=%4d maxρ=%9.2e drift=%9.2e stable=%d/%d edges=%s applies=%4d time=%7.3f\n",m,S.r,length(requested),length(phys),length(ks),maxρ,drift,nstable,stable_checks,edge_ok ? "PASS" : "FAIL",S.napply,(time_ns()-t0)*1e-9)
+        last_all = allroots; last_phys = phys; last_ks = ks; last_edges = edges; last_good = edge_good
         if nstable >= stable_checks && edge_ok
             verbose && println("Requested Ritz spectrum stabilized and both requested edge roots pass.")
-            return S, ks, phys, allclusters, edges, edge_good, m
+            return S,ks,phys,allroots,edges,edge_good,m
         end
         prev = ks; m += mstep
     end
     verbose && @warn "Reached maxdim without spectrum stability and converged requested edge roots"
-    return S, last_ks, last_phys, last_all, last_edges, last_good, maxdim
+    return S,last_ks,last_phys,last_all,last_edges,last_good,maxdim
 end
 
 ################################################################################
@@ -855,7 +786,6 @@ Configuration for the analytic Chebyshev-CORK BIM eigensolver.
 - `edge_tol::T`: Guarded-interval Ritz extraction tolerance.
 - `res_tol::T`: Ritz residual tolerance.
 - `stable_tol::T`: Spectrum-stability tolerance.
-- `cluster_tol::T`: Ritz clustering tolerance.
 - `imag_search_tol::T`: Loose imaginary discovery strip.
 - `seed::Int`: Random initialization seed.
 - `validate::Bool`: Whether to validate the Chebyshev polynomial.
@@ -879,7 +809,6 @@ struct CORKSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
     edge_tol::T
     res_tol::T
     stable_tol::T
-    cluster_tol::T
     imag_search_tol::T
     seed::Int
     validate::Bool
@@ -887,7 +816,7 @@ struct CORKSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
 end
 
 """
-    CORKSolver(kernel::K; p::Int=14, guard::Real=0.15, nlevels::Int=150, Rmax::Real=0.8, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Real=1e-7, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, cluster_tol::Real=1e-6, imag_search_tol::Real=1e-4, seed::Int=123, validate::Bool=true, verbose::Bool=false) where {K<:SweepBIMSolver} -> CORKSolver
+    CORKSolver(kernel::K; p::Int=14, guard::Real=0.15, nlevels::Int=150, Rmax::Real=0.8, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Real=1e-7, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, seed::Int=123, validate::Bool=true, verbose::Bool=false) where {K<:SweepBIMSolver} -> CORKSolver
 
 Construct a CORK solver for a BIM Fredholm nonlinear eigenvalue problem.
 
@@ -914,7 +843,6 @@ Ritz-discovery range outside the requested interval.
 - `edge_tol::Real=1e-8`: Normalized guarded-interval Ritz extraction tolerance.
 - `res_tol::Real=1e-10`: Ritz residual tolerance.
 - `stable_tol::Real=1e-9`: Spectrum-stability tolerance.
-- `cluster_tol::Real=1e-6`: Ritz clustering tolerance.
 - `imag_search_tol::Real=1e-4`: Loose imaginary discovery strip.
 - `seed::Int=123`: Random initialization seed.
 - `validate::Bool=true`: Validate the Chebyshev polynomial before CORK.
@@ -923,7 +851,7 @@ Ritz-discovery range outside the requested interval.
 ## Returns
 - `CORKSolver`: Configured CORK solver.
 """
-function CORKSolver(kernel::K; p::Int=14, guard::Real=0.15, nlevels::Int=150, Rmax::Real=0.8, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Real=1e-7, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, cluster_tol::Real=1e-6, imag_search_tol::Real=1e-4, seed::Int=123, validate::Bool=true, verbose::Bool=false) where {K<:SweepBIMSolver}
+function CORKSolver(kernel::K; p::Int=14, guard::Real=0.15, nlevels::Int=150, Rmax::Real=0.8, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Real=1e-7, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, seed::Int=123, validate::Bool=true, verbose::Bool=false) where {K<:SweepBIMSolver}
     T = _bim_numeric_type(kernel)
     T === Float64 || throw(ArgumentError("CORKSolver currently requires a Float64 BIM kernel"))
     p >= 2 || throw(ArgumentError("p must be at least 2; received p=$p"))
@@ -937,7 +865,7 @@ function CORKSolver(kernel::K; p::Int=14, guard::Real=0.15, nlevels::Int=150, Rm
     mstep % b == 0 || throw(ArgumentError("mstep must be divisible by b"))
     maxdim % b == 0 || throw(ArgumentError("maxdim must be divisible by b"))
     stable_checks > 0 || throw(ArgumentError("stable_checks must be positive"))
-    return CORKSolver{T,K}(kernel, p, T(guard), nlevels, T(Rmax), b, mstart, mstep, maxdim, stable_checks, T(imag_tol), T(edge_tol), T(res_tol), T(stable_tol), T(cluster_tol), T(imag_search_tol), seed, validate, verbose)
+    return CORKSolver{T,K}(kernel, p, T(guard), nlevels, T(Rmax), b, mstart, mstep, maxdim, stable_checks, T(imag_tol), T(edge_tol), T(res_tol), T(stable_tol), T(imag_search_tol), seed, validate, verbose)
 end
 
 _bim_numeric_type(::CORKSolver{T}) where {T} = T
@@ -994,7 +922,7 @@ function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=t
     end
     tfact = (time_ns() - t) * 1e-9
     solver.verbose && @printf("\nP(0) assembly        = %.6f s\nLU                   = %.6f s\n\n", ta0, tfact)
-    S, ks, clusters, allclusters, edge_roots, edge_good, mfinal = adaptive_cork(P.B, F, solver.p, P.N; k0 = k0f, Δ = Δ, Δpoly = Δpoly, b = solver.b, mstart = solver.mstart, mstep = solver.mstep, maxdim = solver.maxdim, stable_checks = solver.stable_checks, imag_tol = solver.imag_tol, edge_tol = solver.edge_tol, res_tol = solver.res_tol, stable_tol = solver.stable_tol, cluster_tol = solver.cluster_tol, seed = solver.seed, imag_search_tol = solver.imag_search_tol, verbose = solver.verbose)
+    S, ks, clusters, allclusters, edge_roots, edge_good, mfinal = adaptive_cork(P.B, F, solver.p, P.N; k0 = k0f, Δ = Δ, Δpoly = Δpoly, b = solver.b, mstart = solver.mstart, mstep = solver.mstep, maxdim = solver.maxdim, stable_checks = solver.stable_checks, imag_tol = solver.imag_tol, edge_tol = solver.edge_tol, res_tol = solver.res_tol, stable_tol = solver.stable_tol, seed = solver.seed, imag_search_tol = solver.imag_search_tol, verbose = solver.verbose)
     return P, S, ks, clusters, allclusters, edge_roots, edge_good, mfinal
 end
 
