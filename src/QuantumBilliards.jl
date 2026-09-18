@@ -12,6 +12,7 @@ using BilliardGeometry
 using KrylovKit
 using Printf
 using ProgressMeter
+using MKL
 
 #abstract types
 include("abstracttypes.jl")
@@ -21,7 +22,7 @@ include("utils/coordinatesystems.jl")
 include("utils/geometryutils.jl")
 include("utils/typeutils.jl")
 include("utils/macros.jl")
-export use_threads, blas_multi, blas_1, blas_multi_then_1
+export use_threads, blas_multi, blas_1, blas_multi_then_1, try_MKL!
 include("utils/billiardutils.jl")
 export make_triangle_and_basis, adapt_basis
 

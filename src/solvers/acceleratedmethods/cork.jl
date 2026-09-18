@@ -154,8 +154,7 @@
     evaluate_cork_polynomial(P::CORKPolynomial, t::Real) -> Matrix{ComplexF64}
 
 Evaluate the matrix Chebyshev polynomial `P(t)=Σⱼ₌₀ᵖBⱼTⱼ(t)` using the
-three-term recurrence `T₀(t)=1`, `T₁(t)=t`, and
-`Tⱼ₊₁(t)=2tTⱼ(t)-Tⱼ₋₁(t)`.
+three-term recurrence `T₀(t)=1`, `T₁(t)=t`, and `Tⱼ₊₁(t)=2tTⱼ(t)-Tⱼ₋₁(t)`.
 
 ## Arguments
 - `P::CORKPolynomial`: Chebyshev polynomial with vertically stacked coefficients `[B₀;...;Bₚ]`.
@@ -182,7 +181,8 @@ end
 
 Validate the Chebyshev approximation against directly constructed BIM
 Fredholm matrices. The reported relative error is
-`‖P(t)-A(k₀+Δt)‖/‖A(k₀+Δt)‖`.
+`‖P(t)-A(k₀+Δt)‖/‖A(k₀+Δt)‖`. This is basically to check if the bounds of
+the interval are accurate enough.
 
 ## Arguments
 - `solver::SweepBIMSolver`: BIM solver defining the direct Fredholm matrix.
@@ -207,14 +207,11 @@ function validate_polynomial(solver::SweepBIMSolver, pts, P::CORKPolynomial; nsa
     return worst
 end
 
-################################################################################
-# CHEBYSHEV LINEARIZATION
-################################################################################
 
 """
     get_A0(B::Matrix{ComplexF64}, N::Int, p::Int) -> Matrix{ComplexF64}
 
-Evaluate `P(t)=Σⱼ₌₀ᵖBⱼTⱼ(t)` at the fixed CORK shift `t=0`. Since
+Evaluate the Chebyshev polynomial `P(t)=Σⱼ₌₀ᵖBⱼTⱼ(t)` at the fixed shift `t=0`. Since
 `T₂q(0)=(-1)^q` and `T₂q₊₁(0)=0`, `P(0)=B₀-B₂+B₄-B₆+⋯`.
 
 ## Arguments
@@ -285,18 +282,26 @@ function compact_project_cgs2!(Z::Matrix{ComplexF64}, G::Matrix{ComplexF64}, n::
 end
 
 """
+
     compact_block_qr!(Z::Matrix{ComplexF64}, b::Int) -> Tuple{Int,Matrix{ComplexF64}}
 
-Rank-test and normalize one compact block by QR factorization. Numerical rank
-is estimated from `diag(R)` using
-`tol=max(10⁻¹² maxᵢ|Rᵢᵢ|,10⁻¹⁴)`.
+Normalize a projected compact residual block and detect block-Arnoldi
+breakdown. After projection against the existing basis, the residual must
+become the next orthonormal block of compact CORK vectors, while its `R`
+factor supplies the subdiagonal block of the projected Hessenberg matrix.
+A QR factorization `Z=QR` therefore serves both purposes. The numerical block
+rank is estimated from `diag(R)` using tol=max(10⁻¹² maxᵢ|Rᵢᵢ|,10⁻¹⁴).
+If fewer than `b` independent directions remain, the detected rank is returned
+so the caller can identify block breakdown; otherwise `Z` is overwritten by
+the first `b` orthonormal columns of `Q`.
 
 ## Arguments
-- `Z::Matrix{ComplexF64}`: Compact block to rank-test and normalize.
-- `b::Int`: Required block-Arnoldi rank.
+- `Z::Matrix{ComplexF64}`: Projected compact residual block.
+- `b::Int`: Required block-Arnoldi block size.
 
 ## Returns
-- `Tuple{Int,Matrix{ComplexF64}}`: Detected rank and leading `b×b` factor `R`.
+- `Tuple{Int,Matrix{ComplexF64}}`: Detected block rank and leading `b×b`
+  Hessenberg factor `R`.
 """
 function compact_block_qr!(Z::Matrix{ComplexF64}, b::Int)::Tuple{Int,Matrix{ComplexF64}}
     F = nothing
@@ -313,8 +318,8 @@ end
 """
     pack!(Zf::Matrix{ComplexF64}, Z::Array{ComplexF64,3}, rmax::Int, p::Int, b::Int) -> Nothing
 
-Flatten the compact tensor according to
-`Zf[(j-1)rmax+i,c]=Z[i,j,c]` for BLAS-based compact orthogonalization.
+Flatten the `Array{ComplexF64,3}` tensor according to
+`Zf[(j-1)rmax+i,c]=Z[i,j,c]` for `Matrix{ComplexF64}` BLAS-based orthogonalization.
 
 ## Arguments
 - `Zf::Matrix{ComplexF64}`: Preallocated flattened compact block.
@@ -336,7 +341,7 @@ end
 """
     unpack!(Z::Array{ComplexF64,3}, Zf::Matrix{ComplexF64}, rmax::Int, p::Int, b::Int) -> Nothing
 
-Restore the degree-resolved tensor from its flattened representation.
+Restore the `Array{ComplexF64,3}` tensor from its flattened `Matrix{ComplexF64}` representation.
 
 ## Arguments
 - `Z::Array{ComplexF64,3}`: Preallocated degree-resolved compact tensor.
