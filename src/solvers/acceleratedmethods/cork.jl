@@ -99,7 +99,7 @@
 #                     │    │    │    └─ cache_block!
 #                     │    │    │
 #                     │    │    ├─ pack!         # Flatten compact coordinates
-#                     │    │    ├─ compact_project_cgs2!
+#                     │    │    ├─ compact_project!
 #                     │    │    │                # Two-pass Arnoldi reorthogonalization
 #                     │    │    ├─ compact_block_qr!
 #                     │    │    │                # Normalize the residual block
@@ -231,7 +231,7 @@ the vertically stacked coefficient blocks.
 end
 
 """
-    compact_project_cgs2!(Z::Array{ComplexF64,3}, G::Array{ComplexF64,3}, r::Int, n::Int, p::Int, H1::Matrix{ComplexF64}, H2::Matrix{ComplexF64}) -> Nothing
+    compact_project!(Z::Array{ComplexF64,3}, G::Array{ComplexF64,3}, r::Int, n::Int, p::Int, H1::Matrix{ComplexF64}, H2::Matrix{ComplexF64}) -> Nothing
 
 Orthogonalize the active compact tensor `Z[1:r,1:p,:]` against the active
 compact Arnoldi basis `G[1:r,1:p,1:n]` by two-pass classical Gram-Schmidt.
@@ -247,9 +247,17 @@ accumulated projection coefficients from both CGS passes.
 ## Returns
 - `Nothing`: `Z` and `H1` are modified in place.
 """
-function compact_project_cgs2!(Z::Array{ComplexF64,3}, G::Array{ComplexF64,3}, r::Int, n::Int, p::Int, H1::Matrix{ComplexF64}, H2::Matrix{ComplexF64})::Nothing
+function compact_project!(Z::Array{ComplexF64,3}, G::Array{ComplexF64,3}, r::Int, n::Int, p::Int, H1::Matrix{ComplexF64}, H2::Matrix{ComplexF64}; η::Float64=inv(sqrt(2.0)))::Nothing
     A = @view H1[1:n,:]; C = @view H2[1:n,:]
     fill!(A, 0); fill!(C, 0)
+    b = size(Z, 3); ν0 = zeros(Float64, b); ν1 = zeros(Float64, b)
+    @inbounds for c = 1:b
+        s = 0.0
+        for j = 1:p, i = 1:r
+            s += abs2(Z[i,j,c])
+        end
+        ν0[c] = sqrt(s)
+    end
     @blas_multi_then_1 MAX_BLAS_THREADS begin
         for j = 1:p
             Gj = @view G[1:r,j,1:n]; Zj = @view Z[1:r,j,:]
@@ -259,16 +267,27 @@ function compact_project_cgs2!(Z::Array{ComplexF64,3}, G::Array{ComplexF64,3}, r
             Gj = @view G[1:r,j,1:n]; Zj = @view Z[1:r,j,:]
             mul!(Zj, Gj, A, -1 + 0im, 1 + 0im)
         end
-        for j = 1:p
-            Gj = @view G[1:r,j,1:n]; Zj = @view Z[1:r,j,:]
-            mul!(C, adjoint(Gj), Zj, 1 + 0im, 1 + 0im)
-        end
-        for j = 1:p
-            Gj = @view G[1:r,j,1:n]; Zj = @view Z[1:r,j,:]
-            mul!(Zj, Gj, C, -1 + 0im, 1 + 0im)
-        end
     end
-    A .+= C
+    @inbounds for c = 1:b
+        s = 0.0
+        for j = 1:p, i = 1:r
+            s += abs2(Z[i,j,c])
+        end
+        ν1[c] = sqrt(s)
+    end
+    if any(c -> ν1[c] < η * ν0[c], 1:b)
+        @blas_multi_then_1 MAX_BLAS_THREADS begin
+            for j = 1:p
+                Gj = @view G[1:r,j,1:n]; Zj = @view Z[1:r,j,:]
+                mul!(C, adjoint(Gj), Zj, 1 + 0im, 1 + 0im)
+            end
+            for j = 1:p
+                Gj = @view G[1:r,j,1:n]; Zj = @view Z[1:r,j,:]
+                mul!(Zj, Gj, C, -1 + 0im, 1 + 0im)
+            end
+        end
+        A .+= C
+    end
     return nothing
 end
 
@@ -496,7 +515,7 @@ function compute_tail!(S::CORKState, B::Matrix{ComplexF64}, F)::Nothing
     rn, tc, tl, tr, tp = block_apply!(S.Z, S.U, S.W, B, F, Gin, S.N, p, r, b)
     S.r = rn; S.cache += tc; S.lu += tl; S.rhs += tr; S.phys += tp
     fill!(S.H1, 0); fill!(S.H2, 0); t = time_ns()
-    compact_project_cgs2!(S.Z, S.G, rn, n, p, S.H1, S.H2)
+    compact_project!(S.Z, S.G, rn, n, p, S.H1, S.H2)
     Zf = zeros(ComplexF64, rn * p, b); pack!(Zf, S.Z, rn, p, b)
     bn, Rb = compact_block_qr!(Zf, b); bn == b || error("Block breakdown at n=$n: $bn/$b")
     fill!(S.Z, 0); unpack!(S.Z, Zf, rn, p, b)
