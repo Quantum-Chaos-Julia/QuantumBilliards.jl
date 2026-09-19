@@ -314,6 +314,38 @@ end
     return nothing
 end
 
+mutable struct CORKState
+    U::Matrix{ComplexF64}
+    W::Matrix{ComplexF64}
+    G::Array{ComplexF64,3}
+    Hb::Matrix{ComplexF64}
+    pendingG::Array{ComplexF64,3}
+    Z::Array{ComplexF64,3}
+    H1::Matrix{ComplexF64}
+    H2::Matrix{ComplexF64}
+    γ::Array{ComplexF64,3}
+    RHS::Matrix{ComplexF64}
+    tmp::Matrix{ComplexF64}
+    Y::Matrix{ComplexF64}
+    Hphys::Matrix{ComplexF64}
+    Hphys2::Matrix{ComplexF64}
+    Zf::Matrix{ComplexF64}
+    r::Int
+    rcap::Int
+    n::Int
+    b::Int
+    p::Int
+    N::Int
+    rmax::Int
+    pending::Bool
+    cache::Float64
+    lu::Float64
+    rhs::Float64
+    phys::Float64
+    orth::Float64
+    napply::Int
+end
+
 """
     block_apply!(Z::Array{ComplexF64,3}, U::Matrix{ComplexF64}, W::Matrix{ComplexF64}, B::Matrix{ComplexF64}, F, Gin, N::Int, p::Int, r::Int, b::Int)
 
@@ -419,38 +451,6 @@ function block_apply!(S::CORKState, B::Matrix{ComplexF64}, F, cols)
     end
     S.r = rn
     return tcache,tlu,trhs,tphys
-end
-
-mutable struct CORKState
-    U::Matrix{ComplexF64}
-    W::Matrix{ComplexF64}
-    G::Array{ComplexF64,3}
-    Hb::Matrix{ComplexF64}
-    pendingG::Array{ComplexF64,3}
-    Z::Array{ComplexF64,3}
-    H1::Matrix{ComplexF64}
-    H2::Matrix{ComplexF64}
-    γ::Array{ComplexF64,3}
-    RHS::Matrix{ComplexF64}
-    tmp::Matrix{ComplexF64}
-    Y::Matrix{ComplexF64}
-    Hphys::Matrix{ComplexF64}
-    Hphys2::Matrix{ComplexF64}
-    Zf::Matrix{ComplexF64}
-    r::Int
-    rcap::Int
-    n::Int
-    b::Int
-    p::Int
-    N::Int
-    rmax::Int
-    pending::Bool
-    cache::Float64
-    lu::Float64
-    rhs::Float64
-    phys::Float64
-    orth::Float64
-    napply::Int
 end
 
 function ensure_rank_capacity!(S::CORKState, required::Int)::Nothing
