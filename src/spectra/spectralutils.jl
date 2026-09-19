@@ -641,8 +641,7 @@ function compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; multithreade
         ks, tens = solve_spectrum(solver, billiard, k0, dk; multithreaded = multithreaded)
         last_window = i == nw
         @inbounds for j in eachindex(ks)
-            x = real(ks[j]); owned = last_window ? a <= x <= b : a <= x < b
-            owned || continue
+            x = real(ks[j]); a <= x < b || continue
             push!(ks_all, ks[j]); push!(tens_all, tens[j])
         end
     end
