@@ -509,7 +509,7 @@ mutable struct CORKState
 end
 
 """
-    init_cork(B::Matrix{ComplexF64}, p::Int, N::Int; b::Int=10, maxdim::Int=1600, seed::Int=123) -> CORKState
+    init_cork(B::Matrix{ComplexF64}, p::Int, N::Int; b::Int=10, maxdim::Int=1600) -> CORKState
 
 Initialize the common physical basis, coefficient cache, and first normalized
 compact block-Arnoldi block.
@@ -520,17 +520,16 @@ compact block-Arnoldi block.
 - `N::Int`: Physical matrix dimension.
 - `b::Int`: Block-Arnoldi block size.
 - `maxdim::Int`: Maximum compact Krylov dimension.
-- `seed::Int`: Random initialization seed.
 
 ## Returns
 - `CORKState`: Initialized persistent block-CORK state.
 """
-function init_cork(B::Matrix{ComplexF64}, p::Int, N::Int; b::Int=10, maxdim::Int=1600, seed::Int=123)::CORKState
+function init_cork(B::Matrix{ComplexF64}, p::Int, N::Int; b::Int=10, maxdim::Int=1600)::CORKState
     maxdim % b == 0 || error("maxdim must be divisible by block size")
     rmax = min(N, p + maxdim + b + 2); cd = rmax * p
     U = zeros(ComplexF64, N, rmax); W = zeros(ComplexF64, (p + 1) * N, rmax)
     G = zeros(ComplexF64, rmax, p, maxdim + b); Gf = zeros(ComplexF64, cd, maxdim + b)
-    Hb = zeros(ComplexF64, maxdim + b, maxdim); rng = MersenneTwister(seed)
+    Hb = zeros(ComplexF64, maxdim + b, maxdim); rng = MersenneTwister(123)
     X = randn(rng, ComplexF64, N, p); FX = nothing
     @blas_multi_then_1 MAX_BLAS_THREADS begin
         FX = qr(X)
@@ -708,7 +707,7 @@ end
 ################################################################################
 
 """
-    adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ::Float64, Δpoly::Float64, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Float64=1e-7, edge_tol::Float64=1e-8, res_tol::Float64=1e-8, stable_tol::Float64=1e-8, seed::Int=123, imag_search_tol::Float64=1e-4, eigenvectors::Bool=false, verbose::Bool=false)
+    adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ::Float64, Δpoly::Float64, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Float64=1e-7, edge_tol::Float64=1e-8, res_tol::Float64=1e-8, stable_tol::Float64=1e-8, imag_search_tol::Float64=1e-4, eigenvectors::Bool=false, verbose::Bool=false)
 
 Grow one persistent CORK factorization until the individually retained Ritz
 spectrum in `[k₀-Δ,k₀+Δ]` is stable for `stable_checks` consecutive Krylov
@@ -738,7 +737,6 @@ convergence.
 - `edge_tol::Float64`: Normalized guarded-interval tolerance.
 - `res_tol::Float64`: Ritz residual tolerance.
 - `stable_tol::Float64`: Maximum accepted root drift.
-- `seed::Int`: Random initialization seed.
 - `imag_search_tol::Float64`: Loose imaginary discovery strip.
 - `eigenvectors::Bool`: Whether to reconstruct final physical Fredholm eigenvectors.
 - `verbose::Bool`: Whether to enable verbose CORK diagnostics.
@@ -748,9 +746,9 @@ convergence.
   eigenvector matrix, all requested Ritz roots, all guarded Ritz roots,
   requested edge roots, edge acceptance flags, and final Krylov dimension.
 """
-function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ::Float64, Δpoly::Float64, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Float64=1e-7, edge_tol::Float64=1e-8, res_tol::Float64=1e-8, stable_tol::Float64=1e-8, seed::Int=123, imag_search_tol::Float64=1e-4, eigenvectors::Bool=false, verbose::Bool=false)
+function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ::Float64, Δpoly::Float64, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Float64=1e-7, edge_tol::Float64=1e-8, res_tol::Float64=1e-8, stable_tol::Float64=1e-8, imag_search_tol::Float64=1e-4, eigenvectors::Bool=false, verbose::Bool=false)
     mstart % b == 0 || error("mstart must be divisible by block size")
-    S = init_cork(B,p,N;b=b,maxdim=maxdim,seed=seed)
+    S = init_cork(B,p,N;b=b,maxdim=maxdim)
     kmin = k0 - Δ; kmax = k0 + Δ; prev = Tuple{Float64,Float64,Float64}[]; nstable = 0; m = mstart; t0 = time_ns()
     while m <= maxdim
         extend!(S,B,F,m)
@@ -796,7 +794,6 @@ struct CORKSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
     res_tol::T
     stable_tol::T
     imag_search_tol::T
-    seed::Int
     eigenvectors::Bool
     validate::Bool
     verbose::Bool
@@ -804,7 +801,7 @@ struct CORKSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
 end
 
 """
-    CORKSolver(kernel::K; p::Int=14, guard::Real=0.15, nlevels::Int=150, Rmax::Real=0.8, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Real=1e-7, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, seed::Int=123, validate::Bool=true, verbose::Bool=false) where {K<:SweepBIMSolver} -> CORKSolver
+    CORKSolver(kernel::K; p::Int=14, guard::Real=0.15, nlevels::Int=150, Rmax::Real=0.8, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Real=1e-7, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, validate::Bool=true, verbose::Bool=false) where {K<:SweepBIMSolver} -> CORKSolver
 
 Construct a CORK solver for a BIM Fredholm nonlinear eigenvalue problem.
 
@@ -832,7 +829,6 @@ Ritz-discovery range outside the requested interval.
 - `res_tol::Real=1e-10`: Ritz residual tolerance.
 - `stable_tol::Real=1e-9`: Spectrum-stability tolerance.
 - `imag_search_tol::Real=1e-4`: Loose imaginary discovery strip.
-- `seed::Int=123`: Random initialization seed.
 - `validate::Bool=true`: Validate the Chebyshev polynomial before CORK.
 - `verbose::Bool=false`: Whether to enable verbose output during the CORK solve.
 - `eigenvectors::Bool=false`: Whether to compute eigenvectors (for the smallest singular vectors) along with eigenvalues.
@@ -840,7 +836,7 @@ Ritz-discovery range outside the requested interval.
 ## Returns
 - `CORKSolver`: Configured CORK solver.
 """
-function CORKSolver(kernel::K; p::Int=14, guard::Real=0.15, nlevels::Int=200, Rmax::Real=0.8, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=1, imag_tol::Real=1e-7, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, seed::Int=123, eigenvectors::Bool=false, validate::Bool=true, verbose::Bool=false, taylor_tol::Real=1e-9) where {K<:SweepBIMSolver}
+function CORKSolver(kernel::K; p::Int=14, guard::Real=0.15, nlevels::Int=200, Rmax::Real=0.8, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=1, imag_tol::Real=1e-7, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, eigenvectors::Bool=false, validate::Bool=true, verbose::Bool=false, taylor_tol::Real=1e-9) where {K<:SweepBIMSolver}
     T = _bim_numeric_type(kernel)
     T === Float64 || throw(ArgumentError("CORKSolver currently requires a Float64 BIM kernel"))
     p >= 2 || throw(ArgumentError("p must be at least 2; received p=$p"))
@@ -855,7 +851,7 @@ function CORKSolver(kernel::K; p::Int=14, guard::Real=0.15, nlevels::Int=200, Rm
     mstep % b == 0 || throw(ArgumentError("mstep must be divisible by b"))
     maxdim % b == 0 || throw(ArgumentError("maxdim must be divisible by b"))
     stable_checks > 0 || throw(ArgumentError("stable_checks must be positive"))
-    return CORKSolver{T,K}(kernel,p,T(guard),nlevels,T(Rmax),b,mstart,mstep,maxdim,stable_checks,T(imag_tol),T(edge_tol),T(res_tol),T(stable_tol),T(imag_search_tol),seed,eigenvectors,validate,verbose,T(taylor_tol))
+    return CORKSolver{T,K}(kernel,p,T(guard),nlevels,T(Rmax),b,mstart,mstep,maxdim,stable_checks,T(imag_tol),T(edge_tol),T(res_tol),T(stable_tol),T(imag_search_tol),eigenvectors,validate,verbose,T(taylor_tol))
 end
 
 _bim_numeric_type(::CORKSolver{T}) where {T} = T
@@ -907,7 +903,7 @@ function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=t
     end
     tfact = (time_ns() - t) * 1e-9
     solver.verbose && @printf("\nP(0) assembly        = %.6f s\nLU                   = %.6f s\n\n", ta0, tfact)
-    S, ks, Ψ, requested, allroots, edge_roots, edge_good,mfinal = adaptive_cork(P.B,F,solver.p,P.N;k0=k0f,Δ=Δ,Δpoly=Δpoly,b=solver.b,mstart=solver.mstart,mstep=solver.mstep,maxdim=solver.maxdim,stable_checks=solver.stable_checks,imag_tol=solver.imag_tol,edge_tol=solver.edge_tol,res_tol=solver.res_tol,stable_tol=solver.stable_tol,seed=solver.seed,imag_search_tol=solver.imag_search_tol,eigenvectors=solver.eigenvectors,verbose=solver.verbose)
+    S, ks, Ψ, requested, allroots, edge_roots, edge_good,mfinal = adaptive_cork(P.B,F,solver.p,P.N;k0=k0f,Δ=Δ,Δpoly=Δpoly,b=solver.b,mstart=solver.mstart,mstep=solver.mstep,maxdim=solver.maxdim,stable_checks=solver.stable_checks,imag_tol=solver.imag_tol,edge_tol=solver.edge_tol,res_tol=solver.res_tol,stable_tol=solver.stable_tol,imag_search_tol=solver.imag_search_tol,eigenvectors=solver.eigenvectors,verbose=solver.verbose)
     return P, S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal
 end
 
