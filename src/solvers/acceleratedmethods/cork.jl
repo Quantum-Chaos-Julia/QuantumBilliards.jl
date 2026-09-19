@@ -247,7 +247,7 @@ accumulated projection coefficients from both CGS passes.
 ## Returns
 - `Nothing`: `Z` and `H1` are modified in place.
 """
-function compact_project!(Z::Array{ComplexF64,3}, G::Array{ComplexF64,3}, r::Int, n::Int, p::Int, H1::Matrix{ComplexF64}, H2::Matrix{ComplexF64}; η::Float64=inv(sqrt(2.0)))::Nothing
+function compact_project!(Z::Array{ComplexF64,3}, G::Array{ComplexF64,3}, r::Int, n::Int, p::Int, H1::Matrix{ComplexF64}, H2::Matrix{ComplexF64}; η::Float64=inv(sqrt(2.0)))::Bool
     A = @view H1[1:n,:]; C = @view H2[1:n,:]
     fill!(A, 0); fill!(C, 0)
     b = size(Z, 3); ν0 = zeros(Float64, b); ν1 = zeros(Float64, b)
@@ -275,7 +275,8 @@ function compact_project!(Z::Array{ComplexF64,3}, G::Array{ComplexF64,3}, r::Int
         end
         ν1[c] = sqrt(s)
     end
-    if any(c -> ν1[c] < η * ν0[c], 1:b)
+    reorth = any(c -> ν1[c] < η * ν0[c], 1:b)
+    if reorth
         @blas_multi_then_1 MAX_BLAS_THREADS begin
             for j = 1:p
                 Gj = @view G[1:r,j,1:n]; Zj = @view Z[1:r,j,:]
@@ -288,7 +289,7 @@ function compact_project!(Z::Array{ComplexF64,3}, G::Array{ComplexF64,3}, r::Int
         end
         A .+= C
     end
-    return nothing
+    return reorth
 end
 
 """
@@ -453,7 +454,8 @@ mutable struct CORKState
     rhs::Float64
     phys::Float64
     orth::Float64
-    napply::Int
+    nproject::Int
+    nreorth::Int
 end
 
 """
@@ -490,7 +492,7 @@ function init_cork(B::Matrix{ComplexF64}, p::Int, N::Int; b::Int = 10)::CORKStat
     bn, _ = compact_block_qr!(Z0f, b); bn == b || error("Initial block breakdown")
     fill!(Z0, 0); unpack!(Z0, Z0f, r, p, b); @views G[1:r,:,1:b] .= Z0[1:r,:,:]
     tc = cache_block!(W, B, U, N, p, 1, r)
-    return CORKState(U, W, G, Hb, zeros(ComplexF64, rmax, p, b), zeros(ComplexF64, rmax, p, b), zeros(ComplexF64, mdim + b, b), zeros(ComplexF64, mdim + b, b), r, b, b, p, N, rmax, false, tc, 0.0, 0.0, 0.0, 0.0, 0)
+    return CORKState(U, W, G, Hb, zeros(ComplexF64, rmax, p, b), zeros(ComplexF64, rmax, p, b), zeros(ComplexF64, mdim + b, b), zeros(ComplexF64, mdim + b, b), r, b, b, p, N, rmax, false, tc, 0.0, 0.0, 0.0, 0.0, 0, 0, 0)
 end
 
 """
@@ -515,7 +517,8 @@ function compute_tail!(S::CORKState, B::Matrix{ComplexF64}, F)::Nothing
     rn, tc, tl, tr, tp = block_apply!(S.Z, S.U, S.W, B, F, Gin, S.N, p, r, b)
     S.r = rn; S.cache += tc; S.lu += tl; S.rhs += tr; S.phys += tp
     fill!(S.H1, 0); fill!(S.H2, 0); t = time_ns()
-    compact_project!(S.Z, S.G, rn, n, p, S.H1, S.H2)
+    reorth = compact_project!(S.Z, S.G, rn, n, p, S.H1, S.H2)
+    S.nproject += 1; S.nreorth += reorth
     Zf = zeros(ComplexF64, rn * p, b); pack!(Zf, S.Z, rn, p, b)
     bn, Rb = compact_block_qr!(Zf, b); bn == b || error("Block breakdown at n=$n: $bn/$b")
     fill!(S.Z, 0); unpack!(S.Z, Zf, rn, p, b)
@@ -718,7 +721,7 @@ function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ
         drift = length(prev) == length(ks) && !isempty(ks) ? maximum(abs(complex(ks[i][1], ks[i][2]) - complex(prev[i][1], prev[i][2])) for i = eachindex(ks)) : Inf
         nstable = isfinite(drift) && drift <= stable_tol ? nstable + 1 : 0
         maxρ = isempty(phys) ? Inf : maximum(x[3] for x in phys)
-        verbose && @printf("m=%4d/%4d rank=%4d ritz=%4d conv=%4d states=%4d maxρ=%9.2e drift=%9.2e stable=%d/%d edges=%s applies=%4d time=%7.3f\n", m, mdim, S.r, length(requested), length(phys), length(ks), maxρ, drift, nstable, stable_checks, edge_ok ? "PASS" : "FAIL", S.napply, (time_ns() - t0) * 1e-9)
+        verbose && @printf("m=%4d/%4d rank=%4d ritz=%4d conv=%4d states=%4d maxρ=%9.2e drift=%9.2e stable=%d/%d edges=%s applies=%4d reorth=%3d/%3d time=%7.3f\n", m, mdim, S.r, length(requested), length(phys), length(ks), maxρ, drift, nstable, stable_checks, edge_ok ? "PASS" : "FAIL", S.napply, S.nreorth, S.nproject, (time_ns() - t0) * 1e-9)
         if nstable >= stable_checks && edge_ok
             Ψ = eigenvectors ? reconstruct_cork_eigenvectors(S, Matrix{ComplexF64}(Vphys), m) : nothing
             return S, ks, Ψ, requested, allroots, edges, edge_good, m
