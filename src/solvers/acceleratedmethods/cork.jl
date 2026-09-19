@@ -738,7 +738,7 @@ function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ
     S = init_cork(B, p, N; b = b); mdim = size(S.Hb, 2)
     m = min(mstart, mdim)
     kmin = k0 - Δ; kmax = k0 + Δ; prev = Tuple{Float64,Float64,Float64}[]; nstable = 0; t0 = time_ns()
-    verbose && @printf("Interval k: [%9.4e, %9.4e]\n", kmin, kmax)
+    verbose && @printf("Interval k: [%.3f, %.3f]\n", kmin, kmax)
     while true
         extend!(S, B, F, m)
         allroots, Vall = ritz_roots(S, k0, Δpoly, m; edge_tol = edge_tol, imag_search_tol = imag_search_tol)
