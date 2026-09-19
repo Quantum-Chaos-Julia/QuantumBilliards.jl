@@ -19,8 +19,6 @@ include("abstracttypes.jl")
 export AbsBasis, AbsSolver, AbsBasisSolver, AbsBIMSolver
 
 include("utils/coordinatesystems.jl")
-include("utils/geometryutils.jl")
-include("utils/typeutils.jl")
 include("utils/macros.jl")
 export use_threads, blas_multi, blas_1, blas_multi_then_1, try_MKL!
 include("utils/billiardutils.jl")

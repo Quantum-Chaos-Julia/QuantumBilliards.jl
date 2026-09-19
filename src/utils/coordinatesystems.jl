@@ -5,6 +5,8 @@ struct CartesianCS{T} <:CoordinateSystem where {T<:Number}
     local_map::AffineMap{Angle2d{T}, SVector{2, T}}
 end
 
+angle(a, b) = atan(norm(cross(a,b)),dot(a,b))
+
 """
     CartesianCS(origin::SVector{2,T},rot_angle::T) where {T<:Number}
 
