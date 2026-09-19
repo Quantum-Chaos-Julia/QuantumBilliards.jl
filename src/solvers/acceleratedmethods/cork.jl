@@ -7,110 +7,117 @@
 #                              A(k)u = 0,
 #
 # where A(k) is the Fredholm matrix of a DLP, CFIE, or composite BIM
-# discretization. For a requested window
+# discretization. For a requested spectral window
 #
 #                  Δ = dk/2,    k ∈ [k₀-Δ,k₀+Δ],
 #
-# `recurrences.jl` constructs a Chebyshev approximation on the guarded
-# half-width Δₚ=(1+guard)Δ,
+# `recurrences.jl` constructs a Chebyshev polynomial approximation on the
+# guarded half-width Δₚ = (1 + guard)Δ,
 #
-#              P(t)=Σⱼ₌₀ᵖ BⱼTⱼ(t) ≈ A(k₀+Δₚt),
-#              t=(k-k₀)/Δₚ.
+#              P(t) = Σⱼ₌₀ᵖ BⱼTⱼ(t) ≈ A(k₀ + Δₚt),
+#              t = (k-k₀)/Δₚ.
 #
-# CORK solves P(t)u=0 through a compact Chebyshev linearization. Instead of
-# storing p independent N-dimensional linearization blocks, all physical
-# blocks are represented in a common basis U,
+# CORK solves the polynomial eigenvalue problem P(t)u = 0 through a compact
+# Chebyshev linearization. Instead of explicitly storing N-dimensional
+# vectors for every linearization block, the physical blocks are represented
+# in a common basis U,
 #
 #                              zⱼ = Ugⱼ,
 #
-# with cached coefficient actions Wⱼ=BⱼU. At the fixed shift t=0,
+# with cached coefficient actions
 #
-#                         P(0)=B₀-B₂+B₄-⋯,
+#                              Wⱼ = BⱼU.
 #
-# so one LU factorization of P(0) is reused throughout the block-Arnoldi
-# iteration. Projected inverse eigenvalues are mapped back to wavenumbers by
+# At the fixed inverse-iteration shift t = 0,
 #
-#                         μ → t=1/μ → k=k₀+Δₚt.
+#                         P(0) = B₀-B₂+B₄-⋯,
+#
+# since T₂q(0) = (-1)^q and T₂q₊₁(0) = 0. One LU factorization of P(0) is
+# therefore reused throughout the block-Arnoldi iteration. Eigenvalues μ of
+# the projected inverse linearization are mapped back to physical
+# wavenumbers by
+#
+#                         μ → t = 1/μ → k = k₀ + Δₚt.
+#
+# The compact Krylov space is grown adaptively until the requested spectrum
+# is stable and the requested interval edges are represented by converged
+# Ritz roots. There is no user-defined maximum Krylov dimension: the
+# iteration may grow to the largest block-compatible dimension permitted by
+# the physical Fredholm matrix.
 #
 # Main spectrum call:
 #
-# solve_spectrum(solver,billiard,k0,dk)       # Solve a complete spectral window
+# solve_spectrum(solver, billiard, k0, dk)      # Solve a complete spectral window
 # │
-# ├─ evaluate_points(solver,billiard,k0)      # Build the boundary discretization
-# │    └─ evaluate_points(solver.kernel,...)  # Delegate it to the wrapped BIM solver
+# ├─ evaluate_points(solver, billiard, k0)      # Build the boundary discretization
+# │    └─ evaluate_points(solver.kernel, ...)   # Delegate to the wrapped BIM solver
 # │
-# └─ solve(solver,pts,k0,dk)                  # Solve using existing boundary points
+# └─ solve(solver, pts, k0, dk)                 # Solve using existing boundary points
 #      │
-#      └─ _cork_solve_core(...)               # Run the complete polynomial+CORK pipeline
+#      └─ _cork_solve_core(...)                 # Run the polynomial + CORK pipeline
 #           │
-#           ├─ build_cork_polynomial(...)     # Construct P(t) from analytic BIM recurrences
+#           ├─ build_cork_polynomial(...)       # Construct P(t) analytically
 #           │    │
-#           │    ├─ _taylor_cache(...)        # Precompute geometry/Kress data independent of k
+#           │    ├─ _taylor_cache(...)          # Precompute geometry/Kress data
 #           │    │
-#           │    ├─ build_B_full(...)         # Assemble Bⱼ on the full boundary
-#           │    │    └─ _fredholm_taylor!    # Form Taylor coefficients of I-K(k)
-#           │    │         └─ _kernel_taylor! # Evaluate analytic kernel derivatives
+#           │    ├─ build_B_full(...)           # Assemble Bⱼ on the full boundary
+#           │    │    └─ _fredholm_taylor!      # Taylor coefficients of I-K(k)
+#           │    │         └─ _kernel_taylor!   # Analytic kernel Taylor recurrence
 #           │    │
-#           │    └─ build_B_reduced(...)      # Assemble symmetry-reduced Bⱼ
-#           │         └─ _fredholm_taylor!    # Form reduced Fredholm Taylor coefficients
-#           │              └─ _kernel_taylor! # Evaluate analytic kernel derivatives
+#           │    └─ build_B_reduced(...)        # Assemble symmetry-reduced Bⱼ
+#           │         └─ _fredholm_taylor!      # Reduced Fredholm Taylor coefficients
+#           │              └─ _kernel_taylor!   # Analytic kernel Taylor recurrence
 #           │
 #           │       # The functions above live in `recurrences.jl` and return
-#           │       # CORKPolynomial(B,k0,Δpoly,p,N).
+#           │       # CORKPolynomial(B, k0, Δpoly, p, N).
 #           │
-#           ├─ validate_polynomial!(...)       # Compare P(t) with direct BIM matrices
-#           │                                  # when `validate=true`
+#           ├─ validate_polynomial!(...)        # Compare P(t) with direct BIM matrices
+#           │                                   # when `validate = true`
 #           │
-#           ├─ get_A0(B,N,p)                  # Evaluate P(0)=B₀-B₂+B₄-⋯
+#           ├─ get_A0(B, N, p)                  # Evaluate P(0) = B₀-B₂+B₄-⋯
 #           │
-#           ├─ lu(P(0))                       # Factorize the fixed physical shift once
+#           ├─ lu(P(0))                         # Factorize the fixed shift once
 #           │
-#           └─ adaptive_cork(...)             # Grow CORK until the spectrum is stable
+#           └─ adaptive_cork(...)               # Grow CORK until spectrum convergence
 #                │
-#                ├─ init_cork(...)            # Allocate and initialize persistent CORK state
+#                ├─ init_cork(...)              # Initialize persistent CORK state
 #                │    │
-#                │    ├─ initialize U         # Build the initial common physical basis
-#                │    ├─ initialize G         # Build the first compact Arnoldi block
-#                │    └─ cache_block!(...)    # Cache Wⱼ=BⱼU for the initial basis
+#                │    ├─ initialize U           # Initial common physical basis
+#                │    ├─ initialize G           # Initial compact Arnoldi block
+#                │    └─ cache_block!(...)      # Cache Wⱼ = BⱼU
 #                │
-#                └─ for increasing m          # Extend one persistent Krylov factorization
+#                └─ for increasing m            # Extend one persistent factorization
 #                     │
-#                     ├─ extend!(...)          # Grow the active compact basis to dimension m
+#                     ├─ extend!(...)            # Grow active Krylov dimension to m
 #                     │    │
-#                     │    ├─ compute_tail!    # Compute and retain the next Arnoldi residual
+#                     │    ├─ compute_tail!      # Compute and retain Arnoldi residual
 #                     │    │    │
 #                     │    │    ├─ block_apply!(...)
-#                     │    │    │    │         # Apply the inverse Chebyshev linearization
-#                     │    │    │    ├─ recurrence
-#                     │    │    │    │         # Propagate compact Chebyshev 
+#                     │    │    │    ├─ Chebyshev recurrence
 #                     │    │    │    ├─ P(0)\rhs
-#                     │    │    │    │         # Solve the physical inverse-shift equation
 #                     │    │    │    ├─ physical SVD
-#                     │    │    │    │         # Detect new independent directions
 #                     │    │    │    └─ cache_block!
-#                     │    │    │              # Cache BⱼUnew for new directions
 #                     │    │    │
-#                     │    │    ├─ pack!       # Flatten compact coordinates
+#                     │    │    ├─ pack!         # Flatten compact coordinates
 #                     │    │    ├─ compact_project_cgs2!
-#                     │    │    │              # Reorthogonalize against the Arnoldi basis
+#                     │    │    │                # Two-pass Arnoldi reorthogonalization
 #                     │    │    ├─ compact_block_qr!
-#                     │    │    │              # Normalize the residual block
-#                     │    │    └─ pending tail
-#                     │    │                   # Retain the residual for Ritz testing
+#                     │    │    │                # Normalize the residual block
+#                     │    │    └─ pending tail  # Retain residual for Ritz testing
 #                     │    │
-#                     │    └─ promote_tail!    # Promote the residual to an active block
+#                     │    └─ promote_tail!      # Promote residual to active block
 #                     │
-#                     ├─ ritz_clusters(...)    # Extract root locations and multiplicities
+#                     ├─ ritz_roots(...)         # Extract individual projected Ritz roots
 #                     │    │
-#                     │    ├─ eigen(Hm)        # Solve the projected inverse eigenproblem
-#                     │    └─ μ→1/μ→k          # Map projected eigenvalues to wavenumbers
+#                     │    ├─ eigen(Hm)          # Projected inverse eigenproblem
+#                     │    ├─ μ → 1/μ → k        # Map Ritz values to wavenumbers
+#                     │    └─ Htail*v             # Projected Arnoldi residual estimate
 #                     │
-#                     ├─ requested roots       # Retain clusters inside the requested interval
-#                     ├─ physical filtering    # Apply strict Im(k) and residual tolerances
-#                     ├─ multiplicity expansion# Repeat each accepted root by its multiplicity
-#                     ├─ edge check            # Test the leftmost and rightmost requested roots
-#                     └─ stability check       # Measure spectral drift from the previous iteration
-# ==============================================================================
+#                     ├─ requested roots         # Retain roots in [k₀-Δ,k₀+Δ]
+#                     ├─ physical filtering      # Apply Im(k) and residual tolerances
+#                     ├─ edge check              # Check extreme requested Ritz roots
+#                     └─ stability check         # Compare with previous Krylov dimension
+################################################################################
 
 # Views of the j-th Chebyshev coefficient and cached coefficient action.
 @inline Bj(B::Matrix{ComplexF64}, N::Int, j::Int) = @view B[j * N + 1:(j + 1) * N,:]
