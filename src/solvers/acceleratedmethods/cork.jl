@@ -295,14 +295,14 @@ function compact_block_qr!(Z::Matrix{ComplexF64}, b::Int)::Tuple{Int,Matrix{Comp
     return count(>(tol), d), R
 end
 
-@inline function pack!(Zf::Matrix{ComplexF64}, Z::Array{ComplexF64,3}, r::Int, p::Int, b::Int)::Nothing
+@inline function pack!(Zf::AbstractMatrix{ComplexF64}, Z::Array{ComplexF64,3}, r::Int, p::Int, b::Int)::Nothing
     @inbounds for c = 1:b, j = 1:p, i = 1:r
         Zf[(j - 1) * r + i,c] = Z[i,j,c]
     end
     return nothing
 end
 
-@inline function unpack!(Z::Array{ComplexF64,3}, Zf::Matrix{ComplexF64}, r::Int, p::Int, b::Int)::Nothing
+@inline function unpack!(Z::Array{ComplexF64,3}, Zf::AbstractMatrix{ComplexF64}, r::Int, p::Int, b::Int)::Nothing
     @inbounds for c = 1:b, j = 1:p, i = 1:r
         Z[i,j,c] = Zf[(j - 1) * r + i,c]
     end
@@ -413,46 +413,6 @@ function block_apply!(Z::Array{ComplexF64,3}, U::Matrix{ComplexF64}, W::Matrix{C
     return rn, tcache, tlu, trhs, tphys
 end
 
-################################################################################
-# PERSISTENT BLOCK-CORK ITERATION
-################################################################################
-
-"""
-    CORKState
-
-Persistent compact block-Arnoldi state. `U` is the common physical basis,
-`W=B*U` caches all coefficient actions, `G`/`Gf` store the degree-resolved
-and flattened compact Arnoldi basis, and `Hb` stores the projected inverse
-linearization. The next residual block is retained in `pendingG`/`pendingGf`.
-
-## Arguments
-- `U::Matrix{ComplexF64}`: Common physical basis.
-- `W::Matrix{ComplexF64}`: Vertically stacked coefficient-action cache.
-- `Hb::Matrix{ComplexF64}`: Projected inverse-linearization matrix.
-- `pendingG::Array{ComplexF64,3}`: Pending degree-resolved Arnoldi tail.
-- `pendingGf::Matrix{ComplexF64}`: Flattened pending Arnoldi tail.
-- `Z::Array{ComplexF64,3}`: Degree-resolved work tensor.
-- `Zf::Matrix{ComplexF64}`: Flattened work block.
-- `H1::Matrix{ComplexF64}`: First compact projection coefficients.
-- `H2::Matrix{ComplexF64}`: Second compact projection coefficients.
-- `r::Int`: Current physical rank.
-- `n::Int`: Current compact Krylov dimension.
-- `b::Int`: Block-Arnoldi block size.
-- `p::Int`: Chebyshev polynomial degree.
-- `N::Int`: Physical matrix dimension.
-- `rmax::Int`: Allocated maximum physical rank.
-- `maxdim::Int`: Maximum compact Krylov dimension.
-- `pending::Bool`: Whether an unpromoted Arnoldi tail is available.
-- `cache::Float64`: Accumulated coefficient-cache time.
-- `lu::Float64`: Accumulated physical LU-solve time.
-- `rhs::Float64`: Accumulated Chebyshev RHS time.
-- `phys::Float64`: Accumulated physical-basis expansion time.
-- `orth::Float64`: Accumulated compact orthogonalization time.
-- `napply::Int`: Number of inverse-linearization applications.
-
-## Returns
-- `CORKState`: Persistent state used by the adaptive CORK iteration.
-"""
 mutable struct CORKState
     U::Matrix{ComplexF64}
     W::Matrix{ComplexF64}
@@ -460,7 +420,6 @@ mutable struct CORKState
     Hb::Matrix{ComplexF64}
     pendingG::Array{ComplexF64,3}
     Z::Array{ComplexF64,3}
-    Zf::Matrix{ComplexF64}
     H1::Matrix{ComplexF64}
     H2::Matrix{ComplexF64}
     r::Int
@@ -512,7 +471,7 @@ function init_cork(B::Matrix{ComplexF64}, p::Int, N::Int; b::Int = 10)::CORKStat
     bn, _ = compact_block_qr!(Z0f, b); bn == b || error("Initial block breakdown")
     fill!(Z0, 0); unpack!(Z0, Z0f, r, p, b); @views G[1:r,:,1:b] .= Z0[1:r,:,:]
     tc = cache_block!(W, B, U, N, p, 1, r)
-    return CORKState(U, W, G, Hb, zeros(ComplexF64, rmax, p, b), zeros(ComplexF64, rmax, p, b), zeros(ComplexF64, rmax * p, b), zeros(ComplexF64, mdim + b, b), zeros(ComplexF64, mdim + b, b), r, b, b, p, N, rmax, false, tc, 0.0, 0.0, 0.0, 0.0, 0)
+    return CORKState(U, W, G, Hb, zeros(ComplexF64, rmax, p, b), zeros(ComplexF64, rmax, p, b), zeros(ComplexF64, mdim + b, b), zeros(ComplexF64, mdim + b, b), r, b, b, p, N, rmax, false, tc, 0.0, 0.0, 0.0, 0.0, 0)
 end
 
 """
@@ -538,10 +497,9 @@ function compute_tail!(S::CORKState, B::Matrix{ComplexF64}, F)::Nothing
     S.r = rn; S.cache += tc; S.lu += tl; S.rhs += tr; S.phys += tp
     fill!(S.H1, 0); fill!(S.H2, 0); t = time_ns()
     compact_project_cgs2!(S.Z, S.G, rn, n, p, S.H1, S.H2)
-    Zfa = @view S.Zf[1:rn * p,:]
-    pack!(Zfa, S.Z, rn, p, b)
-    bn, Rb = compact_block_qr!(Zfa, b); bn == b || error("Block breakdown at n=$n: $bn/$b")
-    fill!(S.Z, 0); unpack!(S.Z, Zfa, rn, p, b)
+    Zf = zeros(ComplexF64, rn * p, b); pack!(Zf, S.Z, rn, p, b)
+    bn, Rb = compact_block_qr!(Zf, b); bn == b || error("Block breakdown at n=$n: $bn/$b")
+    fill!(S.Z, 0); unpack!(S.Z, Zf, rn, p, b)
     @views S.Hb[1:n,cols] .= S.H1[1:n,:]
     @views S.Hb[n + 1:n + b,cols] .= Rb
     S.orth += (time_ns() - t) * 1e-9
@@ -565,6 +523,7 @@ function promote_tail!(S::CORKState)::Nothing
     S.pending || error("No pending tail")
     n = S.n; b = S.b; mdim = size(S.Hb, 2)
     n + b <= mdim || error("Reached full CORK Krylov dimension m=$mdim for matrix size N=$(S.N)")
+    @views S.G[:,:,n + 1:n + b] .= 0
     @views S.G[1:S.r,:,n + 1:n + b] .= S.pendingG[1:S.r,:,:]
     S.n += b; S.pending = false
     return nothing
