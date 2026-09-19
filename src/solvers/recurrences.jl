@@ -126,10 +126,12 @@ coefficients through degree `p` require only `O(p)` scalar arithmetic.
   `f[n+1]=f⁽ⁿ⁾(k)/n!` for `n=0,...,p`.
 """
 @inline function radial1_taylor!(f::Vector{ComplexF64}, k::Float64, r2::Float64, p::Int, f0::Union{ComplexF64,Float64}, f1::Union{ComplexF64,Float64})::Vector{ComplexF64}
-    f[1] = f0; p == 0 && return f; f[2] = f1
-    @inbounds for n = 0:p-2
-        fm1 = n == 0 ? 0.0im : f[n]
-        f[n+3] = -((n+1)*(n-1)*f[n+2] + k*r2*f[n+1] + r2*fm1) / (k*(n+2)*(n+1))
+    f[1]=f0; p==0 && return f; f[2]=f1
+    kinv=inv(k); r2k=r2*kinv
+    @inbounds for n=0:p-2
+        d=inv(Float64((n+1)*(n+2)))
+        fm1=n==0 ? 0.0im : f[n]
+        f[n+3]=-(n-1)*kinv/(n+2)*f[n+2]-r2*d*f[n+1]-r2k*d*fm1
     end
     return f
 end
@@ -166,10 +168,12 @@ with `y₋₁=0`. The natural initial values are `y₀=Z₀(kr)` and
   `y[n+1]=y⁽ⁿ⁾(k)/n!` for `n=0,...,p`.
 """
 @inline function radial0_taylor!(y::Vector{ComplexF64}, k::Float64, r2::Float64, p::Int, y0::Union{ComplexF64,Float64}, y1::Union{ComplexF64,Float64})::Vector{ComplexF64}
-    y[1] = y0; p == 0 && return y; y[2] = y1
-    @inbounds for n = 0:p-2
-        ym1 = n == 0 ? 0.0im : y[n]
-        y[n+3] = -((n+1)^2*y[n+2] + k*r2*y[n+1] + r2*ym1) / (k*(n+2)*(n+1))
+    y[1]=y0; p==0 && return y; y[2]=y1
+    kinv=inv(k); r2k=r2*kinv
+    @inbounds for n=0:p-2
+        d=inv(Float64((n+1)*(n+2)))
+        ym1=n==0 ? 0.0im : y[n]
+        y[n+3]=-(n+1)*kinv/(n+2)*y[n+2]-r2*d*y[n+1]-r2k*d*ym1
     end
     return y
 end
@@ -201,9 +205,9 @@ This supplies the `kJ₀(kr)` and `kH₀⁽¹⁾(kr)` series required by the CFI
   Taylor coefficients of `kZ₀(kr)` through degree `p`.
 """
 @inline function radial0_k_taylor!(f::Vector{ComplexF64}, y::Vector{ComplexF64}, k::Float64, r2::Float64, p::Int, y0::Union{ComplexF64,Float64}, y1::Union{ComplexF64,Float64})::Vector{ComplexF64}
-    radial0_taylor!(y, k, r2, p, y0, y1); f[1] = k*y[1]
-    @inbounds @simd for n = 1:p
-        f[n+1] = k*y[n+1] + y[n]
+    radial0_taylor!(y,k,r2,p,y0,y1); f[1]=k*y[1]
+    @inbounds @simd for n=1:p
+        f[n+1]=k*y[n+1]+y[n]
     end
     return f
 end
@@ -761,7 +765,7 @@ with β = Ca.
     n=length(β); fill!(β,0)
     @inbounds for l=1:n
         al=a[l]
-        @simd for j=1:n
+        @simd for j=(isodd(l) ? 1 : 2):2:l
             β[j]+=C[j,l]*al
         end
     end
