@@ -801,56 +801,52 @@ struct CORKSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
 end
 
 """
-    CORKSolver(kernel::K; p::Int=14, guard::Real=0.15, nlevels::Int=150, Rmax::Real=0.8, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Real=1e-7, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, validate::Bool=true, verbose::Bool=false) where {K<:SweepBIMSolver} -> CORKSolver
+    CORKSolver(kernel::K; p::Int=20, guard::Real=0.05, nlevels::Int=200, Rmax::Real=0.9, b::Int=10, mstart::Int=600, mstep::Int=10*b, maxdim::Int=200*b, stable_checks::Int=1, imag_tol::Real=1e-8, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, eigenvectors::Bool=false, validate::Bool=false, verbose::Bool=false, taylor_tol::Real=1e-10) where {K<:SweepBIMSolver} -> CORKSolver
 
 Construct a CORK solver for a BIM Fredholm nonlinear eigenvalue problem.
 
 For full-spectrum computations, `nlevels` is the target number of physical
 levels in each requested CORK window and `Rmax` is the maximum requested
 half-width `Δ`. The Chebyshev polynomial is constructed on
-`Δpoly=(1+guard)Δ`; the guard therefore provides additional polynomial and
-Ritz-discovery range outside the requested interval.
+
+    Δpoly = (1 + guard)Δ,
+
+so that the polynomial approximation and Ritz search extend beyond the
+requested spectral window.
 
 ## Arguments
 - `kernel::K`: BIM kernel used to construct the Fredholm operator.
 
 ## Keyword Arguments
-- `p::Int=14`: Chebyshev polynomial degree.
-- `guard::Real=0.15`: Relative enlargement used for polynomial construction and Ritz discovery.
-- `nlevels::Int=150`: Target number of physical levels per full-spectrum window.
-- `Rmax::Real=0.8`: Maximum requested CORK half-width `Δ`.
+- `p::Int=16`: Chebyshev polynomial degree.
+- `guard::Real=0.05`: Relative enlargement of the requested interval used for polynomial construction and Ritz discovery.
+- `nlevels::Int=200`: Target number of physical levels per full-spectrum window.
+- `Rmax::Real=0.9`: Maximum requested CORK half-width `Δ`.
 - `b::Int=10`: CORK block size.
-- `mstart::Int=200`: Initial Krylov dimension.
-- `mstep::Int=100`: Krylov-dimension increment.
-- `maxdim::Int=1600`: Maximum Krylov dimension.
-- `stable_checks::Int=2`: Number of consecutive stable Ritz checks required.
-- `imag_tol::Real=1e-7`: Final imaginary-part tolerance in physical `k` units.
+- `mstart::Int=600`: Initial Krylov dimension.
+- `mstep::Int=10*b`: Krylov-dimension increment between convergence checks.
+- `maxdim::Int=200*b`: Maximum Krylov dimension.
+- `stable_checks::Int=1`: Number of consecutive stable Ritz checks required.
+- `imag_tol::Real=1e-8`: Final imaginary-part tolerance in physical `k` units.
 - `edge_tol::Real=1e-8`: Normalized guarded-interval Ritz extraction tolerance.
 - `res_tol::Real=1e-10`: Ritz residual tolerance.
 - `stable_tol::Real=1e-9`: Spectrum-stability tolerance.
-- `imag_search_tol::Real=1e-4`: Loose imaginary discovery strip.
-- `validate::Bool=true`: Validate the Chebyshev polynomial before CORK.
-- `verbose::Bool=false`: Whether to enable verbose output during the CORK solve.
-- `eigenvectors::Bool=false`: Whether to compute eigenvectors (for the smallest singular vectors) along with eigenvalues.
+- `imag_search_tol::Real=1e-4`: Loose imaginary discovery strip used during Ritz extraction.
+- `eigenvectors::Bool=false`: Whether to reconstruct physical eigenvectors.
+- `validate::Bool=false`: Whether to validate the Chebyshev approximation during individual CORK solves.
+- `verbose::Bool=false`: Whether to print detailed CORK convergence diagnostics.
+- `taylor_tol::Real=1e-10`: Relative tolerance used for Chebyshev-polynomial validation.
 
 ## Returns
 - `CORKSolver`: Configured CORK solver.
 """
-function CORKSolver(kernel::K; p::Int=14, guard::Real=0.15, nlevels::Int=200, Rmax::Real=0.8, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=1, imag_tol::Real=1e-7, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, eigenvectors::Bool=false, validate::Bool=true, verbose::Bool=false, taylor_tol::Real=1e-9) where {K<:SweepBIMSolver}
+function CORKSolver(kernel::K; p::Int=16, guard::Real=0.05, nlevels::Int=200, Rmax::Real=0.8, b::Int=10, mstart::Int=30*b, mstep::Int=10*b, maxdim::Int=200*b, stable_checks::Int=1, imag_tol::Real=1e-8, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, eigenvectors::Bool=false, validate::Bool=false, verbose::Bool=false, taylor_tol::Real=1e-10) where {K<:SweepBIMSolver}
     T = _bim_numeric_type(kernel)
     T === Float64 || throw(ArgumentError("CORKSolver currently requires a Float64 BIM kernel"))
     p >= 2 || throw(ArgumentError("p must be at least 2; received p=$p"))
-    guard >= 0 || throw(ArgumentError("guard must be nonnegative; received guard=$guard"))
-    nlevels > 0 || throw(ArgumentError("nlevels must be positive; received nlevels=$nlevels"))
-    b > 0 || throw(ArgumentError("b must be positive; received b=$b"))
-    mstart > 0 || throw(ArgumentError("mstart must be positive; received mstart=$mstart"))
-    mstep > 0 || throw(ArgumentError("mstep must be positive; received mstep=$mstep"))
-    taylor_tol > 0 || throw(ArgumentError("taylor_tol must be positive; received taylor_tol=$taylor_tol"))
-    maxdim >= mstart || throw(ArgumentError("maxdim must satisfy maxdim >= mstart"))
     mstart % b == 0 || throw(ArgumentError("mstart must be divisible by b"))
     mstep % b == 0 || throw(ArgumentError("mstep must be divisible by b"))
     maxdim % b == 0 || throw(ArgumentError("maxdim must be divisible by b"))
-    stable_checks > 0 || throw(ArgumentError("stable_checks must be positive"))
     return CORKSolver{T,K}(kernel,p,T(guard),nlevels,T(Rmax),b,mstart,mstep,maxdim,stable_checks,T(imag_tol),T(edge_tol),T(res_tol),T(stable_tol),T(imag_search_tol),eigenvectors,validate,verbose,T(taylor_tol))
 end
 
