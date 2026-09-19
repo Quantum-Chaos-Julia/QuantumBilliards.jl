@@ -231,27 +231,42 @@ the vertically stacked coefficient blocks.
 end
 
 """
-    compact_project_cgs2!(Z::Matrix{ComplexF64}, G::Matrix{ComplexF64}, n::Int, H1::Matrix{ComplexF64}, H2::Matrix{ComplexF64}) -> Nothing
+    compact_project_cgs2!(Z::Array{ComplexF64,3}, G::Array{ComplexF64,3}, r::Int, n::Int, p::Int, H1::Matrix{ComplexF64}, H2::Matrix{ComplexF64}) -> Nothing
 
-Orthogonalize `Z` against `Q=G[:,1:n]` by two-pass classical Gram-Schmidt:
-`H₁=QᴴZ`, `Z←Z-QH₁`, followed by `H₂=QᴴZ`, `Z←Z-QH₂`. On return `H1`
-contains the accumulated projection coefficients `H₁+H₂`.
+Orthogonalize the active compact tensor `Z[1:r,1:p,:]` against the active
+compact Arnoldi basis `G[1:r,1:p,1:n]` by two-pass classical Gram-Schmidt.
 
-## Arguments
-- `Z::Matrix{ComplexF64}`: Compact block, overwritten by its orthogonal part.
-- `G::Matrix{ComplexF64}`: Flattened compact Arnoldi basis.
-- `n::Int`: Number of active compact Arnoldi vectors.
-- `H1::Matrix{ComplexF64}`: Workspace and accumulated projection coefficients.
-- `H2::Matrix{ComplexF64}`: Workspace for the second CGS pass.
+The compact inner product is evaluated directly in tensor form,
+
+    H = Σⱼ GⱼᴴZⱼ,
+
+so inactive physical rows `r+1:rmax` are never processed and no padded
+flattened representation is required. On return `H1[1:n,:]` contains the
+accumulated projection coefficients from both CGS passes.
 
 ## Returns
 - `Nothing`: `Z` and `H1` are modified in place.
 """
-function compact_project_cgs2!(Z::Matrix{ComplexF64}, G::Matrix{ComplexF64}, n::Int, H1::Matrix{ComplexF64}, H2::Matrix{ComplexF64})::Nothing
-    Q = @view G[:,1:n]; A = @view H1[1:n,:]; C = @view H2[1:n,:]
+function compact_project_cgs2!(Z::Array{ComplexF64,3}, G::Array{ComplexF64,3}, r::Int, n::Int, p::Int, H1::Matrix{ComplexF64}, H2::Matrix{ComplexF64})::Nothing
+    A = @view H1[1:n,:]; C = @view H2[1:n,:]
+    fill!(A, 0); fill!(C, 0)
     @blas_multi_then_1 MAX_BLAS_THREADS begin
-        mul!(A, adjoint(Q), Z); mul!(Z, Q, A, -1 + 0im, 1 + 0im)
-        mul!(C, adjoint(Q), Z); mul!(Z, Q, C, -1 + 0im, 1 + 0im)
+        for j = 1:p
+            Gj = @view G[1:r,j,1:n]; Zj = @view Z[1:r,j,:]
+            mul!(A, adjoint(Gj), Zj, 1 + 0im, 1 + 0im)
+        end
+        for j = 1:p
+            Gj = @view G[1:r,j,1:n]; Zj = @view Z[1:r,j,:]
+            mul!(Zj, Gj, A, -1 + 0im, 1 + 0im)
+        end
+        for j = 1:p
+            Gj = @view G[1:r,j,1:n]; Zj = @view Z[1:r,j,:]
+            mul!(C, adjoint(Gj), Zj, 1 + 0im, 1 + 0im)
+        end
+        for j = 1:p
+            Gj = @view G[1:r,j,1:n]; Zj = @view Z[1:r,j,:]
+            mul!(Zj, Gj, C, -1 + 0im, 1 + 0im)
+        end
     end
     A .+= C
     return nothing
@@ -280,47 +295,16 @@ function compact_block_qr!(Z::Matrix{ComplexF64}, b::Int)::Tuple{Int,Matrix{Comp
     return count(>(tol), d), R
 end
 
-"""
-    pack!(Zf::Matrix{ComplexF64}, Z::Array{ComplexF64,3}, rmax::Int, p::Int, b::Int) -> Nothing
-
-Flatten the `Array{ComplexF64,3}` tensor according to
-`Zf[(j-1)rmax+i,c]=Z[i,j,c]` for `Matrix{ComplexF64}` BLAS-based orthogonalization.
-
-## Arguments
-- `Zf::Matrix{ComplexF64}`: Preallocated flattened compact block.
-- `Z::Array{ComplexF64,3}`: Degree-resolved compact tensor.
-- `rmax::Int`: Allocated physical-rank dimension.
-- `p::Int`: Number of linearization degree blocks.
-- `b::Int`: Block-Arnoldi block size.
-
-## Returns
-- `Nothing`: `Zf` is filled in place.
-"""
-@inline function pack!(Zf::Matrix{ComplexF64}, Z::Array{ComplexF64,3}, rmax::Int, p::Int, b::Int)::Nothing
-    @inbounds for c = 1:b, j = 1:p, i = 1:rmax
-        Zf[(j - 1) * rmax + i,c] = Z[i,j,c]
+@inline function pack!(Zf::Matrix{ComplexF64}, Z::Array{ComplexF64,3}, r::Int, p::Int, b::Int)::Nothing
+    @inbounds for c = 1:b, j = 1:p, i = 1:r
+        Zf[(j - 1) * r + i,c] = Z[i,j,c]
     end
     return nothing
 end
 
-"""
-    unpack!(Z::Array{ComplexF64,3}, Zf::Matrix{ComplexF64}, rmax::Int, p::Int, b::Int) -> Nothing
-
-Restore the `Array{ComplexF64,3}` tensor from its flattened `Matrix{ComplexF64}` representation.
-
-## Arguments
-- `Z::Array{ComplexF64,3}`: Preallocated degree-resolved compact tensor.
-- `Zf::Matrix{ComplexF64}`: Flattened compact block.
-- `rmax::Int`: Allocated physical-rank dimension.
-- `p::Int`: Number of linearization degree blocks.
-- `b::Int`: Block-Arnoldi block size.
-
-## Returns
-- `Nothing`: `Z` is filled in place.
-"""
-@inline function unpack!(Z::Array{ComplexF64,3}, Zf::Matrix{ComplexF64}, rmax::Int, p::Int, b::Int)::Nothing
-    @inbounds for c = 1:b, j = 1:p, i = 1:rmax
-        Z[i,j,c] = Zf[(j - 1) * rmax + i,c]
+@inline function unpack!(Z::Array{ComplexF64,3}, Zf::Matrix{ComplexF64}, r::Int, p::Int, b::Int)::Nothing
+    @inbounds for c = 1:b, j = 1:p, i = 1:r
+        Z[i,j,c] = Zf[(j - 1) * r + i,c]
     end
     return nothing
 end
@@ -444,8 +428,6 @@ linearization. The next residual block is retained in `pendingG`/`pendingGf`.
 ## Arguments
 - `U::Matrix{ComplexF64}`: Common physical basis.
 - `W::Matrix{ComplexF64}`: Vertically stacked coefficient-action cache.
-- `G::Array{ComplexF64,3}`: Degree-resolved compact Arnoldi basis.
-- `Gf::Matrix{ComplexF64}`: Flattened compact Arnoldi basis.
 - `Hb::Matrix{ComplexF64}`: Projected inverse-linearization matrix.
 - `pendingG::Array{ComplexF64,3}`: Pending degree-resolved Arnoldi tail.
 - `pendingGf::Matrix{ComplexF64}`: Flattened pending Arnoldi tail.
@@ -475,10 +457,8 @@ mutable struct CORKState
     U::Matrix{ComplexF64}
     W::Matrix{ComplexF64}
     G::Array{ComplexF64,3}
-    Gf::Matrix{ComplexF64}
     Hb::Matrix{ComplexF64}
     pendingG::Array{ComplexF64,3}
-    pendingGf::Matrix{ComplexF64}
     Z::Array{ComplexF64,3}
     Zf::Matrix{ComplexF64}
     H1::Matrix{ComplexF64}
@@ -518,22 +498,21 @@ function init_cork(B::Matrix{ComplexF64}, p::Int, N::Int; b::Int = 10)::CORKStat
     p <= N || error("Polynomial degree p=$p exceeds physical matrix dimension N=$N")
     mdim = (N ÷ b) * b
     mdim >= b || error("Matrix dimension N=$N is smaller than block size b=$b")
-    rmax = N; cd = rmax * p
+    rmax = N
     U = zeros(ComplexF64, N, rmax); W = zeros(ComplexF64, (p + 1) * N, rmax)
-    G = zeros(ComplexF64, rmax, p, mdim + b); Gf = zeros(ComplexF64, cd, mdim + b)
-    Hb = zeros(ComplexF64, mdim + b, mdim); rng = MersenneTwister(123)
-    X = randn(rng, ComplexF64, N, p); FX = nothing
+    G = zeros(ComplexF64, rmax, p, mdim + b); Hb = zeros(ComplexF64, mdim + b, mdim)
+    rng = MersenneTwister(123); X = randn(rng, ComplexF64, N, p); FX = nothing
     @blas_multi_then_1 MAX_BLAS_THREADS begin
         FX = qr(X)
     end
     @blas_multi_then_1 MAX_BLAS_THREADS @views U[:,1:p] .= FX.Q * Matrix{ComplexF64}(I, N, p)
     r = p
     Z0 = zeros(ComplexF64, rmax, p, b); @views randn!(rng, Z0[1:r,:,:])
-    Z0f = zeros(ComplexF64, cd, b); pack!(Z0f, Z0, rmax, p, b)
+    Z0f = zeros(ComplexF64, r * p, b); pack!(Z0f, Z0, r, p, b)
     bn, _ = compact_block_qr!(Z0f, b); bn == b || error("Initial block breakdown")
-    unpack!(Z0, Z0f, rmax, p, b); @views G[:,:,1:b] .= Z0; Gf[:,1:b] .= Z0f
+    fill!(Z0, 0); unpack!(Z0, Z0f, r, p, b); @views G[1:r,:,1:b] .= Z0[1:r,:,:]
     tc = cache_block!(W, B, U, N, p, 1, r)
-    return CORKState(U, W, G, Gf, Hb, zeros(ComplexF64, rmax, p, b), zeros(ComplexF64, cd, b), zeros(ComplexF64, rmax, p, b), zeros(ComplexF64, cd, b), zeros(ComplexF64, mdim + b, b), zeros(ComplexF64, mdim + b, b), r, b, b, p, N, rmax, false, tc, 0.0, 0.0, 0.0, 0.0, 0)
+    return CORKState(U, W, G, Hb, zeros(ComplexF64, rmax, p, b), zeros(ComplexF64, rmax, p, b), zeros(ComplexF64, rmax * p, b), zeros(ComplexF64, mdim + b, b), zeros(ComplexF64, mdim + b, b), r, b, b, p, N, rmax, false, tc, 0.0, 0.0, 0.0, 0.0, 0)
 end
 
 """
@@ -557,13 +536,16 @@ function compute_tail!(S::CORKState, B::Matrix{ComplexF64}, F)::Nothing
     fill!(S.Z, 0)
     rn, tc, tl, tr, tp = block_apply!(S.Z, S.U, S.W, B, F, Gin, S.N, p, r, b)
     S.r = rn; S.cache += tc; S.lu += tl; S.rhs += tr; S.phys += tp
-    pack!(S.Zf, S.Z, S.rmax, p, b); fill!(S.H1, 0); fill!(S.H2, 0); t = time_ns()
-    compact_project_cgs2!(S.Zf, S.Gf, n, S.H1, S.H2)
-    bn, Rb = compact_block_qr!(S.Zf, b); bn == b || error("Block breakdown at n=$n: $bn/$b")
+    fill!(S.H1, 0); fill!(S.H2, 0); t = time_ns()
+    compact_project_cgs2!(S.Z, S.G, rn, n, p, S.H1, S.H2)
+    Zfa = @view S.Zf[1:rn * p,:]
+    pack!(Zfa, S.Z, rn, p, b)
+    bn, Rb = compact_block_qr!(Zfa, b); bn == b || error("Block breakdown at n=$n: $bn/$b")
+    fill!(S.Z, 0); unpack!(S.Z, Zfa, rn, p, b)
     @views S.Hb[1:n,cols] .= S.H1[1:n,:]
     @views S.Hb[n + 1:n + b,cols] .= Rb
     S.orth += (time_ns() - t) * 1e-9
-    copyto!(S.pendingGf, S.Zf); unpack!(S.pendingG, S.pendingGf, S.rmax, p, b)
+    copyto!(S.pendingG, S.Z)
     S.pending = true; S.napply += 1
     return nothing
 end
@@ -583,8 +565,7 @@ function promote_tail!(S::CORKState)::Nothing
     S.pending || error("No pending tail")
     n = S.n; b = S.b; mdim = size(S.Hb, 2)
     n + b <= mdim || error("Reached full CORK Krylov dimension m=$mdim for matrix size N=$(S.N)")
-    @views S.Gf[:,n + 1:n + b] .= S.pendingGf
-    @views S.G[:,:,n + 1:n + b] .= S.pendingG
+    @views S.G[1:S.r,:,n + 1:n + b] .= S.pendingG[1:S.r,:,:]
     S.n += b; S.pending = false
     return nothing
 end
