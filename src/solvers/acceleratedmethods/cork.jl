@@ -454,6 +454,7 @@ mutable struct CORKState
     rhs::Float64
     phys::Float64
     orth::Float64
+    napply::Int
     nproject::Int
     nreorth::Int
 end
