@@ -80,13 +80,13 @@
 #           │
 #           └─ adaptive_cork(...)               # Grow CORK until spectrum convergence
 #                │
-#                ├─ init_cork(...)              # Initialize persistent CORK state
+#                ├─ init_cork(...)              # Initialize  CORK state
 #                │    │
 #                │    ├─ initialize U           # Initial common physical basis
 #                │    ├─ initialize G           # Initial compact Arnoldi block
 #                │    └─ cache_block!(...)      # Cache Wⱼ = BⱼU
 #                │
-#                └─ for increasing m            # Extend one persistent factorization
+#                └─ for increasing m            # Extend one  factorization
 #                     │
 #                     ├─ extend!(...)            # Grow active Krylov dimension to m
 #                     │    │
@@ -179,7 +179,7 @@ function validate_polynomial!(solver::SweepBIMSolver, pts, P::CORKPolynomial, to
         Ad = construct_matrices(solver, pts, k; multithreaded = multithreaded)
         err = norm(Ap - Ad) / norm(Ad); worst = max(worst, err)
     end
-    worst > tol && throw(ArgumentError("Polynomial validation failed: worst relative error = $worst exceeds tolerance $tol. Try reducing the interval Rmax or increasing the polynomial degree p."))
+    worst > tol && throw(ArgumentError("Polynomial validation failed: worst relative error = $worst exceeds tolerance $tol. Try reducing the polynomial half-width or increasing the polynomial degree p."))
     return nothing
 end
 
@@ -238,19 +238,20 @@ end
 """
     compact_project!(Z::Array{ComplexF64,3}, G::Array{ComplexF64,3}, r::Int, n::Int, p::Int, H1::Matrix{ComplexF64}, H2::Matrix{ComplexF64}) -> Nothing
 
-Orthogonalize the active compact tensor `Z[1:r,1:p,:]` against the active
-compact Arnoldi basis `G[1:r,1:p,1:n]` by two-pass classical Gram-Schmidt.
+Orthogonalize the active compact tensor `Z[1:r,1:p,:]` against the first `n`
+compact Arnoldi vectors stored in `G` using two-pass classical Gram-Schmidt.
 
-The compact inner product is evaluated directly in tensor form,
-
-    H = Σⱼ GⱼᴴZⱼ,
-
-so inactive physical rows `r+1:rmax` are never processed and no padded
-flattened representation is required. On return `H1[1:n,:]` contains the
-accumulated projection coefficients from both CGS passes.
+## Arguments
+- `Z::Array{ComplexF64,3}`: Compact residual tensor, modified in place.
+- `G::Array{ComplexF64,3}`: Compact Arnoldi basis.
+- `r::Int`: Active physical rank.
+- `n::Int`: Number of active Arnoldi vectors.
+- `p::Int`: Number of compact polynomial blocks.
+- `H1::Matrix{ComplexF64}`: Workspace receiving the accumulated CGS2 projection coefficients.
+- `H2::Matrix{ComplexF64}`: Workspace for the second CGS projection.
 
 ## Returns
-- `Nothing`: `Z` and `H1` are modified in place.
+- `Nothing`: `Z` is orthogonalized in place and `H1[1:n,:]` contains the total projection coefficients.
 """
 function compact_project!(Z::Array{ComplexF64,3}, G::Array{ComplexF64,3}, r::Int, n::Int, p::Int, H1::Matrix{ComplexF64}, H2::Matrix{ComplexF64})::Nothing
     A = @view H1[1:n,:]; C = @view H2[1:n,:]
@@ -278,17 +279,25 @@ function compact_project!(Z::Array{ComplexF64,3}, G::Array{ComplexF64,3}, r::Int
 end
 
 """
-    compact_block_qr!(Z::Matrix{ComplexF64}, b::Int) -> Tuple{Int,Matrix{ComplexF64}}
+    compact_block_qr!(Z::AbstractMatrix{ComplexF64}, b::Int) -> Tuple{Int,Matrix{ComplexF64}}
 
-Compute the thin Householder QR factorization `Z₀ = Z*R` of a compact CORK
-block. The input matrix is overwritten by the orthonormal factor `Q`.
+Compute a thin Householder QR factorization of a compact CORK block,
+
+    Z₀ = QR,
+
+where `Z₀` denotes the input matrix. The first `b` orthonormal columns of
+`Q` overwrite `Z`, while the corresponding `b × b` upper-triangular factor
+`R` is returned. The numerical block rank is estimated from the diagonal of `R` using the
+threshold
+
+    tol = max(size(Z)...) * eps(Float64) * maximum(abs.(diag(R))).
 
 ## Arguments
-- `Z::Matrix{ComplexF64}`: Compact block, overwritten by the thin orthonormal factor `Q`.
-- `b::Int`: Block size.
+- `Z::AbstractMatrix{ComplexF64}`: Compact block with at least `b` columns and `b` rows; overwritten by the thin orthonormal factor `Q`.
+- `b::Int`: Block-Arnoldi block size.
 
 ## Returns
-- `Int`: Numerical block rank.
+- `Int`: Estimated numerical rank of the block.
 - `Matrix{ComplexF64}`: Upper-triangular `b × b` factor `R`.
 """
 function compact_block_qr!(Z::AbstractMatrix{ComplexF64}, b::Int)::Tuple{Int,Matrix{ComplexF64}}
@@ -314,6 +323,46 @@ end
     return nothing
 end
 
+"""
+    CORKState
+
+ state of the compact block-CORK iteration.
+
+The state stores the common physical basis `U`, cached coefficient actions
+`Wⱼ=BⱼU`, compact Arnoldi basis `G`, projected block-Hessenberg matrix `Hb`,
+the normalized pending Arnoldi tail, and all large scratch arrays required by
+the inverse-linearization action and compact orthogonalization.
+
+Only the first `r` columns of `U` and `W` and the first `r` rows of the
+physical compact coordinates are active. The physical storage capacity is
+`rmax=N`. The active compact Krylov dimension is `n`.
+
+The workspaces `γ`, `RHS`, `tmp`, `Y`, `Hphys`, `Hphys2`, and `Zf` are
+allocated once during initialization and reused by subsequent block
+applications.
+
+## Fields
+- `U`: Common physical CORK basis.
+- `W`: Vertically stacked cached actions `Wⱼ=BⱼU`.
+- `G`: Compact Arnoldi basis coordinates.
+- `Hb`: Projected block-Hessenberg matrix.
+- `pendingG`: Normalized Arnoldi tail awaiting promotion.
+- `Z`: Compact output/residual workspace.
+- `H1`, `H2`: Compact CGS2 projection workspaces.
+- `γ`: Chebyshev-recurrence workspace.
+- `RHS`, `tmp`, `Y`: Physical `N × b` workspaces for the inverse action.
+- `Hphys`, `Hphys2`: Physical-basis projection workspaces.
+- `Zf`: Packed compact-block workspace used by Householder QR.
+- `r`: Current physical basis rank.
+- `n`: Current compact Krylov dimension.
+- `b`: Block-Arnoldi block size.
+- `p`: Chebyshev polynomial degree and number of compact linearization blocks.
+- `N`: Physical Fredholm matrix dimension.
+- `rmax`: Maximum physical rank.
+- `pending`: Whether a normalized Arnoldi tail is currently available.
+- `cache`, `lu`, `rhs`, `phys`, `orth`: Accumulated diagnostic timings.
+- `napply`: Number of inverse-linearization block applications.
+"""
 mutable struct CORKState
     U::Matrix{ComplexF64}
     W::Matrix{ComplexF64}
@@ -346,45 +395,50 @@ mutable struct CORKState
 end
 
 """
-    block_apply!(Z::Array{ComplexF64,3}, U::Matrix{ComplexF64}, W::Matrix{ComplexF64}, B::Matrix{ComplexF64}, F, Gin, N::Int, p::Int, r::Int, b::Int)
+    block_apply!(S::CORKState, B::Matrix{ComplexF64}, F, Gin) -> Tuple{Float64,Float64,Float64,Float64}
 
-Apply one block of the inverse Chebyshev linearization at `t=0` in compact
-CORK form.
+Apply one block of the inverse Chebyshev linearization at the fixed shift
+`t=0` in compact CORK form.
 
-For `P(t)=Σⱼ₌₀ᵖBⱼTⱼ(t)`, the recurrence `Tⱼ₊₁+Tⱼ₋₁=2tTⱼ` gives a
-degree-`p` linearization. CORK represents each physical block by `zⱼ=Ugⱼ`
-with `U∈ℂᴺˣʳ` and caches `Wⱼ=BⱼU`.
+For
 
-For input blocks `x₀,...,xₚ₋₁`, the recurrence rows at `t=0` give
-`γ₀=0`, `γ₁=x₀`, `γⱼ₊₁=-γⱼ₋₁+2xⱼ`. The final row is
+    P(t) = Σⱼ₌₀ᵖ BⱼTⱼ(t),
 
-    Σⱼ₌₀ᵖ⁻³Bⱼzⱼ+(Bₚ₋₂-Bₚ)zₚ₋₂+Bₚ₋₁zₚ₋₁=-2tBₚzₚ₋₁.
+CORK represents every physical linearization block in the common basis `U`
+as `zⱼ=Ugⱼ` and caches the coefficient actions `Wⱼ=BⱼU`.
 
-Writing `zⱼ=Uγⱼ+Tⱼ(0)y` gives `P(0)y=rhs`, where
+For input compact blocks `x₀,...,xₚ₋₁`, the Chebyshev recurrence
 
-    rhs=-Σⱼ₌₀ᵖ⁻³Wⱼγⱼ-Wₚ₋₂γₚ₋₂+Wₚγₚ₋₂-Wₚ₋₁γₚ₋₁-2Wₚxₚ₋₁.
+    Tⱼ₊₁(t) + Tⱼ₋₁(t) = 2tTⱼ(t)
 
-The solved physical block is projected twice against `U`. Its orthogonal
-remainder is factorized by SVD, which detects new independent physical
-directions robustly in degenerate and nearly degenerate blocks. The number of
-new directions is capped by the remaining dimension of the physical space.
+gives, at the inverse-iteration shift `t=0`,
+
+    γ₀ = 0,
+    γ₁ = x₀,
+    γⱼ₊₁ = -γⱼ₋₁ + 2xⱼ.
+
+The physical correction `y` is obtained from the single fixed factorization
+of (check recurrences.jl)
+
+    P(0) = B₀-B₂+B₄-⋯
+
+by solving `P(0)y=rhs`. The solved block is projected twice against the
+current physical basis `U`. Any remaining component orthogonal to `U` is
+factorized by SVD, and numerically independent left singular vectors are
+appended to the physical basis. The corresponding new coefficient actions
+`BⱼU` are then cached.
 
 ## Arguments
-- `Z::Array{ComplexF64,3}`: Preallocated output compact tensor.
-- `U::Matrix{ComplexF64}`: Common physical basis.
-- `W::Matrix{ComplexF64}`: Cached vertically stacked actions `BⱼU`.
-- `B::Matrix{ComplexF64}`: Vertically stacked Chebyshev coefficients.
-- `F`: LU factorization of `P(0)`.
-- `Gin`: Input compact degree coordinates.
-- `N::Int`: Physical Fredholm matrix dimension.
-- `p::Int`: Chebyshev degree and number of linearization blocks.
-- `r::Int`: Current physical rank.
-- `b::Int`: Block-Arnoldi block size.
+- `S::CORKState`: CORK state containing the physical basis, coefficient cache, output tensor, and workspaces.
+- `B::Matrix{ComplexF64}`: Vertically stacked Chebyshev coefficients `[B₀;...;Bₚ]`.
+- `F`: LU factorization of the fixed shift matrix `P(0)`.
+- `Gin`: Compact coordinates of the input Arnoldi block.
 
 ## Returns
-- `Tuple{Int,Float64,Float64,Float64,Float64}`: Updated physical rank and
-  times for coefficient caching, LU solution, RHS assembly, and physical-basis
-  expansion.
+- `Float64`: Time spent caching coefficient actions for newly added physical directions.
+- `Float64`: Time spent solving with the LU factorization of `P(0)`.
+- `Float64`: Time spent assembling the physical right-hand side.
+- `Float64`: Time spent projecting and expanding the physical basis.
 """
 function block_apply!(S::CORKState, B::Matrix{ComplexF64}, F, Gin)
     N = S.N; p = S.p; r = S.r; b = S.b
@@ -455,17 +509,28 @@ end
 """
     init_cork(B::Matrix{ComplexF64}, p::Int, N::Int; b::Int=10) -> CORKState
 
-Initialize the common physical basis, coefficient cache, and first normalized
-compact block-Arnoldi block.
+Initialize the compact block-CORK state.
+
+A deterministic `p`-dimensional orthonormal physical basis `U` is constructed
+from a seeded random matrix, and the coefficient actions
+
+    Wⱼ = BⱼU,    j=0,...,p,
+
+are cached. A seeded random compact block is then generated in the initial
+physical basis, normalized by Householder QR, and stored as the first `b`
+compact Arnoldi vectors.
+
+The maximum block-compatible Krylov dimension is mdim = floor(N/b)b,
+and the physical rank is allowed to grow up to `N`.
 
 ## Arguments
-- `B::Matrix{ComplexF64}`: Vertically stacked Chebyshev coefficients.
+- `B::Matrix{ComplexF64}`: Vertically stacked Chebyshev coefficients `[B₀;...;Bₚ]`.
 - `p::Int`: Chebyshev polynomial degree.
-- `N::Int`: Physical matrix dimension.
+- `N::Int`: Physical Fredholm matrix dimension.
 - `b::Int`: Block-Arnoldi block size.
 
 ## Returns
-- `CORKState`: Initialized persistent block-CORK state.
+- `CORKState`: Initialized  block-CORK state with active Krylov dimension `b` and initial physical rank `p`.
 """
 function init_cork(B::Matrix{ComplexF64}, p::Int, N::Int; b::Int=10)::CORKState
     p <= N || error("Polynomial degree p=$p exceeds physical matrix dimension N=$N")
@@ -496,17 +561,27 @@ end
 """
     compute_tail!(S::CORKState, B::Matrix{ComplexF64}, F) -> Nothing
 
-Compute the next block-Arnoldi residual without promoting it into the active
-basis. The residual is retained so it can first be used for Ritz convergence
-and subsequently promoted without recomputation.
+Compute and normalize the next block-Arnoldi residual without promoting it to
+the active compact basis.
+
+The inverse Chebyshev linearization is applied to the current final Arnoldi
+block by `block_apply!`. The resulting compact block is orthogonalized against
+the active basis by two-pass classical Gram-Schmidt and normalized by
+Householder QR. The projection coefficients and QR factor are written to the
+corresponding block column of `S.Hb`.
+
+The normalized residual is retained in `S.pendingG` and marked as pending.
+This allows it to be used as the Arnoldi tail in Ritz residual estimates
+before being promoted by `promote_tail!`, avoiding recomputation of the
+inverse-linearization action.
 
 ## Arguments
-- `S::CORKState`: Persistent compact block-CORK state.
+- `S::CORKState`:  compact block-CORK state.
 - `B::Matrix{ComplexF64}`: Vertically stacked Chebyshev coefficients.
 - `F`: LU factorization of `P(0)`.
 
 ## Returns
-- `Nothing`: `S` is updated with a normalized pending Arnoldi tail.
+- `Nothing`: Updates `S.Hb`, `S.pendingG`, timing counters, and the pending-tail state in place.
 """
 function compute_tail!(S::CORKState, B::Matrix{ComplexF64}, F)::Nothing
     S.pending && return nothing
@@ -532,7 +607,7 @@ end
 Promote the normalized pending residual into the active compact Arnoldi basis.
 
 ## Arguments
-- `S::CORKState`: Persistent state containing a pending residual block.
+- `S::CORKState`:  state containing a pending residual block.
 
 ## Returns
 - `Nothing`: The active dimension increases by `S.b`.
@@ -550,11 +625,11 @@ end
 """
     extend!(S::CORKState, B::Matrix{ComplexF64}, F, m::Int) -> Nothing
 
-Extend the persistent factorization to compact Krylov dimension `m`, retaining
+Extend the  factorization to compact Krylov dimension `m`, retaining
 all existing Arnoldi vectors and leaving a fresh residual tail for Ritz tests.
 
 ## Arguments
-- `S::CORKState`: Persistent CORK state.
+- `S::CORKState`:  CORK state.
 - `B::Matrix{ComplexF64}`: Vertically stacked Chebyshev coefficients.
 - `F`: LU factorization of `P(0)`.
 - `m::Int`: Requested compact Krylov dimension.
@@ -595,7 +670,7 @@ The returned Ritz-vector columns remain in exactly the same order as the
 returned roots.
 
 ## Arguments
-- `S::CORKState`: Persistent CORK state at dimension `m`.
+- `S::CORKState`:  CORK state at dimension `m`.
 - `k0::Float64`: Physical expansion center.
 - `Δpoly::Float64`: Guarded polynomial half-width.
 - `m::Int`: Active compact Krylov dimension.
@@ -639,7 +714,7 @@ basis. Each reconstructed vector is normalized to unit Euclidean norm.
 ...
 
 ## Arguments
-- `S::CORKState`: Final persistent CORK state.
+- `S::CORKState`: Final  CORK state.
 - `V::Matrix{ComplexF64}`: Projected Ritz vectors, one column per accepted root.
 - `m::Int`: Final compact Krylov dimension.
 
@@ -666,43 +741,51 @@ end
 ################################################################################
 
 """
-    adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ::Float64, Δpoly::Float64, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=2, imag_tol::Float64=1e-7, edge_tol::Float64=1e-8, res_tol::Float64=1e-8, stable_tol::Float64=1e-8, imag_search_tol::Float64=1e-4, eigenvectors::Bool=false, verbose::Bool=false)
+    adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ::Float64, Δpoly::Float64, b::Int=10, mstart::Int=200, mstep::Int=100, stable_checks::Int=2, imag_tol::Float64=1e-7, edge_tol::Float64=1e-8, res_tol::Float64=1e-8, stable_tol::Float64=1e-8, imag_search_tol::Float64=1e-4, eigenvectors::Bool=false, verbose::Bool=false)
 
-Grow one persistent CORK factorization until the individually retained Ritz
-spectrum in `[k₀-Δ,k₀+Δ]` is stable for `stable_checks` consecutive Krylov
-dimensions and its leftmost and rightmost discovered roots satisfy the strict
-physical tolerances.
+Grow one  block-CORK factorization until the accepted spectrum in
+the requested interval `[k₀-Δ,k₀+Δ]` is stable and both requested spectral
+edges are represented by converged Ritz roots.
 
-Every projected Ritz eigenvalue is treated independently. Nearby Ritz values
-are never merged, averaged, deduplicated, or expanded according to an inferred
-multiplicity. If `eigenvectors=true`, physical Fredholm eigenvectors are
-reconstructed once from the final accepted projected Ritz vectors after
-convergence.
+At each Krylov dimension, projected inverse-linearization eigenvalues are
+mapped by
+
+    μ → t=1/μ → k=k₀+Δpoly*t.
+
+Roots in the requested physical interval are accepted only when their
+imaginary parts and projected CORK residual indicators satisfy `imag_tol` and
+`res_tol`. The accepted spectrum must remain unchanged to within `stable_tol`
+for `stable_checks` consecutive Krylov dimensions, and the leftmost and
+rightmost requested Ritz roots must independently satisfy the same physical
+convergence criteria. The Krylov dimension grows in increments of `mstep`
+up to the largest block-compatible dimension
+
+    mdim = floor(N/b)b.
 
 ## Arguments
-- `B::Matrix{ComplexF64}`: Vertically stacked Chebyshev coefficients.
+- `B::Matrix{ComplexF64}`: Vertically stacked Chebyshev coefficients `[B₀;...;Bₚ]`.
 - `F`: LU factorization of `P(0)`.
 - `p::Int`: Chebyshev polynomial degree.
-- `N::Int`: Physical matrix dimension.
-- `k0::Float64`: Requested interval center.
-- `Δ::Float64`: Requested interval half-width.
+- `N::Int`: Physical Fredholm matrix dimension.
+- `k0::Float64`: Center of the requested physical interval.
+- `Δ::Float64`: Half-width of the requested physical interval.
 - `Δpoly::Float64`: Guarded polynomial half-width.
 - `b::Int`: Block-Arnoldi block size.
 - `mstart::Int`: Initial compact Krylov dimension.
-- `mstep::Int`: Krylov-dimension increment.
-- `stable_checks::Int`: Required consecutive stable spectra.
-- `imag_tol::Float64`: Strict physical imaginary-part tolerance.
-- `edge_tol::Float64`: Normalized guarded-interval tolerance.
-- `res_tol::Float64`: Ritz residual tolerance.
-- `stable_tol::Float64`: Maximum accepted root drift.
-- `imag_search_tol::Float64`: Loose imaginary discovery strip.
-- `eigenvectors::Bool`: Whether to reconstruct final physical Fredholm eigenvectors.
-- `verbose::Bool`: Whether to enable verbose CORK diagnostics.
+- `mstep::Int`: Krylov-dimension increment between convergence tests.
+- `stable_checks::Int`: Number of consecutive stable spectra required.
+- `imag_tol::Float64`: Final tolerance on `|Im(k)|`.
+- `edge_tol::Float64`: Normalized tolerance used when extracting roots from the guarded polynomial interval.
+- `res_tol::Float64`: Maximum projected CORK residual indicator for an accepted root.
+- `stable_tol::Float64`: Maximum root displacement between consecutive accepted spectra.
+- `imag_search_tol::Float64`: Loose imaginary strip used during Ritz discovery.
+- `eigenvectors::Bool`: Whether to reconstruct physical Fredholm vectors after convergence.
+- `verbose::Bool`: Whether to print convergence diagnostics.
 
 ## Returns
-- `Tuple`: Final state, accepted individual spectrum, optional physical
-  eigenvector matrix, all requested Ritz roots, all guarded Ritz roots,
-  requested edge roots, edge acceptance flags, and final Krylov dimension.
+- `Tuple`: Final CORK state, accepted roots, optional physical vectors,
+  requested Ritz roots, all guarded Ritz roots, requested edge roots, edge
+  convergence flags, and final compact Krylov dimension.
 """
 function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ::Float64, Δpoly::Float64, b::Int = 10, mstart::Int = 200, mstep::Int = 100, stable_checks::Int = 2, imag_tol::Float64 = 1e-7, edge_tol::Float64 = 1e-8, res_tol::Float64 = 1e-8, stable_tol::Float64 = 1e-8, imag_search_tol::Float64 = 1e-4, eigenvectors::Bool = false, verbose::Bool = false)
     mstart % b == 0 || error("mstart must be divisible by block size")
@@ -760,44 +843,50 @@ struct CORKSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
 end
 
 """
-    CORKSolver(kernel::K; p::Int=16, guard::Real=0.05, nlevels::Int=200, Rmax::Real=0.8, b::Int=10, mstart::Int=30*b, mstep::Int=10*b, stable_checks::Int=1, imag_tol::Real=1e-8, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, eigenvectors::Bool=false, validate::Bool=false, verbose::Bool=false, taylor_tol::Real=1e-10) where {K<:SweepBIMSolver} 
+    CORKSolver(kernel::K; p::Int=16, guard::Real=0.05, nlevels::Int=200, Rmax::Real=0.8, b::Int=10, mstart::Int=30*b, mstep::Int=10*b, stable_checks::Int=1, imag_tol::Real=1e-8, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, eigenvectors::Bool=false, validate::Bool=false, verbose::Bool=false, taylor_tol::Real=1e-10) where {K<:SweepBIMSolver}
 
-Construct a CORK solver for a BIM Fredholm nonlinear eigenvalue problem.
+Construct a Chebyshev-CORK eigensolver for a BIM Fredholm nonlinear
+eigenvalue problem `A(k)u=0`.
 
-For full-spectrum computations, `nlevels` is the target number of physical
-levels in each requested CORK window and `Rmax` is the maximum requested
-half-width `Δ`. The Chebyshev polynomial is constructed on
+For a requested physical interval with center `k₀` and half-width `Δ`, the
+BIM operator is approximated by a degree-`p` Chebyshev matrix polynomial on
+the guarded interval
 
-    Δpoly = (1 + guard)Δ,
+    Δpoly = (1 + guard)Δ.
 
-so that the polynomial approximation and Ritz search extend beyond the
-requested spectral window.
+CORK applies a compact block-Arnoldi iteration to the inverse Chebyshev
+linearization at `t=0`, reusing a single LU factorization of `P(0)`. The
+Krylov dimension is increased adaptively until the accepted spectrum is
+stable and the requested interval edges contain converged Ritz roots.
+
+For multi-window spectrum calculations, `nlevels` controls the target number
+of physical levels per Weyl window and `Rmax` limits the requested half-width
+of each window.
 
 ## Arguments
-- `kernel::K`: BIM kernel used to construct the Fredholm operator.
+- `kernel::K`: DLP, CFIE, or composite BIM solver defining the Fredholm operator.
 
 ## Keyword Arguments
-- `p::Int=16`: Chebyshev polynomial degree.
+- `p::Int=16`: Degree of the Chebyshev matrix polynomial.
 - `guard::Real=0.05`: Relative enlargement of the requested interval used for polynomial construction and Ritz discovery.
-- `nlevels::Int=200`: Target number of physical levels per window.
-- `Rmax::Real=0.8`: Maximum requested CORK half-width `Δ`.
-- `b::Int=10`: CORK block size.
-- `mstart::Int=30*b`: Initial Krylov dimension.
-- `mstep::Int=10*b`: Krylov-dimension increment between convergence checks.
-- `maxdim::Int=200*b`: Maximum Krylov dimension.
-- `stable_checks::Int=1`: Number of consecutive stable Ritz checks required.
-- `imag_tol::Real=1e-8`: Final imaginary-part tolerance in physical `k` units.
-- `edge_tol::Real=1e-8`: Normalized guarded-interval Ritz extraction tolerance.
-- `res_tol::Real=1e-10`: Ritz residual tolerance.
-- `stable_tol::Real=1e-9`: Spectrum-stability tolerance.
-- `imag_search_tol::Real=1e-4`: Loose imaginary discovery strip used during Ritz extraction.
-- `eigenvectors::Bool=false`: Whether to reconstruct physical eigenvectors. Enabling this increases memory usage and computational cost and computational cost.
-- `validate::Bool=false`: Whether to validate the Chebyshev approximation during individual CORK solves.
-- `verbose::Bool=false`: Whether to print detailed CORK convergence diagnostics.
-- `taylor_tol::Real=1e-10`: Relative tolerance used for Chebyshev-polynomial validation.
+- `nlevels::Int=200`: Target number of physical levels per spectral window.
+- `Rmax::Real=0.8`: Maximum requested half-width `Δ` of a spectral window.
+- `b::Int=10`: Block-Arnoldi block size.
+- `mstart::Int=30*b`: Initial compact Krylov dimension.
+- `mstep::Int=10*b`: Krylov-dimension increment between convergence tests.
+- `stable_checks::Int=1`: Number of consecutive stable accepted spectra required.
+- `imag_tol::Real=1e-8`: Final tolerance on `|Im(k)|` for accepted roots.
+- `edge_tol::Real=1e-8`: Normalized tolerance used when extracting Ritz roots from the guarded polynomial interval.
+- `res_tol::Real=1e-10`: Maximum projected CORK residual indicator for accepted roots.
+- `stable_tol::Real=1e-9`: Maximum root displacement allowed between consecutive accepted spectra.
+- `imag_search_tol::Real=1e-4`: Loose imaginary strip used during Ritz discovery.
+- `eigenvectors::Bool=false`: Whether ordinary solve calls also reconstruct physical Fredholm vectors internally.
+- `validate::Bool=false`: Whether to compare the Chebyshev polynomial with directly constructed BIM matrices before the CORK iteration.
+- `verbose::Bool=false`: Whether to print detailed polynomial and CORK convergence diagnostics.
+- `taylor_tol::Real=1e-10`: Maximum relative polynomial-validation error when `validate=true`.
 
 ## Returns
-- `CORKSolver`: Configured CORK solver.
+- `CORKSolver`: Configured Chebyshev-CORK solver.
 """
 function CORKSolver(kernel::K; p::Int=16, guard::Real=0.05, nlevels::Int=200, Rmax::Real=0.8, b::Int=10, mstart::Int=30*b, mstep::Int=10*b, stable_checks::Int=1, imag_tol::Real=1e-8, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, eigenvectors::Bool=false, validate::Bool=false, verbose::Bool=false, taylor_tol::Real=1e-10) where {K<:SweepBIMSolver} 
     T = _bim_numeric_type(kernel)
@@ -817,23 +906,22 @@ evaluate_points(solver::CORKSolver, billiard::Bi, k) where {Bi<:AbsBilliard} = e
 @inline _cork_kernel_name(solver)::String = solver isa DoubleLayerPotentialSolver ? "DLP" : solver isa CombinedFieldIntegralEquationSolver ? "CFIE" : solver isa CompositeBIMSolver ? "CompositeBIM" : string(typeof(solver))
 
 """
-    _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=true, eigenvectors::Bool=false)
+    _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=true, eigenvectors::Bool=solver.eigenvectors)
 
-Execute the complete CORK pipeline on `[k₀-dk/2,k₀+dk/2]`. If
-`eigenvectors=true`, reconstruct the physical Fredholm eigenvectors from the
-final accepted projected Ritz vectors without additional Fredholm solves.
+Execute the complete Chebyshev-CORK pipeline on the interval `[k₀-dk/2,k₀+dk/2]`.
 
 ## Arguments
 - `solver::CORKSolver`: Configured CORK eigensolver.
 - `pts`: Boundary discretization at the expansion center.
-- `k0`: Requested interval center.
-- `dk`: Full requested spectral width.
-- `multithreaded::Bool`: Whether polynomial assembly uses Julia threads.
+- `k0`: Center of the requested physical interval.
+- `dk`: Full width of the requested physical interval.
+- `multithreaded::Bool`: Whether polynomial assembly and direct validation matrices use Julia threading.
+- `eigenvectors::Bool`: Whether to reconstruct final physical Fredholm vectors.
 
 ## Returns
-- `Tuple`: Polynomial, final state, accepted spectrum, optional physical
-  eigenvector matrix, requested Ritz roots, all guarded Ritz roots, requested
-  edge roots, edge acceptance flags, and final Krylov dimension.
+- `Tuple`: Chebyshev polynomial, final CORK state, accepted roots, optional
+  physical vectors, requested Ritz roots, all guarded Ritz roots, requested
+  edge roots, edge convergence flags, and final compact Krylov dimension.
 """
 function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=true, eigenvectors::Bool=solver.eigenvectors)
     k0f = Float64(k0); Δ = Float64(dk) / 2
@@ -863,18 +951,19 @@ end
 """
     solve(solver::CORKSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true)
 
-Compute all accepted roots in `[k₀-dk/2,k₀+dk/2]`, repeating degenerate
-roots according to their inferred physical multiplicity.
+Compute the accepted CORK roots in `[k₀-dk/2,k₀+dk/2]` using an existing
+boundary discretization.
 
 ## Arguments
 - `solver::CORKSolver`: Configured CORK eigensolver.
 - `pts::BoundaryPoints`: Boundary discretization at the expansion center.
-- `k0`: Requested interval center.
-- `dk`: Full requested spectral width.
+- `k0`: Center of the requested physical interval.
+- `dk`: Full width of the requested physical interval.
 - `multithreaded::Bool`: Whether polynomial assembly uses Julia threads.
 
 ## Returns
-- `Tuple{Vector{ComplexF64},Vector{Float64}}`: wavenumbers and their CORK residual estimates.
+- `Vector{ComplexF64}`: Accepted physical wavenumbers.
+- `Vector{Float64}`: Corresponding projected CORK residual indicators.
 """
 function solve(solver::CORKSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true)
     P, S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = _cork_solve_core(solver, pts, k0, dk; multithreaded = multithreaded)
@@ -885,18 +974,20 @@ end
 """
     solve_vectors(solver::CORKSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true)
 
-Compute all accepted roots and their corresponding physical Fredholm
-eigenvectors in `[k₀-dk/2,k₀+dk/2]`.
+Compute the accepted CORK roots and reconstruct their corresponding physical
+Fredholm vectors in `[k₀-dk/2,k₀+dk/2]`.
 
 ## Arguments
 - `solver::CORKSolver`: Configured CORK eigensolver.
 - `pts::BoundaryPoints`: Boundary discretization at the expansion center.
-- `k0`: Requested interval center.
-- `dk`: Full requested spectral width.
+- `k0`: Center of the requested physical interval.
+- `dk`: Full width of the requested physical interval.
 - `multithreaded::Bool`: Whether polynomial assembly uses Julia threads.
 
 ## Returns
-- `Tuple{Vector{ComplexF64},Vector{Float64},Matrix{ComplexF64}}`: wavenumbers, their CORK residual estimates, and the corresponding eigenvectors.
+- `Vector{ComplexF64}`: Accepted physical wavenumbers.
+- `Vector{Float64}`: Corresponding projected CORK residual indicators.
+- `Matrix{ComplexF64}`: Corresponding normalized physical Fredholm vectors.
 """
 function solve_vectors(solver::CORKSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true)
     P, S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = _cork_solve_core(solver, pts, k0, dk; multithreaded=multithreaded, eigenvectors=true)
