@@ -69,7 +69,7 @@
 #           │       # The functions above live in `recurrences.jl` and return
 #           │       # CORKPolynomial(B,k0,Δpoly,p,N).
 #           │
-#           ├─ validate_polynomial(...)       # Compare P(t) with direct BIM matrices
+#           ├─ validate_polynomial!(...)       # Compare P(t) with direct BIM matrices
 #           │                                  # when `validate=true`
 #           │
 #           ├─ get_A0(B,N,p)                  # Evaluate P(0)=B₀-B₂+B₄-⋯
@@ -159,34 +159,32 @@ function evaluate_cork_polynomial(P::CORKPolynomial, t::Real)::Matrix{ComplexF64
 end
 
 """
-    validate_polynomial(solver::SweepBIMSolver, pts, P::CORKPolynomial; nsample::Int=5, multithreaded::Bool=true) -> Float64
+    validate_polynomial!(solver::SweepBIMSolver, pts, P::CORKPolynomial, tol::Real; nsample::Int=5, multithreaded::Bool=true) -> Nothing
 
-Validate the Chebyshev approximation against directly constructed BIM
-Fredholm matrices. The reported relative error is
-`‖P(t)-A(k₀+Δt)‖/‖A(k₀+Δt)‖`. This is basically to check if the bounds of
-the interval are accurate enough.
+Validate the Chebyshev approximation against directly constructed BIM Fredholm matrices.
+The reported relative error is `‖P(t)-A(k₀+Δt)‖/‖A(k₀+Δt)‖`. 
+This is basically to check if the bounds of the interval are accurate enough.
 
 ## Arguments
 - `solver::SweepBIMSolver`: BIM solver defining the direct Fredholm matrix.
 - `pts`: Boundary discretization used to construct the polynomial.
 - `P::CORKPolynomial`: Chebyshev polynomial to validate.
+- `tol::Real`: Tolerance for the worst relative error.
 - `nsample::Int`: Number of sample points in `[-1,1]`.
 - `multithreaded::Bool`: Whether direct matrix construction uses threading.
 
 ## Returns
-- `Float64`: Maximum relative matrix error over all sample points.
+- `Nothing`: Returns `nothing` if the polynomial validation passes.
 """
-function validate_polynomial(solver::SweepBIMSolver, pts, P::CORKPolynomial; nsample::Int=5, multithreaded::Bool=true)::Float64
+function validate_polynomial!(solver::SweepBIMSolver, pts, P::CORKPolynomial, tol::Real; nsample::Int=5, multithreaded::Bool=true)::Nothing
     ts = collect(range(-1.0, 1.0, length = nsample)); worst = 0.0
-    println("\nPOLYNOMIAL VALIDATION\n", "-"^104)
     for t in ts
         k = P.k0 + P.Δ * t; Ap = evaluate_cork_polynomial(P, t)
         Ad = construct_matrices(solver, pts, k; multithreaded = multithreaded)
         err = norm(Ap - Ad) / norm(Ad); worst = max(worst, err)
-        @printf("t=%+8.4f  k=%14.8f  relative error=%.3e\n", t, k, err)
     end
-    @printf("worst relative error = %.3e\n", worst)
-    return worst
+    worst > tol && throw(ArgumentError("Polynomial validation failed: worst relative error = $worst exceeds tolerance $tol"))
+    return nothing
 end
 
 
@@ -802,6 +800,7 @@ struct CORKSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
     eigenvectors::Bool
     validate::Bool
     verbose::Bool
+    taylor_tol::T
 end
 
 """
@@ -841,7 +840,7 @@ Ritz-discovery range outside the requested interval.
 ## Returns
 - `CORKSolver`: Configured CORK solver.
 """
-function CORKSolver(kernel::K; p::Int=14, guard::Real=0.15, nlevels::Int=200, Rmax::Real=0.8, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=1, imag_tol::Real=1e-7, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, seed::Int=123, eigenvectors::Bool=false, validate::Bool=true, verbose::Bool=false) where {K<:SweepBIMSolver}
+function CORKSolver(kernel::K; p::Int=14, guard::Real=0.15, nlevels::Int=200, Rmax::Real=0.8, b::Int=10, mstart::Int=200, mstep::Int=100, maxdim::Int=1600, stable_checks::Int=1, imag_tol::Real=1e-7, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, seed::Int=123, eigenvectors::Bool=false, validate::Bool=true, verbose::Bool=false, taylor_tol::Real=1e-9) where {K<:SweepBIMSolver}
     T = _bim_numeric_type(kernel)
     T === Float64 || throw(ArgumentError("CORKSolver currently requires a Float64 BIM kernel"))
     p >= 2 || throw(ArgumentError("p must be at least 2; received p=$p"))
@@ -850,12 +849,13 @@ function CORKSolver(kernel::K; p::Int=14, guard::Real=0.15, nlevels::Int=200, Rm
     b > 0 || throw(ArgumentError("b must be positive; received b=$b"))
     mstart > 0 || throw(ArgumentError("mstart must be positive; received mstart=$mstart"))
     mstep > 0 || throw(ArgumentError("mstep must be positive; received mstep=$mstep"))
+    taylor_tol > 0 || throw(ArgumentError("taylor_tol must be positive; received taylor_tol=$taylor_tol"))
     maxdim >= mstart || throw(ArgumentError("maxdim must satisfy maxdim >= mstart"))
     mstart % b == 0 || throw(ArgumentError("mstart must be divisible by b"))
     mstep % b == 0 || throw(ArgumentError("mstep must be divisible by b"))
     maxdim % b == 0 || throw(ArgumentError("maxdim must be divisible by b"))
     stable_checks > 0 || throw(ArgumentError("stable_checks must be positive"))
-    return CORKSolver{T,K}(kernel,p,T(guard),nlevels,T(Rmax),b,mstart,mstep,maxdim,stable_checks,T(imag_tol),T(edge_tol),T(res_tol),T(stable_tol),T(imag_search_tol),seed,eigenvectors,validate,verbose)
+    return CORKSolver{T,K}(kernel,p,T(guard),nlevels,T(Rmax),b,mstart,mstep,maxdim,stable_checks,T(imag_tol),T(edge_tol),T(res_tol),T(stable_tol),T(imag_search_tol),seed,eigenvectors,validate,verbose,T(taylor_tol))
 end
 
 _bim_numeric_type(::CORKSolver{T}) where {T} = T
@@ -899,7 +899,7 @@ function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=t
         @printf("CORK matrix size     = %d\nB build              = %.6f s\nB memory             = %.3f MiB\n", P.N, tbuild, Base.summarysize(P.B) / 2^20)
         solver.kernel.symmetry !== nothing && @printf("dimension reduction  = %.3fx\n", length(pts.xy) / P.N)
     end
-    solver.validate && validate_polynomial(solver.kernel, pts, P; multithreaded = multithreaded)
+    solver.validate && validate_polynomial!(solver.kernel, pts, P, solver.taylor_tol; multithreaded = multithreaded)
     t = time_ns(); A0 = get_A0(P.B, P.N, solver.p); ta0 = (time_ns() - t) * 1e-9
     F = nothing; t = time_ns()
     @blas_multi_then_1 MAX_BLAS_THREADS begin
@@ -948,7 +948,7 @@ Compute all accepted roots and their corresponding eigenvectors (smallest singul
 ## Returns
 - `Tuple{Vector{ComplexF64},Vector{Float64},Matrix{ComplexF64}}`: wavenumbers, their CORK residual estimates, and the corresponding eigenvectors.
 """
-function solve_vectors(solver::CORKSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true) where {Bi<:AbsBilliard}
+function solve_vectors(solver::CORKSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true)
     P, S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = _cork_solve_core(solver, pts, k0, dk; multithreaded = multithreaded)
     λ = ComplexF64[complex(x[1], x[2]) for x in ks]; ts = Float64[x[3] for x in ks]
     return λ, ts, Ψ

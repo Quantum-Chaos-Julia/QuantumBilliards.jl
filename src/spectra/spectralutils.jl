@@ -623,21 +623,27 @@ once.
 ## Returns
 - `SpectralData`: Complete sorted CORK spectrum over `[k1,k2]`. `ten` contains the CORK residual associated with each retained root and `control=false` because no overlap merge is required.
 """
-function compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; multithreaded::Bool=true) where {Bi<:AbsBilliard}
-    T = _bim_numeric_type(solver); k1T=T(k1); k2T=T(k2); k1T<k2T || throw(ArgumentError("require k1<k2"))
+function compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; multithreaded::Bool = true) where {Bi<:AbsBilliard}
+    T = _bim_numeric_type(solver); k1T = T(k1); k2T = T(k2); k1T < k2T || throw(ArgumentError("require k1 < k2"))
     fundamental = solver.kernel.symmetry !== nothing
-    intervals= plan_weyl_windows(billiard, k1T, k2T; m=solver.nlevels,Rmax=solver.Rmax,fundamental=fundamental)
+    intervals = plan_weyl_windows(billiard, k1T, k2T; m = solver.nlevels, Rmax = solver.Rmax, fundamental = fundamental)
     isempty(intervals) && throw(ArgumentError("Spectrum interval [$k1,$k2] contains no Weyl windows"))
-    nw=length(intervals); ks_all=Complex{T}[]; tens_all=T[]
-    @showprogress for i=1:nw
+    check_indices = unique(round.(Int, range(1, length(intervals), length = min(5, length(intervals)))))
+    for i in check_indices # Validate a few representative Weyl windows
+        a, b = intervals[i]; k0 = (a + b) / 2; Δpoly = (1 + solver.guard) * (b - a) / 2
+        pts = evaluate_points(solver, billiard, k0)
+        P, _ = build_cork_polynomial(solver.kernel, pts, Float64(k0), Float64(Δpoly), solver.p; multithreaded = multithreaded)
+        validate_polynomial!(solver.kernel, pts, P, solver.taylor_tol; multithreaded = multithreaded)
+    end
+    nw = length(intervals); ks_all = Complex{T}[]; tens_all = T[]
+    @showprogress for i = 1:nw
         a, b = intervals[i]; k0 = (a + b) / 2; dk = b - a
-        ks, tens=solve_spectrum(solver, billiard, k0, dk; multithreaded)
-        last_window= i==nw
+        ks, tens = solve_spectrum(solver, billiard, k0, dk; multithreaded = multithreaded)
+        last_window = i == nw
         @inbounds for j in eachindex(ks)
-            x = real(ks[j])
-            owned = last_window ? a<=x<=b : a<=x<b
+            x = real(ks[j]); owned = last_window ? a <= x <= b : a <= x < b
             owned || continue
-            push!(ks_all,ks[j]); push!(tens_all,tens[j])
+            push!(ks_all, ks[j]); push!(tens_all, tens[j])
         end
     end
     control = fill(false, length(ks_all))
