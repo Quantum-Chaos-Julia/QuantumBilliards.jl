@@ -1,7 +1,3 @@
-#include("../abstracttypes.jl")
-#include("../utils/billiardutils.jl")
-#include("../utils/typeutils.jl")
-
 """
     BasisState{K,T,Ba} <: AbsState
 
