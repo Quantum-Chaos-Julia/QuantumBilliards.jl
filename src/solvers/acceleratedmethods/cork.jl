@@ -291,13 +291,13 @@ block. The input matrix is overwritten by the orthonormal factor `Q`.
 - `Int`: Numerical block rank.
 - `Matrix{ComplexF64}`: Upper-triangular `b × b` factor `R`.
 """
-function compact_block_qr!(Z::Matrix{ComplexF64}, b::Int)::Tuple{Int,Matrix{ComplexF64}}
+function compact_block_qr!(Z::AbstractMatrix{ComplexF64}, b::Int)::Tuple{Int,Matrix{ComplexF64}}
     F = qr!(Z)
     R = Matrix(F.R)[1:b,1:b]
     Q = Matrix(F.Q[:,1:b])
-    copyto!(Z, Q)
+    copyto!(Z,Q)
     d = abs.(diag(R)); tol = maximum(size(Z)) * eps(Float64) * maximum(d)
-    return count(>(tol), d), R
+    return count(>(tol),d),R
 end
 
 @inline function pack!(Zf::AbstractMatrix{ComplexF64}, Z::Array{ComplexF64,3}, r::Int, p::Int, b::Int)::Nothing
