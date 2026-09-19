@@ -291,13 +291,13 @@ block. The input matrix is overwritten by the orthonormal factor `Q`.
 - `Int`: Numerical block rank.
 - `Matrix{ComplexF64}`: Upper-triangular `b × b` factor `R`.
 """
-function compact_block_qr!(Z::AbstractMatrix{ComplexF64}, b::Int)::Tuple{Int,Matrix{ComplexF64}}
+function compact_block_qr!(Z::Matrix{ComplexF64}, b::Int)::Tuple{Int,Matrix{ComplexF64}}
     F = qr!(Z)
     R = Matrix(F.R)[1:b,1:b]
     Q = Matrix(F.Q[:,1:b])
-    copyto!(Z,Q)
+    copyto!(Z, Q)
     d = abs.(diag(R)); tol = maximum(size(Z)) * eps(Float64) * maximum(d)
-    return count(>(tol),d),R
+    return count(>(tol), d), R
 end
 
 @inline function pack!(Zf::AbstractMatrix{ComplexF64}, Z::Array{ComplexF64,3}, r::Int, p::Int, b::Int)::Nothing
@@ -312,38 +312,6 @@ end
         Z[i,j,c] = Zf[(j - 1) * r + i,c]
     end
     return nothing
-end
-
-mutable struct CORKState
-    U::Matrix{ComplexF64}
-    W::Matrix{ComplexF64}
-    G::Array{ComplexF64,3}
-    Hb::Matrix{ComplexF64}
-    pendingG::Array{ComplexF64,3}
-    Z::Array{ComplexF64,3}
-    H1::Matrix{ComplexF64}
-    H2::Matrix{ComplexF64}
-    γ::Array{ComplexF64,3}
-    RHS::Matrix{ComplexF64}
-    tmp::Matrix{ComplexF64}
-    Y::Matrix{ComplexF64}
-    Hphys::Matrix{ComplexF64}
-    Hphys2::Matrix{ComplexF64}
-    Zf::Matrix{ComplexF64}
-    r::Int
-    rcap::Int
-    n::Int
-    b::Int
-    p::Int
-    N::Int
-    rmax::Int
-    pending::Bool
-    cache::Float64
-    lu::Float64
-    rhs::Float64
-    phys::Float64
-    orth::Float64
-    napply::Int
 end
 
 """
@@ -387,87 +355,91 @@ new directions is capped by the remaining dimension of the physical space.
   times for coefficient caching, LU solution, RHS assembly, and physical-basis
   expansion.
 """
-function block_apply!(S::CORKState, B::Matrix{ComplexF64}, F, cols)
-    p = S.p; N = S.N; r = S.r; b = S.b
+function block_apply!(Z::Array{ComplexF64,3}, U::Matrix{ComplexF64}, W::Matrix{ComplexF64}, B::Matrix{ComplexF64}, F, Gin, N::Int, p::Int, r::Int, b::Int)
     p >= 2 || error("CORK Chebyshev action requires p >= 2")
-    ensure_rank_capacity!(S,min(S.rmax,r + b))
-    Gin = @view S.G[:,:,cols]
-    γ = @view S.γ[1:r,:,:]; RHS = S.RHS; tmp = S.tmp; Y = S.Y
-    Hphys = @view S.Hphys[1:r,:]; Hphys2 = @view S.Hphys2[1:r,:]
-    fill!(γ,0); fill!(RHS,0); fill!(Hphys,0); fill!(Hphys2,0)
-    @views γ[:,2,:] .= Gin[1:r,1,:]
+    γ = zeros(ComplexF64, r, p, b); RHS = zeros(ComplexF64, N, b); tmp = similar(RHS); Y = similar(RHS)
+    Hphys = zeros(ComplexF64, r, b); @views γ[:,2,:] .= Gin[1:r,1,:]
     for j = 1:p-2
         @views @. γ[:,j + 2,:] = -γ[:,j,:] + 2Gin[1:r,j + 1,:]
     end
     t = time_ns()
     @blas_multi_then_1 MAX_BLAS_THREADS begin
         for j = 0:p-3
-            mul!(tmp,@view(Wj(S.W,N,j)[:,1:r]),@view(γ[:,j + 1,:])); RHS .-= tmp
+            mul!(tmp, @view(Wj(W, N, j)[:,1:r]), @view(γ[:,j + 1,:])); RHS .-= tmp
         end
-        mul!(tmp,@view(Wj(S.W,N,p - 2)[:,1:r]),@view(γ[:,p - 1,:])); RHS .-= tmp
-        mul!(tmp,@view(Wj(S.W,N,p)[:,1:r]),@view(γ[:,p - 1,:])); RHS .+= tmp
-        mul!(tmp,@view(Wj(S.W,N,p - 1)[:,1:r]),@view(γ[:,p,:])); RHS .-= tmp
-        mul!(tmp,@view(Wj(S.W,N,p)[:,1:r]),@view(Gin[1:r,p,:])); @. RHS -= 2tmp
+        mul!(tmp, @view(Wj(W, N, p - 2)[:,1:r]), @view(γ[:,p - 1,:])); RHS .-= tmp
+        mul!(tmp, @view(Wj(W, N, p)[:,1:r]), @view(γ[:,p - 1,:])); RHS .+= tmp
+        mul!(tmp, @view(Wj(W, N, p - 1)[:,1:r]), @view(γ[:,p,:])); RHS .-= tmp
+        mul!(tmp, @view(Wj(W, N, p)[:,1:r]), @view(Gin[1:r,p,:])); @. RHS -= 2tmp
     end
     trhs = (time_ns() - t) * 1e-9
-    copyto!(Y,RHS); t = time_ns()
-    @blas_multi_then_1 MAX_BLAS_THREADS ldiv!(F,Y)
+    copyto!(Y, RHS); t = time_ns()
+    @blas_multi_then_1 MAX_BLAS_THREADS ldiv!(F, Y)
     tlu = (time_ns() - t) * 1e-9; t = time_ns()
     ynorm0 = norm(Y)
     @blas_multi_then_1 MAX_BLAS_THREADS begin
-        mul!(Hphys,adjoint(@view(S.U[:,1:r])),Y)
-        mul!(Y,@view(S.U[:,1:r]),Hphys,-1 + 0im,1 + 0im)
-        mul!(Hphys2,adjoint(@view(S.U[:,1:r])),Y)
-        mul!(Y,@view(S.U[:,1:r]),Hphys2,-1 + 0im,1 + 0im)
+        mul!(Hphys, adjoint(@view(U[:,1:r])), Y)
+        mul!(Y, @view(U[:,1:r]), Hphys, -1 + 0im, 1 + 0im)
     end
-    Hphys .+= Hphys2
-    ynorm = norm(Y); saturated = ynorm <= 1000eps(Float64) * max(ynorm0,1.0)
-    remaining = S.rmax - r
+    H2 = zeros(ComplexF64, r, b)
+    @blas_multi_then_1 MAX_BLAS_THREADS begin
+        mul!(H2, adjoint(@view(U[:,1:r])), Y)
+        mul!(Y, @view(U[:,1:r]), H2, -1 + 0im, 1 + 0im)
+    end
+    Hphys .+= H2
+    ynorm = norm(Y); saturated = ynorm <= 1000eps(Float64) * max(ynorm0, 1.0)
+    remaining = size(U, 2) - r
     if remaining > 0 && !saturated
         FY = nothing
         @blas_multi_then_1 MAX_BLAS_THREADS begin
-            FY = svd(Y; full=false)
+            FY = svd(Y; full = false)
         end
         σ = FY.S; σ1 = isempty(σ) ? 0.0 : σ[1]
-        bp = min(count(>(max(σ1 * 1e-12,1e-14)),σ),remaining); rn = r + bp
+        bp = min(count(>(max(σ1 * 1e-12, 1e-14)), σ), remaining); rn = r + bp
         if bp > 0
-            @views S.U[:,r + 1:rn] .= FY.U[:,1:bp]
+            @views U[:,r + 1:rn] .= FY.U[:,1:bp]
             Cnew = Diagonal(σ[1:bp]) * FY.Vt[1:bp,:]
         else
-            Cnew = zeros(ComplexF64,0,b)
+            Cnew = zeros(ComplexF64, 0, b)
         end
     else
-        bp = 0; rn = r; Cnew = zeros(ComplexF64,0,b)
+        bp = 0; rn = r; Cnew = zeros(ComplexF64, 0, b)
     end
     tphys = (time_ns() - t) * 1e-9
-    tcache = bp > 0 ? cache_block!(S.W,B,S.U,N,p,r + 1,rn) : 0.0
-    fill!(S.Z,0); @views S.Z[1:r,1:p,:] .+= γ; @views S.Z[1:r,1,:] .+= Hphys
-    bp > 0 && (@views S.Z[r + 1:rn,1,:] .+= Cnew)
+    tcache = bp > 0 ? cache_block!(W, B, U, N, p, r + 1, rn) : 0.0
+    fill!(Z, 0); @views Z[1:r,1:p,:] .+= γ; @views Z[1:r,1,:] .+= Hphys
+    bp > 0 && (@views Z[r + 1:rn,1,:] .+= Cnew)
     s = -1.0
     for j = 2:2:p-1
-        @views S.Z[1:r,j + 1,:] .+= s .* Hphys
-        bp > 0 && (@views S.Z[r + 1:rn,j + 1,:] .+= s .* Cnew)
+        @views Z[1:r,j + 1,:] .+= s .* Hphys
+        bp > 0 && (@views Z[r + 1:rn,j + 1,:] .+= s .* Cnew)
         s = -s
     end
-    S.r = rn
-    return tcache,tlu,trhs,tphys
+    return rn, tcache, tlu, trhs, tphys
 end
 
-function ensure_rank_capacity!(S::CORKState, required::Int)::Nothing
-    required <= S.rcap && return nothing
-    required <= S.rmax || error("Required physical rank $required exceeds maximum rank $(S.rmax)")
-    old = S.rcap; new = min(S.rmax,max(required,max(old + S.b,cld(3old,2)))); r = S.r
-    U = zeros(ComplexF64,S.N,new); W = zeros(ComplexF64,(S.p + 1) * S.N,new)
-    G = zeros(ComplexF64,new,S.p,size(S.G,3)); pendingG = zeros(ComplexF64,new,S.p,S.b); Z = zeros(ComplexF64,new,S.p,S.b)
-    γ = zeros(ComplexF64,new,S.p,S.b); Hphys = zeros(ComplexF64,new,S.b); Hphys2 = zeros(ComplexF64,new,S.b); Zf = zeros(ComplexF64,new * S.p,S.b)
-    @views U[:,1:r] .= S.U[:,1:r]
-    @views W[:,1:r] .= S.W[:,1:r]
-    @views G[1:r,:,1:S.n] .= S.G[1:r,:,1:S.n]
-    S.pending && (@views pendingG[1:r,:,:] .= S.pendingG[1:r,:,:])
-    @views Z[1:r,:,:] .= S.Z[1:r,:,:]
-    S.U = U; S.W = W; S.G = G; S.pendingG = pendingG; S.Z = Z
-    S.γ = γ; S.Hphys = Hphys; S.Hphys2 = Hphys2; S.Zf = Zf; S.rcap = new
-    return nothing
+mutable struct CORKState
+    U::Matrix{ComplexF64}
+    W::Matrix{ComplexF64}
+    G::Array{ComplexF64,3}
+    Hb::Matrix{ComplexF64}
+    pendingG::Array{ComplexF64,3}
+    Z::Array{ComplexF64,3}
+    H1::Matrix{ComplexF64}
+    H2::Matrix{ComplexF64}
+    r::Int
+    n::Int
+    b::Int
+    p::Int
+    N::Int
+    rmax::Int
+    pending::Bool
+    cache::Float64
+    lu::Float64
+    rhs::Float64
+    phys::Float64
+    orth::Float64
+    napply::Int
 end
 
 """
@@ -485,29 +457,25 @@ compact block-Arnoldi block.
 ## Returns
 - `CORKState`: Initialized persistent block-CORK state.
 """
-function init_cork(B::Matrix{ComplexF64}, p::Int, N::Int; b::Int=10)::CORKState
+function init_cork(B::Matrix{ComplexF64}, p::Int, N::Int; b::Int = 10)::CORKState
     p <= N || error("Polynomial degree p=$p exceeds physical matrix dimension N=$N")
     mdim = (N ÷ b) * b
     mdim >= b || error("Matrix dimension N=$N is smaller than block size b=$b")
-    rmax = N; rcap = min(N,max(p,8b,64))
-    U = zeros(ComplexF64,N,rcap); W = zeros(ComplexF64,(p + 1) * N,rcap)
-    G = zeros(ComplexF64,rcap,p,mdim + b); Hb = zeros(ComplexF64,mdim + b,mdim)
-    pendingG = zeros(ComplexF64,rcap,p,b); Z = zeros(ComplexF64,rcap,p,b)
-    H1 = zeros(ComplexF64,mdim + b,b); H2 = zeros(ComplexF64,mdim + b,b)
-    γ = zeros(ComplexF64,rcap,p,b); RHS = zeros(ComplexF64,N,b); tmp = similar(RHS); Y = similar(RHS)
-    Hphys = zeros(ComplexF64,rcap,b); Hphys2 = zeros(ComplexF64,rcap,b); Zf = zeros(ComplexF64,rcap * p,b)
-    rng = MersenneTwister(123); X = randn(rng,ComplexF64,N,p); FX = nothing
+    rmax = N
+    U = zeros(ComplexF64, N, rmax); W = zeros(ComplexF64, (p + 1) * N, rmax)
+    G = zeros(ComplexF64, rmax, p, mdim + b); Hb = zeros(ComplexF64, mdim + b, mdim)
+    rng = MersenneTwister(123); X = randn(rng, ComplexF64, N, p); FX = nothing
     @blas_multi_then_1 MAX_BLAS_THREADS begin
         FX = qr(X)
     end
-    @blas_multi_then_1 MAX_BLAS_THREADS @views U[:,1:p] .= FX.Q * Matrix{ComplexF64}(I,N,p)
+    @blas_multi_then_1 MAX_BLAS_THREADS @views U[:,1:p] .= FX.Q * Matrix{ComplexF64}(I, N, p)
     r = p
-    @views randn!(rng,Z[1:r,:,:])
-    Z0f = @view Zf[1:r * p,:]; pack!(Z0f,Z,r,p,b)
-    bn, _ = compact_block_qr!(Z0f,b); bn == b || error("Initial block breakdown")
-    fill!(Z,0); unpack!(Z,Z0f,r,p,b); @views G[1:r,:,1:b] .= Z[1:r,:,:]
-    tc = cache_block!(W,B,U,N,p,1,r)
-    return CORKState(U,W,G,Hb,pendingG,Z,H1,H2,γ,RHS,tmp,Y,Hphys,Hphys2,Zf,r,rcap,b,b,p,N,rmax,false,tc,0.0,0.0,0.0,0.0,0)
+    Z0 = zeros(ComplexF64, rmax, p, b); @views randn!(rng, Z0[1:r,:,:])
+    Z0f = zeros(ComplexF64, r * p, b); pack!(Z0f, Z0, r, p, b)
+    bn, _ = compact_block_qr!(Z0f, b); bn == b || error("Initial block breakdown")
+    fill!(Z0, 0); unpack!(Z0, Z0f, r, p, b); @views G[1:r,:,1:b] .= Z0[1:r,:,:]
+    tc = cache_block!(W, B, U, N, p, 1, r)
+    return CORKState(U, W, G, Hb, zeros(ComplexF64, rmax, p, b), zeros(ComplexF64, rmax, p, b), zeros(ComplexF64, mdim + b, b), zeros(ComplexF64, mdim + b, b), r, b, b, p, N, rmax, false, tc, 0.0, 0.0, 0.0, 0.0, 0)
 end
 
 """
@@ -527,18 +495,19 @@ and subsequently promoted without recomputation.
 """
 function compute_tail!(S::CORKState, B::Matrix{ComplexF64}, F)::Nothing
     S.pending && return nothing
-    n = S.n; b = S.b; p = S.p; cols = n - b + 1:n
-    tc, tl, tr, tp = block_apply!(S,B,F,cols)
-    S.cache += tc; S.lu += tl; S.rhs += tr; S.phys += tp
-    rn = S.r; fill!(S.H1,0); fill!(S.H2,0); t = time_ns()
-    compact_project!(S.Z,S.G,rn,n,p,S.H1,S.H2)
-    Zf = @view S.Zf[1:rn * p,:]; pack!(Zf,S.Z,rn,p,b)
-    bn, Rb = compact_block_qr!(Zf,b); bn == b || error("Block breakdown at n=$n: $bn/$b")
-    fill!(S.Z,0); unpack!(S.Z,Zf,rn,p,b)
+    n = S.n; b = S.b; p = S.p; r = S.r; cols = n - b + 1:n; Gin = @view S.G[:,:,cols]
+    fill!(S.Z, 0)
+    rn, tc, tl, tr, tp = block_apply!(S.Z, S.U, S.W, B, F, Gin, S.N, p, r, b)
+    S.r = rn; S.cache += tc; S.lu += tl; S.rhs += tr; S.phys += tp
+    fill!(S.H1, 0); fill!(S.H2, 0); t = time_ns()
+    compact_project!(S.Z, S.G, rn, n, p, S.H1, S.H2)
+    Zf = zeros(ComplexF64, rn * p, b); pack!(Zf, S.Z, rn, p, b)
+    bn, Rb = compact_block_qr!(Zf, b); bn == b || error("Block breakdown at n=$n: $bn/$b")
+    fill!(S.Z, 0); unpack!(S.Z, Zf, rn, p, b)
     @views S.Hb[1:n,cols] .= S.H1[1:n,:]
     @views S.Hb[n + 1:n + b,cols] .= Rb
     S.orth += (time_ns() - t) * 1e-9
-    copyto!(S.pendingG,S.Z)
+    copyto!(S.pendingG, S.Z)
     S.pending = true; S.napply += 1
     return nothing
 end
