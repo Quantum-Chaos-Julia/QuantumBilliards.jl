@@ -98,7 +98,7 @@
 #                     │    │    │    ├─ physical SVD
 #                     │    │    │    └─ cache_block!
 #                     │    │    │
-#                     │    │    ├─ compact_project_cgs2!
+#                     │    │    ├─ compact_project!
 #                     │    │    │                # Active-rank tensor CGS2
 #                     │    │    ├─ pack!         # Flatten active residual for QR
 #                     │    │    ├─ compact_block_qr!
@@ -153,9 +153,13 @@ end
 """
     validate_polynomial!(solver::SweepBIMSolver, pts, P::CORKPolynomial, tol::Real; nsample::Int=5, multithreaded::Bool=true) -> Nothing
 
-Validate the Chebyshev approximation against directly constructed BIM Fredholm matrices.
-The reported relative error is `‖P(t)-A(k₀+Δt)‖/‖A(k₀+Δt)‖`. 
-This is basically to check if the bounds of the interval are accurate enough.
+Validate the Chebyshev approximation against directly constructed BIM
+Fredholm matrices. At each normalized coordinate `t`, the reported relative
+error is
+
+    ‖P(t)-A(k₀+Δpoly*t)‖ / ‖A(k₀+Δpoly*t)‖,
+
+where `Δpoly=P.Δ` is the guarded polynomial half-width.
 
 ## Arguments
 - `solver::SweepBIMSolver`: BIM solver defining the direct Fredholm matrix.
@@ -351,67 +355,70 @@ new directions is capped by the remaining dimension of the physical space.
   times for coefficient caching, LU solution, RHS assembly, and physical-basis
   expansion.
 """
-function block_apply!(Z::Array{ComplexF64,3}, U::Matrix{ComplexF64}, W::Matrix{ComplexF64}, B::Matrix{ComplexF64}, F, Gin, N::Int, p::Int, r::Int, b::Int)
+function block_apply!(S::CORKState, B::Matrix{ComplexF64}, F, cols)
+    p = S.p; N = S.N; r = S.r; b = S.b
     p >= 2 || error("CORK Chebyshev action requires p >= 2")
-    γ = zeros(ComplexF64, r, p, b); RHS = zeros(ComplexF64, N, b); tmp = similar(RHS); Y = similar(RHS)
-    Hphys = zeros(ComplexF64, r, b); @views γ[:,2,:] .= Gin[1:r,1,:]
+    ensure_rank_capacity!(S,min(S.rmax,r + b))
+    Gin = @view S.G[:,:,cols]
+    γ = @view S.γ[1:r,:,:]; RHS = S.RHS; tmp = S.tmp; Y = S.Y
+    Hphys = @view S.Hphys[1:r,:]; Hphys2 = @view S.Hphys2[1:r,:]
+    fill!(γ,0); fill!(RHS,0); fill!(Hphys,0); fill!(Hphys2,0)
+    @views γ[:,2,:] .= Gin[1:r,1,:]
     for j = 1:p-2
         @views @. γ[:,j + 2,:] = -γ[:,j,:] + 2Gin[1:r,j + 1,:]
     end
     t = time_ns()
     @blas_multi_then_1 MAX_BLAS_THREADS begin
         for j = 0:p-3
-            mul!(tmp, @view(Wj(W, N, j)[:,1:r]), @view(γ[:,j + 1,:])); RHS .-= tmp
+            mul!(tmp,@view(Wj(S.W,N,j)[:,1:r]),@view(γ[:,j + 1,:])); RHS .-= tmp
         end
-        mul!(tmp, @view(Wj(W, N, p - 2)[:,1:r]), @view(γ[:,p - 1,:])); RHS .-= tmp
-        mul!(tmp, @view(Wj(W, N, p)[:,1:r]), @view(γ[:,p - 1,:])); RHS .+= tmp
-        mul!(tmp, @view(Wj(W, N, p - 1)[:,1:r]), @view(γ[:,p,:])); RHS .-= tmp
-        mul!(tmp, @view(Wj(W, N, p)[:,1:r]), @view(Gin[1:r,p,:])); @. RHS -= 2tmp
+        mul!(tmp,@view(Wj(S.W,N,p - 2)[:,1:r]),@view(γ[:,p - 1,:])); RHS .-= tmp
+        mul!(tmp,@view(Wj(S.W,N,p)[:,1:r]),@view(γ[:,p - 1,:])); RHS .+= tmp
+        mul!(tmp,@view(Wj(S.W,N,p - 1)[:,1:r]),@view(γ[:,p,:])); RHS .-= tmp
+        mul!(tmp,@view(Wj(S.W,N,p)[:,1:r]),@view(Gin[1:r,p,:])); @. RHS -= 2tmp
     end
     trhs = (time_ns() - t) * 1e-9
-    copyto!(Y, RHS); t = time_ns()
-    @blas_multi_then_1 MAX_BLAS_THREADS ldiv!(F, Y)
+    copyto!(Y,RHS); t = time_ns()
+    @blas_multi_then_1 MAX_BLAS_THREADS ldiv!(F,Y)
     tlu = (time_ns() - t) * 1e-9; t = time_ns()
     ynorm0 = norm(Y)
     @blas_multi_then_1 MAX_BLAS_THREADS begin
-        mul!(Hphys, adjoint(@view(U[:,1:r])), Y)
-        mul!(Y, @view(U[:,1:r]), Hphys, -1 + 0im, 1 + 0im)
+        mul!(Hphys,adjoint(@view(S.U[:,1:r])),Y)
+        mul!(Y,@view(S.U[:,1:r]),Hphys,-1 + 0im,1 + 0im)
+        mul!(Hphys2,adjoint(@view(S.U[:,1:r])),Y)
+        mul!(Y,@view(S.U[:,1:r]),Hphys2,-1 + 0im,1 + 0im)
     end
-    H2 = zeros(ComplexF64, r, b)
-    @blas_multi_then_1 MAX_BLAS_THREADS begin
-        mul!(H2, adjoint(@view(U[:,1:r])), Y)
-        mul!(Y, @view(U[:,1:r]), H2, -1 + 0im, 1 + 0im)
-    end
-    Hphys .+= H2
-    ynorm = norm(Y); saturated = ynorm <= 1000eps(Float64) * max(ynorm0, 1.0)
-    remaining = size(U, 2) - r
+    Hphys .+= Hphys2
+    ynorm = norm(Y); saturated = ynorm <= 1000eps(Float64) * max(ynorm0,1.0)
+    remaining = S.rmax - r
     if remaining > 0 && !saturated
         FY = nothing
         @blas_multi_then_1 MAX_BLAS_THREADS begin
-            FY = svd(Y; full = false)
+            FY = svd(Y; full=false)
         end
         σ = FY.S; σ1 = isempty(σ) ? 0.0 : σ[1]
-        bp = min(count(>(max(σ1 * 1e-12, 1e-14)), σ), remaining); rn = r + bp
+        bp = min(count(>(max(σ1 * 1e-12,1e-14)),σ),remaining); rn = r + bp
         if bp > 0
-            @views U[:,r + 1:rn] .= FY.U[:,1:bp]
+            @views S.U[:,r + 1:rn] .= FY.U[:,1:bp]
             Cnew = Diagonal(σ[1:bp]) * FY.Vt[1:bp,:]
         else
-            Cnew = zeros(ComplexF64, 0, b)
+            Cnew = zeros(ComplexF64,0,b)
         end
     else
-        bp = 0; rn = r; Cnew = zeros(ComplexF64, 0, b)
+        bp = 0; rn = r; Cnew = zeros(ComplexF64,0,b)
     end
     tphys = (time_ns() - t) * 1e-9
-    tcache = bp > 0 ? cache_block!(W, B, U, N, p, r + 1, rn) : 0.0
-    fill!(Z, 0); @views Z[1:r,1:p,:] .+= γ; @views Z[1:r,1,:] .+= Hphys
-    bp > 0 && (@views Z[r + 1:rn,1,:] .+= Cnew)
+    tcache = bp > 0 ? cache_block!(S.W,B,S.U,N,p,r + 1,rn) : 0.0
+    fill!(S.Z,0); @views S.Z[1:r,1:p,:] .+= γ; @views S.Z[1:r,1,:] .+= Hphys
+    bp > 0 && (@views S.Z[r + 1:rn,1,:] .+= Cnew)
     s = -1.0
     for j = 2:2:p-1
-        @views Z[1:r,j + 1,:] .+= s .* Hphys
-        bp > 0 && (@views Z[r + 1:rn,j + 1,:] .+= s .* Cnew)
+        @views S.Z[1:r,j + 1,:] .+= s .* Hphys
+        bp > 0 && (@views S.Z[r + 1:rn,j + 1,:] .+= s .* Cnew)
         s = -s
     end
-    return rn, tcache, tlu, trhs, tphys
+    S.r = rn
+    return tcache,tlu,trhs,tphys
 end
 
 mutable struct CORKState
@@ -423,7 +430,15 @@ mutable struct CORKState
     Z::Array{ComplexF64,3}
     H1::Matrix{ComplexF64}
     H2::Matrix{ComplexF64}
+    γ::Array{ComplexF64,3}
+    RHS::Matrix{ComplexF64}
+    tmp::Matrix{ComplexF64}
+    Y::Matrix{ComplexF64}
+    Hphys::Matrix{ComplexF64}
+    Hphys2::Matrix{ComplexF64}
+    Zf::Matrix{ComplexF64}
     r::Int
+    rcap::Int
     n::Int
     b::Int
     p::Int
@@ -438,8 +453,25 @@ mutable struct CORKState
     napply::Int
 end
 
+function ensure_rank_capacity!(S::CORKState, required::Int)::Nothing
+    required <= S.rcap && return nothing
+    required <= S.rmax || error("Required physical rank $required exceeds maximum rank $(S.rmax)")
+    old = S.rcap; new = min(S.rmax,max(required,max(old + S.b,cld(3old,2)))); r = S.r
+    U = zeros(ComplexF64,S.N,new); W = zeros(ComplexF64,(S.p + 1) * S.N,new)
+    G = zeros(ComplexF64,new,S.p,size(S.G,3)); pendingG = zeros(ComplexF64,new,S.p,S.b); Z = zeros(ComplexF64,new,S.p,S.b)
+    γ = zeros(ComplexF64,new,S.p,S.b); Hphys = zeros(ComplexF64,new,S.b); Hphys2 = zeros(ComplexF64,new,S.b); Zf = zeros(ComplexF64,new * S.p,S.b)
+    @views U[:,1:r] .= S.U[:,1:r]
+    @views W[:,1:r] .= S.W[:,1:r]
+    @views G[1:r,:,1:S.n] .= S.G[1:r,:,1:S.n]
+    S.pending && (@views pendingG[1:r,:,:] .= S.pendingG[1:r,:,:])
+    @views Z[1:r,:,:] .= S.Z[1:r,:,:]
+    S.U = U; S.W = W; S.G = G; S.pendingG = pendingG; S.Z = Z
+    S.γ = γ; S.Hphys = Hphys; S.Hphys2 = Hphys2; S.Zf = Zf; S.rcap = new
+    return nothing
+end
+
 """
-    init_cork(B::Matrix{ComplexF64}, p::Int, N::Int; b::Int=10, maxdim::Int=1600) -> CORKState
+    init_cork(B::Matrix{ComplexF64}, p::Int, N::Int; b::Int=10) -> CORKState
 
 Initialize the common physical basis, coefficient cache, and first normalized
 compact block-Arnoldi block.
@@ -449,30 +481,33 @@ compact block-Arnoldi block.
 - `p::Int`: Chebyshev polynomial degree.
 - `N::Int`: Physical matrix dimension.
 - `b::Int`: Block-Arnoldi block size.
-- `maxdim::Int`: Maximum compact Krylov dimension.
 
 ## Returns
 - `CORKState`: Initialized persistent block-CORK state.
 """
-function init_cork(B::Matrix{ComplexF64}, p::Int, N::Int; b::Int = 10)::CORKState
+function init_cork(B::Matrix{ComplexF64}, p::Int, N::Int; b::Int=10)::CORKState
     p <= N || error("Polynomial degree p=$p exceeds physical matrix dimension N=$N")
     mdim = (N ÷ b) * b
     mdim >= b || error("Matrix dimension N=$N is smaller than block size b=$b")
-    rmax = N
-    U = zeros(ComplexF64, N, rmax); W = zeros(ComplexF64, (p + 1) * N, rmax)
-    G = zeros(ComplexF64, rmax, p, mdim + b); Hb = zeros(ComplexF64, mdim + b, mdim)
-    rng = MersenneTwister(123); X = randn(rng, ComplexF64, N, p); FX = nothing
+    rmax = N; rcap = min(N,max(p,8b,64))
+    U = zeros(ComplexF64,N,rcap); W = zeros(ComplexF64,(p + 1) * N,rcap)
+    G = zeros(ComplexF64,rcap,p,mdim + b); Hb = zeros(ComplexF64,mdim + b,mdim)
+    pendingG = zeros(ComplexF64,rcap,p,b); Z = zeros(ComplexF64,rcap,p,b)
+    H1 = zeros(ComplexF64,mdim + b,b); H2 = zeros(ComplexF64,mdim + b,b)
+    γ = zeros(ComplexF64,rcap,p,b); RHS = zeros(ComplexF64,N,b); tmp = similar(RHS); Y = similar(RHS)
+    Hphys = zeros(ComplexF64,rcap,b); Hphys2 = zeros(ComplexF64,rcap,b); Zf = zeros(ComplexF64,rcap * p,b)
+    rng = MersenneTwister(123); X = randn(rng,ComplexF64,N,p); FX = nothing
     @blas_multi_then_1 MAX_BLAS_THREADS begin
         FX = qr(X)
     end
-    @blas_multi_then_1 MAX_BLAS_THREADS @views U[:,1:p] .= FX.Q * Matrix{ComplexF64}(I, N, p)
+    @blas_multi_then_1 MAX_BLAS_THREADS @views U[:,1:p] .= FX.Q * Matrix{ComplexF64}(I,N,p)
     r = p
-    Z0 = zeros(ComplexF64, rmax, p, b); @views randn!(rng, Z0[1:r,:,:])
-    Z0f = zeros(ComplexF64, r * p, b); pack!(Z0f, Z0, r, p, b)
-    bn, _ = compact_block_qr!(Z0f, b); bn == b || error("Initial block breakdown")
-    fill!(Z0, 0); unpack!(Z0, Z0f, r, p, b); @views G[1:r,:,1:b] .= Z0[1:r,:,:]
-    tc = cache_block!(W, B, U, N, p, 1, r)
-    return CORKState(U, W, G, Hb, zeros(ComplexF64, rmax, p, b), zeros(ComplexF64, rmax, p, b), zeros(ComplexF64, mdim + b, b), zeros(ComplexF64, mdim + b, b), r, b, b, p, N, rmax, false, tc, 0.0, 0.0, 0.0, 0.0, 0)
+    @views randn!(rng,Z[1:r,:,:])
+    Z0f = @view Zf[1:r * p,:]; pack!(Z0f,Z,r,p,b)
+    bn, _ = compact_block_qr!(Z0f,b); bn == b || error("Initial block breakdown")
+    fill!(Z,0); unpack!(Z,Z0f,r,p,b); @views G[1:r,:,1:b] .= Z[1:r,:,:]
+    tc = cache_block!(W,B,U,N,p,1,r)
+    return CORKState(U,W,G,Hb,pendingG,Z,H1,H2,γ,RHS,tmp,Y,Hphys,Hphys2,Zf,r,rcap,b,b,p,N,rmax,false,tc,0.0,0.0,0.0,0.0,0)
 end
 
 """
@@ -492,19 +527,18 @@ and subsequently promoted without recomputation.
 """
 function compute_tail!(S::CORKState, B::Matrix{ComplexF64}, F)::Nothing
     S.pending && return nothing
-    n = S.n; b = S.b; p = S.p; r = S.r; cols = n - b + 1:n; Gin = @view S.G[:,:,cols]
-    fill!(S.Z, 0)
-    rn, tc, tl, tr, tp = block_apply!(S.Z, S.U, S.W, B, F, Gin, S.N, p, r, b)
-    S.r = rn; S.cache += tc; S.lu += tl; S.rhs += tr; S.phys += tp
-    fill!(S.H1, 0); fill!(S.H2, 0); t = time_ns()
-    compact_project!(S.Z, S.G, rn, n, p, S.H1, S.H2)
-    Zf = zeros(ComplexF64, rn * p, b); pack!(Zf, S.Z, rn, p, b)
-    bn, Rb = compact_block_qr!(Zf, b); bn == b || error("Block breakdown at n=$n: $bn/$b")
-    fill!(S.Z, 0); unpack!(S.Z, Zf, rn, p, b)
+    n = S.n; b = S.b; p = S.p; cols = n - b + 1:n
+    tc, tl, tr, tp = block_apply!(S,B,F,cols)
+    S.cache += tc; S.lu += tl; S.rhs += tr; S.phys += tp
+    rn = S.r; fill!(S.H1,0); fill!(S.H2,0); t = time_ns()
+    compact_project!(S.Z,S.G,rn,n,p,S.H1,S.H2)
+    Zf = @view S.Zf[1:rn * p,:]; pack!(Zf,S.Z,rn,p,b)
+    bn, Rb = compact_block_qr!(Zf,b); bn == b || error("Block breakdown at n=$n: $bn/$b")
+    fill!(S.Z,0); unpack!(S.Z,Zf,rn,p,b)
     @views S.Hb[1:n,cols] .= S.H1[1:n,:]
     @views S.Hb[n + 1:n + b,cols] .= Rb
     S.orth += (time_ns() - t) * 1e-9
-    copyto!(S.pendingG, S.Z)
+    copyto!(S.pendingG,S.Z)
     S.pending = true; S.napply += 1
     return nothing
 end
@@ -612,7 +646,14 @@ end
 """
     reconstruct_cork_eigenvectors(S::CORKState, V::Matrix{ComplexF64}, m::Int) -> Matrix{ComplexF64}
 
-Reconstruct Fredholm smallest singular vectors u : A(v)u(v) = 0 from projected CORK Ritz vectors.
+Reconstruct physical Fredholm eigenvectors from projected CORK Ritz vectors.
+For a projected Ritz vector `v`, the physical degree-zero component is
+
+    u = U*G₀*v,
+
+where `G₀` contains the degree-zero compact coordinates of the active CORK
+basis. Each reconstructed vector is normalized to unit Euclidean norm.
+...
 
 ## Arguments
 - `S::CORKState`: Final persistent CORK state.
@@ -620,7 +661,7 @@ Reconstruct Fredholm smallest singular vectors u : A(v)u(v) = 0 from projected C
 - `m::Int`: Final compact Krylov dimension.
 
 ## Returns
-- `Matrix{ComplexF64}`: Normalized Fredholm smallest singular vectors, with column `j` corresponding to Ritz-vector column `j`.
+- `Matrix{ComplexF64}`: Normalized Fredholm eigenvectors, with column `j` corresponding to Ritz-vector column `j`.
 """
 function reconstruct_cork_eigenvectors(S::CORKState, V::Matrix{ComplexF64}, m::Int)::Matrix{ComplexF64}
     size(V,1) == m || throw(DimensionMismatch("Ritz vectors have $(size(V,1)) rows but m=$m"))
@@ -631,7 +672,7 @@ function reconstruct_cork_eigenvectors(S::CORKState, V::Matrix{ComplexF64}, m::I
         mul!(C,G0,V); mul!(Ψ,U,C)
     end
     @inbounds for j = 1:q
-        nrm = norm(@view Ψ[:,j]); nrm > 0 || error("Zero reconstructed CORK singular vector for column $j")
+        nrm = norm(@view Ψ[:,j]); nrm > 0 || error("Zero reconstructed CORK eigenvector for column $j")
         @views Ψ[:,j] ./= nrm
     end
     return Ψ
@@ -736,7 +777,7 @@ struct CORKSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
 end
 
 """
-    CORKSolver(kernel::K; p::Int=20, guard::Real=0.05, nlevels::Int=200, Rmax::Real=0.9, b::Int=10, mstart::Int=600, mstep::Int=10*b, maxdim::Int=200*b, stable_checks::Int=1, imag_tol::Real=1e-8, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, eigenvectors::Bool=false, validate::Bool=false, verbose::Bool=false, taylor_tol::Real=1e-10) where {K<:SweepBIMSolver} -> CORKSolver
+    CORKSolver(kernel::K; p::Int=16, guard::Real=0.05, nlevels::Int=200, Rmax::Real=0.8, b::Int=10, mstart::Int=30*b, mstep::Int=10*b, stable_checks::Int=1, imag_tol::Real=1e-8, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, eigenvectors::Bool=false, validate::Bool=false, verbose::Bool=false, taylor_tol::Real=1e-10) where {K<:SweepBIMSolver} 
 
 Construct a CORK solver for a BIM Fredholm nonlinear eigenvalue problem.
 
@@ -755,10 +796,10 @@ requested spectral window.
 ## Keyword Arguments
 - `p::Int=16`: Chebyshev polynomial degree.
 - `guard::Real=0.05`: Relative enlargement of the requested interval used for polynomial construction and Ritz discovery.
-- `nlevels::Int=200`: Target number of physical levels per full-spectrum window.
-- `Rmax::Real=0.9`: Maximum requested CORK half-width `Δ`.
+- `nlevels::Int=200`: Target number of physical levels per window.
+- `Rmax::Real=0.8`: Maximum requested CORK half-width `Δ`.
 - `b::Int=10`: CORK block size.
-- `mstart::Int=600`: Initial Krylov dimension.
+- `mstart::Int=30*b`: Initial Krylov dimension.
 - `mstep::Int=10*b`: Krylov-dimension increment between convergence checks.
 - `maxdim::Int=200*b`: Maximum Krylov dimension.
 - `stable_checks::Int=1`: Number of consecutive stable Ritz checks required.
@@ -767,7 +808,7 @@ requested spectral window.
 - `res_tol::Real=1e-10`: Ritz residual tolerance.
 - `stable_tol::Real=1e-9`: Spectrum-stability tolerance.
 - `imag_search_tol::Real=1e-4`: Loose imaginary discovery strip used during Ritz extraction.
-- `eigenvectors::Bool=false`: Whether to reconstruct physical eigenvectors. Warning: enabling will may increase memory usage and computational cost.
+- `eigenvectors::Bool=false`: Whether to reconstruct physical eigenvectors. Enabling this increases memory usage and computational cost and computational cost.
 - `validate::Bool=false`: Whether to validate the Chebyshev approximation during individual CORK solves.
 - `verbose::Bool=false`: Whether to print detailed CORK convergence diagnostics.
 - `taylor_tol::Real=1e-10`: Relative tolerance used for Chebyshev-polynomial validation.
@@ -775,7 +816,7 @@ requested spectral window.
 ## Returns
 - `CORKSolver`: Configured CORK solver.
 """
-function CORKSolver(kernel::K; p::Int=16, guard::Real=0.05, nlevels::Int=200, Rmax::Real=0.8, b::Int=10, mstart::Int=30*b, mstep::Int=10*b, stable_checks::Int=1, imag_tol::Real=1e-8, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, eigenvectors::Bool=false, validate::Bool=false, verbose::Bool=false, taylor_tol::Real=1e-10) where {K<:SweepBIMSolver}
+function CORKSolver(kernel::K; p::Int=16, guard::Real=0.05, nlevels::Int=200, Rmax::Real=0.8, b::Int=10, mstart::Int=30*b, mstep::Int=10*b, stable_checks::Int=1, imag_tol::Real=1e-8, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, eigenvectors::Bool=false, validate::Bool=false, verbose::Bool=false, taylor_tol::Real=1e-10) where {K<:SweepBIMSolver} 
     T = _bim_numeric_type(kernel)
     T === Float64 || throw(ArgumentError("CORKSolver currently requires a Float64 BIM kernel"))
     p >= 2 || throw(ArgumentError("p must be at least 2; received p=$p"))
@@ -796,8 +837,8 @@ evaluate_points(solver::CORKSolver, billiard::Bi, k) where {Bi<:AbsBilliard} = e
     _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=true, eigenvectors::Bool=false)
 
 Execute the complete CORK pipeline on `[k₀-dk/2,k₀+dk/2]`. If
-`eigenvectors=true`, reconstruct the physical Fredholm smallest singular vectors from the
-final accepted projected Ritz vectors without additional Fredholm SVDs.
+`eigenvectors=true`, reconstruct the physical Fredholm eigenvectors from the
+final accepted projected Ritz vectors without additional Fredholm solves.
 
 ## Arguments
 - `solver::CORKSolver`: Configured CORK eigensolver.
@@ -811,12 +852,11 @@ final accepted projected Ritz vectors without additional Fredholm SVDs.
   eigenvector matrix, requested Ritz roots, all guarded Ritz roots, requested
   edge roots, edge acceptance flags, and final Krylov dimension.
 """
-function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool = true)
+function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=true, eigenvectors::Bool=solver.eigenvectors)
     k0f = Float64(k0); Δ = Float64(dk) / 2
     Δ > 0 || throw(ArgumentError("dk must be positive; received dk=$dk"))
     Δpoly = Δ * (1 + solver.guard)
     k0f > Δpoly || throw(ArgumentError("CORK polynomial interval reaches k=0"))
-    kmin = k0f - Δ; kmax = k0f + Δ; kpmin = k0f - Δpoly; kpmax = k0f + Δpoly
     P = nothing; tbuild = 0.0
     @timeit_debug "CORK polynomial construction" begin
         P, tbuild = build_cork_polynomial(solver.kernel, pts, k0f, Δpoly, solver.p; multithreaded = multithreaded)
@@ -833,7 +873,7 @@ function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool =
     end
     tfact = (time_ns() - t) * 1e-9
     solver.verbose && @printf("\nP(0) assembly        = %.6f s\nLU                   = %.6f s\n\n", ta0, tfact)
-    S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = adaptive_cork(P.B, F, solver.p, P.N; k0 = k0f, Δ = Δ, Δpoly = Δpoly, b = solver.b, mstart = solver.mstart, mstep = solver.mstep, stable_checks = solver.stable_checks, imag_tol = solver.imag_tol, edge_tol = solver.edge_tol, res_tol = solver.res_tol, stable_tol = solver.stable_tol, imag_search_tol = solver.imag_search_tol, eigenvectors = solver.eigenvectors, verbose = solver.verbose)
+    S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = adaptive_cork(P.B, F, solver.p, P.N; k0=k0f, Δ=Δ, Δpoly=Δpoly, b=solver.b, mstart=solver.mstart, mstep=solver.mstep, stable_checks=solver.stable_checks, imag_tol=solver.imag_tol, edge_tol=solver.edge_tol, res_tol=solver.res_tol, stable_tol=solver.stable_tol, imag_search_tol=solver.imag_search_tol, eigenvectors=eigenvectors, verbose=solver.verbose)
     return P, S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal
 end
 
@@ -862,7 +902,8 @@ end
 """
     solve_vectors(solver::CORKSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true)
 
-Compute all accepted roots and their corresponding eigenvectors (smallest singular vectors of the Fredholm matrix) in `[k₀-dk/2,k₀+dk/2]`.
+Compute all accepted roots and their corresponding physical Fredholm
+eigenvectors in `[k₀-dk/2,k₀+dk/2]`.
 
 ## Arguments
 - `solver::CORKSolver`: Configured CORK eigensolver.
@@ -875,8 +916,8 @@ Compute all accepted roots and their corresponding eigenvectors (smallest singul
 - `Tuple{Vector{ComplexF64},Vector{Float64},Matrix{ComplexF64}}`: wavenumbers, their CORK residual estimates, and the corresponding eigenvectors.
 """
 function solve_vectors(solver::CORKSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true)
-    P, S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = _cork_solve_core(solver, pts, k0, dk; multithreaded = multithreaded)
-    λ = ComplexF64[complex(x[1], x[2]) for x in ks]; ts = Float64[x[3] for x in ks]
+    P, S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = _cork_solve_core(solver, pts, k0, dk; multithreaded=multithreaded, eigenvectors=true)
+    λ = ComplexF64[complex(x[1],x[2]) for x in ks]; ts = Float64[x[3] for x in ks]
     return λ, ts, Ψ
 end
 
@@ -905,8 +946,11 @@ end
 """
     solve_spectrum(solver::CORKSolver, billiard::Bi, k, dk; multithreaded::Bool=true) where {Bi<:AbsBilliard}
 
-Compute the complete accepted multiplicity-expanded spectrum in
-`[k-dk/2,k+dk/2]`, constructing boundary points at the expansion center `k`.
+Compute the complete accepted CORK spectrum in `[k-dk/2,k+dk/2]`,
+constructing boundary points at the expansion center `k`.
+
+Each accepted projected Ritz root is returned individually; nearby roots are
+not merged or expanded according to an inferred multiplicity.
 
 ## Arguments
 - `solver::CORKSolver`: Configured CORK eigensolver.
@@ -916,8 +960,8 @@ Compute the complete accepted multiplicity-expanded spectrum in
 - `multithreaded::Bool`: Whether polynomial assembly uses Julia threads.
 
 ## Returns
-- `Tuple{Vector{ComplexF64},Vector{Float64}}`: Multiplicity-expanded
-  wavenumbers and their CORK residual estimates.
+- `Tuple{Vector{ComplexF64},Vector{Float64}}`: Accepted wavenumbers and their
+  CORK residual estimates.
 """
 function solve_spectrum(solver::CORKSolver, billiard::Bi, k, dk; multithreaded::Bool=true) where {Bi<:AbsBilliard}
     pts = evaluate_points(solver, billiard, k)
