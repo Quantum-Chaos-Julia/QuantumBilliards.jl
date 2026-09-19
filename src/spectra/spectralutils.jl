@@ -628,8 +628,12 @@ function compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; multithreade
     fundamental = solver.kernel.symmetry !== nothing
     intervals = plan_weyl_windows(billiard, k1T, k2T; m = solver.nlevels, Rmax = solver.Rmax, fundamental = fundamental)
     isempty(intervals) && throw(ArgumentError("Spectrum interval [$k1,$k2] contains no Weyl windows"))
+    if length(intervals) > 1
+        ap, bp = intervals[end - 1]; a, b = intervals[end]; dkprev = bp - ap
+        b - a < dkprev && (intervals[end] = (a, a + dkprev))
+    end
     check_indices = unique(round.(Int, range(1, length(intervals), length = min(5, length(intervals)))))
-    for i in check_indices # Validate a few representative Weyl windows
+    for i in check_indices
         a, b = intervals[i]; k0 = (a + b) / 2; Δpoly = (1 + solver.guard) * (b - a) / 2
         pts = evaluate_points(solver, billiard, k0)
         P, _ = build_cork_polynomial(solver.kernel, pts, Float64(k0), Float64(Δpoly), solver.p; multithreaded = multithreaded)
@@ -639,9 +643,8 @@ function compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; multithreade
     @showprogress for i = 1:nw
         a, b = intervals[i]; k0 = (a + b) / 2; dk = b - a
         ks, tens = solve_spectrum(solver, billiard, k0, dk; multithreaded = multithreaded)
-        last_window = i == nw
         @inbounds for j in eachindex(ks)
-            x = real(ks[j]); a <= x < b || continue
+            x = real(ks[j]); a <= x < b && k1T <= x < k2T || continue
             push!(ks_all, ks[j]); push!(tens_all, tens[j])
         end
     end
