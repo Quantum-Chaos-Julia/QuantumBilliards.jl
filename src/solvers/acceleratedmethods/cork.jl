@@ -1,123 +1,160 @@
 ################################################################################
 # CHEBYSHEV-CORK BOUNDARY-INTEGRAL EIGENSOLVER
 #
-# This file implements a compact CORK eigensolver for BIM nonlinear
-# eigenvalue problems
+# We seek the nonlinear BIM eigenvalues
 #
-#                              A(k)u = 0,
+#                              A(k)u = 0.
 #
-# where A(k) is the Fredholm matrix of a DLP, CFIE, or composite BIM
-# discretization. For a requested spectral window
+# For the requested window
 #
 #                  Δ = dk/2,    k ∈ [k₀-Δ,k₀+Δ],
 #
-# `recurrences.jl` constructs a Chebyshev polynomial approximation on the
-# guarded half-width Δₚ = (1 + guard)Δ,
+# introduce the guarded polynomial half-width and normalized coordinate
 #
-#              P(t) = Σⱼ₌₀ᵖ BⱼTⱼ(t) ≈ A(k₀ + Δₚt),
-#              t = (k-k₀)/Δₚ.
+#                  Δₚ = (1 + guard)Δ,
+#                  t = (k-k₀)/Δₚ,
+#                  k = k₀ + Δₚt.
 #
-# CORK solves the polynomial eigenvalue problem P(t)u = 0 through a compact
-# Chebyshev linearization. Instead of explicitly storing N-dimensional
-# vectors for every linearization block, the physical blocks are represented
-# in a common basis U,
+# `recurrences.jl` constructs
 #
-#                              zⱼ = Ugⱼ,
+#                  P(t) = Σⱼ₌₀ᵖ BⱼTⱼ(t) ≈ A(k₀+Δₚt),         (0)
 #
-# with cached coefficient actions
+# so the BIM NEP becomes the polynomial eigenvalue problem
 #
-#                              Wⱼ = BⱼU.
+#                              P(t)u = 0.                       (1)
 #
-# At the fixed inverse-iteration shift t = 0,
+# The Chebyshev recurrence
 #
-#                         P(0) = B₀-B₂+B₄-⋯,
+#                  T₀(t) = 1,    T₁(t) = t,
+#                  Tⱼ₊₁(t) + Tⱼ₋₁(t) = 2tTⱼ(t)                (2)
 #
-# since T₂q(0) = (-1)^q and T₂q₊₁(0) = 0. One LU factorization of P(0) is
-# therefore reused throughout the block-Arnoldi iteration. Eigenvalues μ of
-# the projected inverse linearization are mapped back to physical
-# wavenumbers by
+# gives a linearization by introducing
 #
-#                         μ → t = 1/μ → k = k₀ + Δₚt.
+#                  zⱼ = Tⱼ(t)u,    j = 0,...,p-1.
 #
-# The compact Krylov space is grown adaptively until the requested spectrum
-# is stable and the requested interval edges are represented by converged
-# Ritz roots. There is no user-defined maximum Krylov dimension: the
-# iteration may grow to the largest block-compatible dimension permitted by
-# the physical Fredholm matrix.
+# Hence
 #
-# Main spectrum call:
+#                  z₁ = tz₀,
+#                  zⱼ₊₁ + zⱼ₋₁ = 2tzⱼ,    j=1,...,p-2.       (3)
 #
-# solve_spectrum(solver, billiard, k0, dk)      # Solve a complete spectral window
-# │
-# ├─ evaluate_points(solver, billiard, k0)      # Build the boundary discretization
-# │    └─ evaluate_points(solver.kernel, ...)   # Delegate to the wrapped BIM solver
-# │
-# └─ solve(solver, pts, k0, dk)                 # Solve using existing boundary points
-#      │
-#      └─ _cork_solve_core(...)                 # Run the polynomial + CORK pipeline
-#           │
-#           ├─ build_cork_polynomial(...)       # Construct P(t) analytically
-#           │    │
-#           │    ├─ _taylor_cache(...)          # Precompute geometry/Kress data
-#           │    │
-#           │    ├─ build_B_full(...)           # Assemble Bⱼ on the full boundary
-#           │    │    └─ _fredholm_taylor!      # Taylor coefficients of I-K(k)
-#           │    │         └─ _kernel_taylor!   # Analytic kernel Taylor recurrence
-#           │    │
-#           │    └─ build_B_reduced(...)        # Assemble symmetry-reduced Bⱼ
-#           │         └─ _fredholm_taylor!      # Reduced Fredholm Taylor coefficients
-#           │              └─ _kernel_taylor!   # Analytic kernel Taylor recurrence
-#           │
-#           │       # The functions above live in `recurrences.jl` and return
-#           │       # CORKPolynomial(B, k0, Δpoly, p, N).
-#           │
-#           ├─ validate_polynomial!(...)        # Compare P(t) with direct BIM matrices
-#           │                                   # when `validate = true`
-#           │
-#           ├─ get_A0(B, N, p)                  # Evaluate P(0) = B₀-B₂+B₄-⋯
-#           │
-#           ├─ lu(P(0))                         # Factorize the fixed shift once
-#           │
-#           └─ adaptive_cork(...)               # Grow CORK until spectrum convergence
-#                │
-#                ├─ init_cork(...)              # Initialize  CORK state
-#                │    │
-#                │    ├─ initialize U           # Initial common physical basis
-#                │    ├─ initialize G           # Initial compact Arnoldi block
-#                │    └─ cache_block!(...)      # Cache Wⱼ = BⱼU
-#                │
-#                └─ for increasing m            # Extend one  factorization
-#                     │
-#                     ├─ extend!(...)            # Grow active Krylov dimension to m
-#                     │    │
-#                     │    ├─ compute_tail!      # Compute and retain Arnoldi residual
-#                     │    │    │
-#                     │    │    ├─ block_apply!(...)
-#                     │    │    │    ├─ Chebyshev recurrence
-#                     │    │    │    ├─ P(0)\rhs
-#                     │    │    │    ├─ physical SVD
-#                     │    │    │    └─ cache_block!
-#                     │    │    │
-#                     │    │    ├─ compact_project!
-#                     │    │    │                # Active-rank tensor CGS2
-#                     │    │    ├─ pack!         # Flatten active residual for QR
-#                     │    │    ├─ compact_block_qr!
-#                     │    │    │                # Normalize the residual block
-#                     │    │    ├─ unpack!       # Restore compact tensor coordinates
-#                     │    │    └─ pending tail  # Retain residual for Ritz testing
-#                     │    │
-#                     │    └─ promote_tail!      # Promote residual to active block
-#                     │
-#                     ├─ ritz_roots(...)         # Extract individual projected Ritz roots
-#                     │    │
-#                     │    ├─ eigen(Hm)          # Projected inverse eigenproblem
-#                     │    ├─ μ → 1/μ → k        # Map Ritz values to wavenumbers
-#                     │    └─ Htail*v             # Projected Arnoldi residual estimate
-#                     │
-#                     ├─ requested roots         # Retain roots in [k₀-Δ,k₀+Δ]
-#                     ├─ physical filtering      # Apply Im(k) and residual tolerances
-#                     ├─ edge check              # Check extreme requested Ritz roots
-#                     └─ stability check         # Compare with previous Krylov dimension
+# The final Chebyshev term in (1) is eliminated using
+#
+#                  Tₚ(t)u = 2tzₚ₋₁-zₚ₋₂,
+#
+# which gives the final block equation
+#
+#       Σⱼ₌₀ᵖ⁻³ Bⱼzⱼ + (Bₚ₋₂-Bₚ)zₚ₋₂ + Bₚ₋₁zₚ₋₁
+#                              = -2tBₚzₚ₋₁.                    (4)
+#
+# With z=[z₀;z₁;...;zₚ₋₁] ∈ ℂᵖᴺ, equations (3)-(4) define
+#
+#                              L₀z = tL₁z,                     (5)
+#
+# where L₀,L₁ ∈ ℂᵖᴺˣᵖᴺ are p×p block matrices with N×N blocks,
+#
+#       L₀ = [ 0   I   0   0   ⋯       0
+#              I   0   I   0   ⋯       0
+#              0   I   0   I   ⋱       ⋮
+#              ⋮   ⋱   ⋱   ⋱   ⋱       0
+#              0   ⋯   0   I   0       I
+#              B₀  B₁  ⋯   Bₚ₋₃ Bₚ₋₂-Bₚ Bₚ₋₁ ],
+#
+#       L₁ = [ I   0    0   0   ⋯   0
+#              0   2I   0   0   ⋯   0
+#              0   0    2I  0   ⋱   ⋮
+#              ⋮   ⋱    ⋱   ⋱   ⋱   0
+#              0   ⋯    0   0   2I  0
+#              0   ⋯    0   0   0  -2Bₚ ],
+#
+# with I ∈ ℂᴺˣᴺ. The first p-1 block rows encode (3), while the final
+# block row is (4). Thus det(L₀-tL₁)=0 linearizes det P(t)=0.
+#
+# Shift-and-invert at t=0 gives
+#
+#                  M = L₀⁻¹L₁,
+#                  Mz = μz,    μ = 1/t.                       (6)
+#
+# The pN×pN matrices L₀ and L₁ are never formed. To apply M to an input
+#
+#                  x = [x₀;x₁;...;xₚ₋₁],
+#
+# solve
+#
+#                              L₀z = L₁x.                      (7)
+#
+# The first p-1 block rows give
+#
+#                  z₁ = x₀,
+#                  zⱼ₋₁ + zⱼ₊₁ = 2xⱼ,    j=1,...,p-2.        (8)
+#
+# Their general solution can be written
+#
+#                  zⱼ = γⱼ + Tⱼ(0)y,                          (9)
+#
+# with
+#
+#                  γ₀ = 0,
+#                  γ₁ = x₀,
+#                  γⱼ₊₁ = -γⱼ₋₁ + 2xⱼ.                      (10)
+#
+# Since
+#
+#                  T₂q(0) = (-1)^q,
+#                  T₂q₊₁(0) = 0,
+#
+# substitution of (9) into the final block row of (7) gives
+#
+#                              P(0)y = rhs,                    (11)
+#
+# where
+#
+#                  P(0) = Σⱼ₌₀ᵖ BⱼTⱼ(0)
+#                       = B₀-B₂+B₄-B₆+⋯,                     (12)
+#
+#                  rhs = -Σⱼ₌₀ᵖ⁻³ Bⱼγⱼ
+#                        -(Bₚ₋₂-Bₚ)γₚ₋₂
+#                        -Bₚ₋₁γₚ₋₁
+#                        -2Bₚxₚ₋₁.                             (13)
+#
+# Thus one factorization
+#
+#                              P(0) = LU                       (14)
+#
+# supplies every application of M=L₀⁻¹L₁.
+#
+# CORK avoids storing full pN-dimensional Krylov vectors. Their N-dimensional
+# physical blocks share an orthonormal basis U ∈ ℂᴺˣʳ,
+#
+#                              zⱼ = Ugⱼ,                       (15)
+#
+# while the polynomial actions are cached as
+#
+#                              Wⱼ = BⱼU.                       (16)
+#
+# Hence Bⱼzⱼ = Wⱼgⱼ. If the solution y of (11) contains a component outside
+# span(U), write
+#
+#                  y = UUᴴy + y⊥,
+#                  Uᴴy⊥ = 0,
+#                  y⊥ = Unew Cnew,                            (17)
+#
+# and append the SVD basis Unew to U together with BⱼUnew to Wⱼ.
+#
+# After m compact Arnoldi vectors,
+#
+#                  MQₘ = QₘHₘ + Q₊Htail,                     (18)
+#
+# and the Ritz problem is
+#
+#                              Hₘv = μv.                       (19)
+#
+# Each Ritz value is mapped back independently by
+#
+#                  μ → t = 1/μ → k = k₀ + Δₚ/μ,              (20)
+#
+# with projected inverse-linearization residual indicator
+#
+#                  ρ = ‖Htail v‖ / max(1,|μ|).                (21)
 ################################################################################
 
 # Views of the j-th Chebyshev coefficient and cached coefficient action.
