@@ -49,6 +49,9 @@ struct ExpandedBIMSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
     kernel::K
     use_chebyshev::Bool
     cheb_config::ChebyshevConfig{T}
+    tol::T
+    maxiter::Int
+    krylovdim::Int
 end
 
 """
@@ -71,12 +74,10 @@ Constructs an [`ExpandedBIMSolver`](@ref) wrapping the boundary-integral
 ## Returns
 * `solver`: An [`ExpandedBIMSolver`](@ref) instance.
 """
-function ExpandedBIMSolver(kernel::K; use_chebyshev::Bool=true,
-                            n_panels_h::Int=15000, M_h::Int=5, n_panels_j::Int=10000, M_j::Int=5,
-                            cheb_config::Union{Nothing,ChebyshevConfig}=nothing) where {K<:SweepBIMSolver}
+function ExpandedBIMSolver(kernel::K; use_chebyshev::Bool = true, n_panels_h::Int = 15000, M_h::Int = 5, n_panels_j::Int = 10000, M_j::Int = 5, cheb_config::Union{Nothing,ChebyshevConfig} = nothing, tol::Real = 1e-12, maxiter::Int = 5000, krylovdim::Int = 40) where {K<:SweepBIMSolver}
     T = _bim_numeric_type(kernel)
-    cfg = cheb_config===nothing ? ChebyshevConfig(T; n_panels_h, M_h, n_panels_j, M_j) : cheb_config
-    return ExpandedBIMSolver{T,K}(kernel, use_chebyshev, cfg)
+    cfg = cheb_config === nothing ? ChebyshevConfig(T; n_panels_h, M_h, n_panels_j, M_j) : cheb_config
+    return ExpandedBIMSolver{T,K}(kernel, use_chebyshev, cfg, T(tol), maxiter, krylovdim)
 end
 
 _bim_numeric_type(::ExpandedBIMSolver{T}) where {T} = T
@@ -613,68 +614,26 @@ function construct_matrices(solver::ExpandedBIMSolver, pts::BoundaryPoints, k; m
     return _ebim_construct_matrices_cheb(solver.kernel, pts, k, cfg; multithreaded)
 end
 
-# NaN-safe index of the smallest element of a real vector, treating
-# non-finite entries (`NaN`/`±Inf`) as unbounded rather than letting them
-# poison the reduction. Needed because `solve` below selects the
-# smallest-|value| generalized eigenvalue of the pencil `(A,A'(k))`: when
-# `A'(k)` is rank-deficient (as happens for a plain `DoubleLayerPotentialSolver`
-# kernel, whose k-derivative lacks CFIE's extra full-rank `i*S(k)` term — see
-# `bim-solver-notes.md`), `LinearAlgebra.eigen`'s underlying `ggev` genuinely
-# returns some `NaN`/`Inf` eigenvalues (0/0 or finite/0 pencil ratios), and
-# plain `argmin`/`abs` (whose reduction uses `min`, which propagates `NaN`)
-# can lock onto one of these spurious non-finite roots instead of the true
-# locally-dominant finite one.
-@inline function _argmin_finite(x::AbstractVector{T}) where {T<:Real}
-    best = 1
-    bestval = T(Inf)
-    @inbounds for i in eachindex(x)
-        xi = x[i]
-        if isfinite(xi) && xi<bestval
-            bestval = xi
-            best = i
-        end
-    end
-    return best
-end
-
-"""
-    solve(solver::ExpandedBIMSolver, pts::BoundaryPoints, k; multithreaded::Bool = true, cheb_override::Union{Nothing,ChebyshevConfig} = nothing) → (k_corr::Real, t0::Real)
-
-Computes the second-order locally-corrected root `k_corr` near `k` and its
-tension `t0`.
-
-## Description
-Assembles `(A,dA,ddA)=A(k),A'(k),A''(k)` via [`construct_matrices`](@ref)
-(`cheb_override` is forwarded unchanged), solves the dense generalized
-eigenproblem `A v = λ A' v` (`LinearAlgebra.eigen` on the matrix pencil), and
-keeps the eigenpair `(λ,v)` of smallest `|λ|` (the locally dominant root),
-skipping any non-finite `λ` produced by a rank-deficient `A'(k)` (see
-[`_argmin_finite`](@ref)). The corresponding left eigenvector `u` is obtained
-from the adjoint pencil `A' u = μ (A')' u` (`eigen(A',dA')`, eigenvalues
-`μ≈conj(λ)`, same non-finite-skipping selection). The correction is
-`ε₁=-λ`, `ε₂=-(1/2)ε₁²[u'A''(k)v]/[u'A'(k)v]`, giving `k_corr=k+Re(ε₁+ε₂)`
-and `t0=|ε₁+ε₂|`.
-"""
-function solve(solver::ExpandedBIMSolver, pts::BoundaryPoints, k; multithreaded::Bool=true, cheb_override::Union{Nothing,ChebyshevConfig}=nothing)
+function solve(solver::ExpandedBIMSolver, pts::BoundaryPoints, k; multithreaded::Bool = true, cheb_override::Union{Nothing,ChebyshevConfig} = nothing)
     T = _bim_numeric_type(solver)
     A, dA, ddA = construct_matrices(solver, pts, k; multithreaded, cheb_override)
-    @blas_multi_then_1 MAX_BLAS_THREADS Fr = eigen(A, dA)
-    λ = Fr.values
-    V = Fr.vectors
-    jr = _argmin_finite(abs.(λ))
-    λj = λ[jr]
-    v = @view V[:,jr]
-    @blas_multi_then_1 MAX_BLAS_THREADS Fl = eigen(A', dA')
-    μ = Fl.values
-    U = Fl.vectors
-    jl = _argmin_finite(abs.(μ.-conj(λj)))
-    u = @view U[:,jl]
-    ε1 = -λj
-    num = dot(u, ddA*v)
-    den = dot(u, dA*v)
-    ε2 = abs(den)>eps(T) ? -T(0.5)*ε1^2*(num/den) : zero(ε1)
-    corr = ε1+ε2
-    return k+corr, abs(corr)
+    n = size(A, 1)
+    @blas_multi_then_1 MAX_BLAS_THREADS begin
+        F = lu!(A)
+        Ft = adjoint(F); dAt = adjoint(dA)
+        op_r = x -> F \ (dA * x)
+        op_l = x -> dAt * (Ft \ x)
+        μ, VR, UL, info = KrylovKit.bieigsolve((op_r, op_l), n, 1, :LM, Complex{T}; tol = 1e-12, maxiter = 5000, krylovdim = 40)
+        info.converged >= 1 || error("EBIM Krylov solve did not converge")
+        λ = inv(μ[1]); v = VR[1]; u = UL[1]
+        ε1 = -λ
+        buf = similar(v)
+        mul!(buf, ddA, v); num = dot(u, buf)
+        mul!(buf, dA, v); den = dot(u, buf)
+        ε2 = abs(den) > eps(T) ? -T(0.5) * ε1^2 * (num / den) : zero(ε1)
+        corr = ε1 + ε2
+    end
+    return k + corr, abs(corr)
 end
 
 """
