@@ -614,27 +614,34 @@ function construct_matrices(solver::ExpandedBIMSolver, pts::BoundaryPoints, k; m
     return _ebim_construct_matrices_cheb(solver.kernel, pts, k, cfg; multithreaded)
 end
 
-function solve(solver::ExpandedBIMSolver, pts::BoundaryPoints, k; multithreaded::Bool = true, cheb_override::Union{Nothing,ChebyshevConfig} = nothing)
+function solve(solver::ExpandedBIMSolver, pts::BoundaryPoints, k, nlevels::Int; multithreaded::Bool = true, cheb_override::Union{Nothing,ChebyshevConfig} = nothing)
     T = _bim_numeric_type(solver)
     A, dA, ddA = construct_matrices(solver, pts, k; multithreaded, cheb_override)
-    n = size(A, 1)
+    n = size(A, 1); nev = min(nlevels + 5, n - 1)
     @blas_multi_then_1 MAX_BLAS_THREADS begin
         F = lu!(A)
         Ft = adjoint(F); dAt = adjoint(dA)
-        op_r = x -> F \ (dA * x)
-        op_l = x -> dAt * (Ft \ x)
-        μ, (VR, UL), (info_r, info_l) = KrylovKit.bieigsolve((op_r, op_l), n, 1, :LM, Complex{T}; tol = 1e-12, maxiter = 5000, krylovdim = 40)
-        info_r.converged >= 1 || error("EBIM right Krylov solve did not converge")
-        info_l.converged >= 1 || error("EBIM left Krylov solve did not converge")
-        λ = inv(μ[1]); v = VR[1]; u = UL[1]
-        ε1 = -λ
-        buf = similar(v)
-        mul!(buf, ddA, v); num = dot(u, buf)
-        mul!(buf, dA, v); den = dot(u, buf)
-        ε2 = abs(den) > eps(T) ? -T(0.5) * ε1^2 * (num / den) : zero(ε1)
-        corr = ε1 + ε2
+        op_r = x -> F \ (dA*x)
+        op_l = x -> dAt*(Ft \ x)
+        μ, (VR, UL), (info_r, info_l) = KrylovKit.bieigsolve((op_r, op_l), n, nev, :LM, Complex{T}; tol = solver.tol, maxiter = solver.maxiter, krylovdim = max(solver.krylovdim, 2*nev + 1))
+        nconv = min(info_r.converged, info_l.converged)
+        nconv >= nlevels || error("EBIM Krylov solve converged only $nconv eigenpairs; requested $nlevels")
+        p = sortperm(abs.(inv.(μ[1:nconv])))
+        ks = Vector{Complex{T}}(undef, nlevels); ts = Vector{T}(undef, nlevels)
+        buf = Vector{Complex{T}}(undef, n)
+        @inbounds for q in 1:nlevels
+            j = p[q]
+            λ = inv(μ[j]); v = VR[j]; u = UL[j]
+            ε1 = -λ
+            mul!(buf, ddA, v); num = dot(u, buf)
+            mul!(buf, dA, v); den = dot(u, buf)
+            ε2 = abs(den) > eps(T) ? -T(0.5)*ε1^2*(num/den) : zero(ε1)
+            corr = ε1+ε2
+            ks[q] = k+corr
+            ts[q] = abs(corr)
+        end
     end
-    return k + corr, abs(corr)
+    return ks, ts
 end
 
 """
