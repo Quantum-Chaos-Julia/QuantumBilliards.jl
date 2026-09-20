@@ -623,8 +623,9 @@ function solve(solver::ExpandedBIMSolver, pts::BoundaryPoints, k; multithreaded:
         Ft = adjoint(F); dAt = adjoint(dA)
         op_r = x -> F \ (dA * x)
         op_l = x -> dAt * (Ft \ x)
-        μ, VR, UL, info = KrylovKit.bieigsolve((op_r, op_l), n, 1, :LM, Complex{T}; tol = 1e-12, maxiter = 5000, krylovdim = 40)
-        info.converged >= 1 || error("EBIM Krylov solve did not converge")
+        μ, (VR, UL), (info_r, info_l) = KrylovKit.bieigsolve((op_r, op_l), n, 1, :LM, Complex{T}; tol = 1e-12, maxiter = 5000, krylovdim = 40)
+        info_r.converged >= 1 || error("EBIM right Krylov solve did not converge")
+        info_l.converged >= 1 || error("EBIM left Krylov solve did not converge")
         λ = inv(μ[1]); v = VR[1]; u = UL[1]
         ε1 = -λ
         buf = similar(v)
