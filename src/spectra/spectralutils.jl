@@ -351,6 +351,11 @@ function overlap_and_merge_ebim!(k_left::Vector{K}, ten_left::Vector{T}, k_right
     return nothing
 end
 
+@inline function weyl_window_count(billiard::Bi, k::T, dk::T; fundamental::Bool=true) where {T<:Real,Bi<:AbsBilliard}
+    A = fundamental ? fundamental_area(billiard) : area(billiard)
+    return A*((k+dk)^2-k^2)/(T(4pi))
+end
+
 """
     compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::Function = k -> 0.05*k^(-1/3), tol = 1e-5, spacing_frac = 0.02, tolmax = 5e-3, local_window::Int = 4, seg_reuse_frac = 0.95, multithreaded::Bool = true, show_progress::Bool = true) where {Bi<:AbsBilliard}
 
@@ -389,12 +394,11 @@ function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::F
     T = _bim_numeric_type(solver); k1T, k2T = T(k1), T(k2); tolT, spacingT, tolmaxT, reuseT = T(tol), T(spacing_frac), T(tolmax), T(seg_reuse_frac)
     k1T < k2T || throw(ArgumentError("require k1 < k2")); 0 < reuseT <= 1 || throw(ArgumentError("seg_reuse_frac must satisfy 0 < seg_reuse_frac <= 1"))
     fundamental = solver.kernel.symmetry !== nothing
-    ks_grid = T[]; dks = T[]; nlevels = Int[]; k = k1T
+    ks_grid = T[]; nlevels = Int[]; k = k1T
     while k < k2T
-        Δk = T(dk(k)); Δk > 0 || throw(ArgumentError("dk(k) must be positive; received dk($k) = $Δk"))
-        ka = max(zero(T), k-Δk); kb = k+Δk
-        nw = weyl_law(billiard, kb; fundamental)-weyl_law(billiard, ka; fundamental)
-        push!(ks_grid, k); push!(dks, Δk); push!(nlevels, max(1, ceil(Int, nw)))
+        Δk = min(T(dk(k)), k2T-k); Δk > 0 || throw(ArgumentError("dk(k) must be positive; received dk($k) = $Δk"))
+        m = weyl_window_count(billiard, k, Δk; fundamental)
+        push!(ks_grid, k); push!(nlevels, max(1, ceil(Int, m)))
         k += Δk
     end
     n = length(ks_grid); n > 0 || throw(ArgumentError("Spectrum interval [$k1,$k2] contains no expansion centers"))
