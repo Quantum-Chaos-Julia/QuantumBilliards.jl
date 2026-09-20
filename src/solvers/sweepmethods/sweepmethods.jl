@@ -336,10 +336,10 @@ function _cfie_slp3!(v1::Vector{Complex{T}}, v2::Vector{Complex{T}}, v3::Vector{
     nc = length(comp)
     @inbounds for a in 1:nc
         pa = comp[a]; offa = offs[a]; G = Gs[a]; R = Rs[a]
-        for i in eachindex(pa)
+        for i in 1:length(pa)
             gi = offa+i-1
             s1 = zero(Complex{T}); s2 = zero(Complex{T}); s3 = zero(Complex{T})
-            for j in eachindex(pa)
+            for j in 1:length(pa)
                 gj = offa+j-1
                 if i == j
                     speed = G.speed[j]
@@ -358,7 +358,7 @@ function _cfie_slp3!(v1::Vector{Complex{T}}, v2::Vector{Complex{T}}, v3::Vector{
             for b in 1:nc
                 b == a && continue
                 pb = comp[b]; offb = offs[b]
-                for j in eachindex(pb)
+                for j in 1:length(pb)
                     gj = offb+j-1
                     xj, yj = pb.xy[j]; r = hypot(xi-xj,yi-yj)
                     tx, ty = pb.tangent[j]
@@ -425,9 +425,9 @@ function _cfie_adjoint_dlp!(out::Vector{Complex{T}}, comp::Vector{BoundaryPoints
     end
     @inbounds for b in 2:nc, a in 1:b-1
         pa = comp[a]; pb = comp[b]; offa = offs[a]; offb = offs[b]
-        for i in eachindex(pa)
+        for i in 1:length(pa)
             gi = offa+i-1; xi, yi = pa.xy[i]; wiμi = pa.ds[i]*μ[gi]
-            for j in eachindex(pb)
+            for j in 1:length(pb)
                 gj = offb+j-1; xj, yj = pb.xy[j]; wjμj = pb.ds[j]*μ[gj]
                 out[gj] += _bim_dlp_cross_kernel_entry(pb,xi,yi,k,j)*wiμi
                 out[gi] += _bim_dlp_cross_kernel_entry(pa,xj,yj,k,i)*wjμj
@@ -436,7 +436,7 @@ function _cfie_adjoint_dlp!(out::Vector{Complex{T}}, comp::Vector{BoundaryPoints
     end
     @inbounds for a in 1:nc
         p = comp[a]; off = offs[a]
-        @simd for j in eachindex(p)
+        @simd for j in 1:length(p)
             out[off+j-1] /= p.ds[j]
         end
     end
@@ -477,41 +477,33 @@ function _cfie_normal_derivative(comp::Vector{BoundaryPoints{T}}, offs::Vector{I
         Gs[a] = boundary_geom_cache(comp[a],false)
         Rs[a] = zeros(T,length(comp[a]),length(comp[a])); kress_R!(Rs[a])
     end
-
-    # Component-local ∂sμ and the two normal-weighted densities.
     dsμ = Vector{Complex{T}}(undef,N); nxμ = similar(dsμ); nyμ = similar(dsμ)
     @inbounds for a in 1:nc
         p = comp[a]; r = offs[a]:offs[a+1]-1
         _cfie_derivative!(@view(dsμ[r]),@view(μ[r]))
-        for j in eachindex(p)
+        for j in 1:length(p)
             g = offs[a]+j-1; tx, ty = p.tangent[j]; nx, ny = p.normal[j]
             dsμ[g] /= hypot(tx,ty)
             nxμ[g] = nx*μ[g]; nyμ[g] = ny*μ[g]
         end
     end
-
-    # Maue: evaluate all three required S actions in one kernel traversal.
     Sdμ = similar(dsμ); Snxμ = similar(dsμ); Snyμ = similar(dsμ)
     _cfie_slp3!(Sdμ,Snxμ,Snyμ,comp,dsμ,nxμ,nyμ,offs,Gs,Rs,k)
-
-    # Outer ∂s derivative in ∂sS(∂sμ).
     dSdμ = similar(dsμ)
     @inbounds for a in 1:nc
         p = comp[a]; r = offs[a]:offs[a+1]-1
         _cfie_derivative!(@view(dSdμ[r]),@view(Sdμ[r]))
-        for j in eachindex(p)
+        for j in 1:length(p)
             g = offs[a]+j-1; tx, ty = p.tangent[j]
             dSdμ[g] /= hypot(tx,ty)
         end
     end
-
-    # Complete Nμ and evaluate K'μ using the same D discretization as the DLP.
     Kpμ = similar(dsμ)
     _cfie_adjoint_dlp!(Kpμ,comp,μ,offs,Gs,Rs,k)
     k2 = k*k
     @inbounds for a in 1:nc
         p = comp[a]; off = offs[a]
-        @simd for j in eachindex(p)
+        @simd for j in 1:length(p)
             g = off+j-1; nx, ny = p.normal[j]
             Nμ = dSdμ[g]+k2*(nx*Snxμ[g]+ny*Snyμ[g])
             dSdμ[g] = -Nμ-im*k*(μ[g]+Kpμ[g])
