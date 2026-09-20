@@ -617,19 +617,21 @@ end
 function solve(solver::ExpandedBIMSolver, pts::BoundaryPoints, k, nlevels::Int; multithreaded::Bool = true, cheb_override::Union{Nothing,ChebyshevConfig} = nothing)
     T = _bim_numeric_type(solver)
     A, dA, ddA = construct_matrices(solver, pts, k; multithreaded, cheb_override)
-    n = size(A, 1); nev = min(nlevels + 5, n - 1)
+    n = size(A, 1); 
+    nev = min(nlevels+5, n-1)
     @blas_multi_then_1 MAX_BLAS_THREADS begin
         F = lu!(A)
         Ft = adjoint(F); dAt = adjoint(dA)
         op_r = x -> F \ (dA*x)
         op_l = x -> dAt*(Ft \ x)
-        μ, (VR, UL), (info_r, info_l) = KrylovKit.bieigsolve((op_r, op_l), n, nev, :LM, Complex{T}; tol = solver.tol, maxiter = solver.maxiter, krylovdim = max(solver.krylovdim, 2*nev + 1))
+        μ, (VR, UL), (info_r, info_l) = KrylovKit.bieigsolve((op_r, op_l), n, nev, :LM, Complex{T}; tol = solver.tol, maxiter = solver.maxiter, krylovdim = max(solver.krylovdim, 2*nev+1))
         nconv = min(info_r.converged, info_l.converged)
         nconv >= nlevels || error("EBIM Krylov solve converged only $nconv eigenpairs; requested $nlevels")
-        p = sortperm(abs.(inv.(μ[1:nconv])))
-        ks = Vector{Complex{T}}(undef, nlevels); ts = Vector{T}(undef, nlevels)
+        p = sortperm(abs.(μ[1:nconv]); rev = true)
+        nkeep = min(nev, nconv)
+        ks = Vector{Complex{T}}(undef, nkeep); ts = Vector{T}(undef, nkeep)
         buf = Vector{Complex{T}}(undef, n)
-        @inbounds for q in 1:nlevels
+        @inbounds for q in 1:nkeep
             j = p[q]
             λ = inv(μ[j]); v = VR[j]; u = UL[j]
             ε1 = -λ

@@ -394,11 +394,11 @@ function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::F
     T = _bim_numeric_type(solver); k1T, k2T = T(k1), T(k2); tolT, spacingT, tolmaxT, reuseT = T(tol), T(spacing_frac), T(tolmax), T(seg_reuse_frac)
     k1T < k2T || throw(ArgumentError("require k1 < k2")); 0 < reuseT <= 1 || throw(ArgumentError("seg_reuse_frac must satisfy 0 < seg_reuse_frac <= 1"))
     fundamental = solver.kernel.symmetry !== nothing
-    ks_grid = T[]; nlevels = Int[]; k = k1T
+    ks_grid = T[]; dks = T[]; nlevels = Int[]; k = k1T
     while k < k2T
-        Δk = min(T(dk(k)), k2T-k); Δk > 0 || throw(ArgumentError("dk(k) must be positive; received dk($k) = $Δk"))
+        Δk = T(dk(k)); Δk > 0 || throw(ArgumentError("dk(k) must be positive; received dk($k) = $Δk"))
         m = weyl_window_count(billiard, k, Δk; fundamental)
-        push!(ks_grid, k); push!(nlevels, max(1, ceil(Int, m)))
+        push!(ks_grid, k); push!(dks, Δk); push!(nlevels, max(1, ceil(Int, m)))
         k += Δk
     end
     n = length(ks_grid); n > 0 || throw(ArgumentError("Spectrum interval [$k1,$k2] contains no expansion centers"))
@@ -421,7 +421,9 @@ function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::F
             solver.use_chebyshev && solver.cheb_config.param_strategy === :segment && (cheb_override = _tune_ebim_cheb_config(solver, pts, ks_grid[seg_last]))
         end
         for i in seg_first:seg_last
-            ks_corr[i], ts_corr[i] = solve(solver, pts, ks_grid[i], nlevels[i]; multithreaded, cheb_override)
+            ki, ti = solve(solver, pts, ks_grid[i], nlevels[i]; multithreaded, cheb_override)
+            keep = abs.(real.(ki) .- ks_grid[i]) .<= dks[i]
+            ks_corr[i] = ki[keep]; ts_corr[i] = ti[keep]
             show_progress && next!(progress)
         end
         seg_first = seg_last+1
