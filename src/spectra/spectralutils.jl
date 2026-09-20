@@ -142,36 +142,36 @@ eigenstate solve is performed.
 * `data::SpectralData`: Merged and sorted spectrum restricted to `k1 ≤ k ≤ k2`, including stored [`BasisEigenstate`](@ref)s when `solver.eigenvectors=true`.
 """
 function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, k1, k2, dk::Union{Real,Function}; tol::Real=1e-4, multithreaded::Bool=true, show_progress::Bool=true)
-    T = promote_type(typeof(k1), typeof(k2)); k1T, k2T = T(k1), T(k2); k1T<k2T || throw(ArgumentError("require k1<k2"))
+    T = promote_type(typeof(k1), typeof(k2)); k1T, k2T = T(k1), T(k2); k1T < k2T || throw(ArgumentError("require k1 < k2"))
     centers = T[]; widths = T[]; k0 = k1T
-    while k0<k2T
-        Δk = T(dk isa Function ? dk(k0) : dk); Δk>0 || throw(ArgumentError("dk must be positive; received dk($k0)=$Δk"))
+    while k0 < k2T
+        Δk = T(dk isa Function ? dk(k0) : dk); Δk > 0 || throw(ArgumentError("dk must be positive; received dk($k0)=$Δk"))
         push!(centers, k0); push!(widths, Δk); k0 += Δk
     end
-    ks = T[]; ts = T[]; control = Bool[]; states = nothing; L = CompositeCurve(get_boundary_curves(billiard)).length
+    ks = T[]; ts = T[]; control = Bool[]; states = AbsState[]; L = CompositeCurve(get_boundary_curves(billiard)).length
     @maybe_showprogress show_progress for i in eachindex(centers)
         k0, Δk = centers[i], widths[i]
         dim = max(solver.min_dim, round(Int, L*k0*solver.dim_scaling_factor/(2*pi)))
         basis_new = resize_basis(basis, billiard, dim, k0); pts = evaluate_points(solver, billiard, k0)
         if solver.eigenvectors
             ki, ti, X = solve_vectors(solver, basis_new, pts, k0, Δk+tol; multithreaded)
-            si = [BasisEigenstate(ki[j], k0, X[:,j], ti[j], solver, basis_new, billiard) for j in eachindex(ki)]
-            if i==1
-                append!(ks, ki); append!(ts, ti); append!(control, fill(false, length(ki))); states = si
+            si = AbsState[BasisEigenstate(ki[j], k0, X[:,j], ti[j], solver, basis_new, billiard) for j in eachindex(ki)]
+            if i == 1
+                append!(ks, ki); append!(ts, ti); append!(control, fill(false, length(ki))); append!(states, si)
             else
                 overlap_and_merge!(ks, ts, ki, ti, control, centers[i-1], k0; tol, states_left=states, states_right=si)
             end
         else
             ki, ti = solve(solver, basis_new, pts, k0, Δk+tol; multithreaded)
-            if i==1
+            if i == 1
                 append!(ks, ki); append!(ts, ti); append!(control, fill(false, length(ki)))
             else
                 overlap_and_merge!(ks, ts, ki, ti, control, centers[i-1], k0; tol)
             end
         end
     end
-    keep = (k1T.<=real.(ks)).&(real.(ks).<=k2T)
-    return _finalize_spectrum(ks[keep], ts[keep], control[keep]; states=states===nothing ? nothing : states[keep])
+    keep = (k1T .<= real.(ks)) .& (real.(ks) .<= k2T)
+    return _finalize_spectrum(ks[keep], ts[keep], control[keep]; states=solver.eigenvectors ? states[keep] : nothing)
 end
 
 """
