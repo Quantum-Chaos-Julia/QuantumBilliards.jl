@@ -109,55 +109,39 @@ end
 """
     evaluate_points(solver::ParticularSolutionsMethod, billiard::Bi, k) where {Bi<:AbsBilliard} → pts::BoundaryPoints
 
-Samples the boundary of `billiard`, together with a set of random interior
-points, needed to construct the matrices in [`construct_matrices`](@ref).
+Samples the fundamental boundary and billiard interior required by the particular solutions method.
 
 ## Description
-Each fundamental boundary curve is sampled with its own sampler (see
-[`adjust_scaling_and_samplers`](@ref)), giving `xy`, the outward unit `normal`,
-the running arc-length coordinate `s` and the quadrature element `ds`. The
-number of interior points is
-`M_int = max(solver.min_int_pts, round(Int, k*L0*solver.int_pts_scaling_factor/(2π)))`,
-where `L0` is the total boundary length, and `M_int` points are sampled from
-the billiard's interior with [`random_interior_points`](@ref).
+Each fundamental boundary curve is sampled with its associated sampler. For
+parameter-space quadrature nodes `tᵢ` and weights `dtᵢ`, the physical boundary
+quadrature weights are `dsᵢ = |r'(tᵢ)|dtᵢ`, so arbitrary regular
+parametrizations are supported without assuming constant-speed curves. The
+stored coordinate `s` is the cumulative physical arc length along the
+fundamental boundary.
 
 ## Arguments
-* `solver`: The [`ParticularSolutionsMethod`](@ref) used to determine the sampling parameters.
-* `billiard`: The billiard whose boundary and interior are sampled.
-* `k`: The wavenumber used to determine the number of boundary and interior sampling points.
+* `solver::ParticularSolutionsMethod`: Solver defining the boundary and interior sampling densities.
+* `billiard::Bi`: Billiard whose fundamental boundary and interior are sampled.
+* `k`: Wavenumber used to determine the number of sampling points.
 
 ## Returns
-* `pts`: A [`BoundaryPoints`](@ref) instance with the `xy`, `normal`, `s`, `ds` and `xy_int` fields populated.
+* `pts::BoundaryPoints`: Boundary points with `xy`, `normal`, `s`, `ds` and `xy_int` populated.
 """
 function evaluate_points(solver::ParticularSolutionsMethod, billiard::Bi, k) where {Bi<:AbsBilliard}
-    bs, samplers = adjust_scaling_and_samplers(solver, billiard)
-    curves = get_boundary_curves(billiard)
-    T = eltype(solver.pts_scaling_factor)
-    Ns = _determine_bp_sizes(curves, bs, k)
-    M = length(Ns)
-    xy_all = Vector{Vector{SVector{2,T}}}(undef, M)
-    normal_all = Vector{Vector{SVector{2,T}}}(undef, M)
-    s_all = Vector{Vector{T}}(undef, M)
-    ds_all = Vector{Vector{T}}(undef, M)
-    L0 = zero(T)
+    bs, samplers = adjust_scaling_and_samplers(solver, billiard); curves = get_boundary_curves(billiard); T = eltype(solver.pts_scaling_factor)
+    Ns = _determine_bp_sizes(curves, bs, k); M = length(Ns)
+    xy_all = Vector{Vector{SVector{2,T}}}(undef, M); normal_all = Vector{Vector{SVector{2,T}}}(undef, M)
+    s_all = Vector{Vector{T}}(undef, M); ds_all = Vector{Vector{T}}(undef, M); L0 = zero(T)
     for i in eachindex(curves)
-        crv = curves[i]
-        L = crv.length
-        sampler = samplers[i]
-        t, dt = sample_points(sampler, Ns[i])
-        ds = L*dt
-        xy = curve(crv, t)
-        normal = domain_gradient_vector(crv, xy)
-        normal .= normal./norm(normal)
-        xy_all[i] = xy
-        normal_all[i] = normal
-        s_all[i] = arc_length(crv, t) .+ L0
-        ds_all[i] = ds
-        L0 += L
+        crv = curves[i]; sampler = samplers[i]; t, dt = sample_points(sampler, Ns[i])
+        xy = curve(crv, t); tan = tangent(crv, t); ds = norm.(tan).*dt
+        normal = domain_gradient_vector(crv, xy); normal .= normal./norm.(normal)
+        xy_all[i] = xy; normal_all[i] = normal; s_all[i] = arc_length(crv, t).+L0; ds_all[i] = ds
+        L0 += crv.length
     end
-    M_int = max(solver.min_int_pts, round(Int, k*L0*solver.int_pts_scaling_factor/(2*pi)))
+    M_int = max(solver.min_int_pts, round(Int, k*L0*solver.int_pts_scaling_factor/(2pi)))
     xy_int = random_interior_points(billiard, M_int)
-    return BoundaryPoints(vcat(xy_all...); normal=vcat(normal_all...), s=vcat(s_all...), ds=vcat(ds_all...), xy_int=xy_int)
+    return BoundaryPoints(vcat(xy_all...); normal = vcat(normal_all...), s = vcat(s_all...), ds = vcat(ds_all...), xy_int = xy_int)
 end
 
 """

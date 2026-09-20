@@ -98,53 +98,38 @@ end
 """
     evaluate_points(solver::DecompositionMethodSolver, billiard::Bi, k) where {Bi<:AbsBilliard} → pts::BoundaryPoints
 
-Samples the boundary of `billiard` and computes the boundary decomposition method
-quadrature weights needed to construct the matrices in [`construct_matrices`](@ref).
+Samples the fundamental boundary and computes the quadrature weights required by the boundary decomposition method.
 
 ## Description
-The scaling factors and samplers are first adjusted to match the number of
-fundamental boundary curves with [`adjust_scaling_and_samplers`](@ref). Each curve
-is then sampled with its own sampler, and the normal-derivative quadrature weight
-at each point is computed as `w_dm = (ds * r ⋅ n) / (2 k^2)`, where `r` is the
-boundary point and `n` its outward unit normal.
+Each fundamental boundary curve is sampled with its associated sampler. For
+parameter-space quadrature nodes `tᵢ` and weights `dtᵢ`, the physical boundary
+quadrature weights are `dsᵢ = |r'(tᵢ)|dtᵢ`. The Rellich weights are then
+`w_dmᵢ = dsᵢ*((r(tᵢ)-c₀)⋅nᵢ)/(2k²)`, where `c₀` is `solver.rellich_origin`
+and `nᵢ` is the outward unit normal. This construction is valid for arbitrary
+regular parametrizations and does not assume constant-speed boundary curves.
 
 ## Arguments
-* `solver`: The [`DecompositionMethodSolver`](@ref) used to determine the sampling parameters.
-* `billiard`: The billiard whose boundary is sampled.
-* `k`: The wavenumber used to determine the number of boundary sampling points and the `w_dm` weights.
+* `solver::DecompositionMethodSolver`: Solver defining the sampling density and Rellich origin.
+* `billiard::Bi`: Billiard whose fundamental boundary is sampled.
+* `k`: Wavenumber used to determine the number of boundary points and Rellich weights.
 
 ## Returns
-* `pts`: A [`BoundaryPoints`](@ref) instance with the `xy`, `normal`, `ds` and `w_dm` fields populated.
+* `pts::BoundaryPoints`: Boundary points with `xy`, `normal`, `ds` and `w_dm` populated.
 """
 function evaluate_points(solver::DecompositionMethodSolver, billiard::Bi, k) where {Bi<:AbsBilliard}
-    bs, samplers = adjust_scaling_and_samplers(solver, billiard)
-    curves = get_boundary_curves(billiard)
-    type = eltype(solver.pts_scaling_factor)
-    Ns = _determine_bp_sizes(curves, bs, k)
-    M = length(Ns)
-    xy_all = Vector{Vector{SVector{2,type}}}(undef, M)
-    normal_all = Vector{Vector{SVector{2,type}}}(undef, M)
-    ds_all = Vector{Vector{type}}(undef, M)
-    w_n_all = Vector{Vector{type}}(undef, M)
-
+    bs, samplers = adjust_scaling_and_samplers(solver, billiard); curves = get_boundary_curves(billiard); T = eltype(solver.pts_scaling_factor)
+    Ns = _determine_bp_sizes(curves, bs, k); M = length(Ns)
+    xy_all = Vector{Vector{SVector{2,T}}}(undef, M); normal_all = Vector{Vector{SVector{2,T}}}(undef, M)
+    ds_all = Vector{Vector{T}}(undef, M); w_dm_all = Vector{Vector{T}}(undef, M)
     for i in eachindex(curves)
-        crv = curves[i]
-        L = crv.length
-        sampler = samplers[i]
-        t, dt = sample_points(sampler, Ns[i])
-        ds = L*dt #this needs modification!!!
-        xy = curve(crv,t)
-        normal = domain_gradient_vector(crv, xy)
-        normal .= normal./norm(normal)
-        rn = dot.(xy .- Ref(solver.rellich_origin), normal)
-        xy_all[i] = xy
-        normal_all[i] = normal
-        ds_all[i] = ds  
-        w_n_all[i] =(ds.*rn)./(2.0*k.^2)         
+        crv = curves[i]; sampler = samplers[i]; t, dt = sample_points(sampler, Ns[i])
+        xy = curve(crv, t); tan = tangent(crv, t); ds = norm.(tan).*dt
+        normal = domain_gradient_vector(crv, xy); normal .= normal./norm.(normal)
+        rn = dot.(xy.-Ref(solver.rellich_origin), normal)
+        xy_all[i] = xy; normal_all[i] = normal; ds_all[i] = ds; w_dm_all[i] = ds.*rn./(2*k^2)
     end
-    return BoundaryPoints(vcat(xy_all...);normal = vcat(normal_all...),  w_dm = vcat(w_n_all...), ds = vcat(ds_all...))
+    return BoundaryPoints(vcat(xy_all...); normal = vcat(normal_all...), ds = vcat(ds_all...), w_dm = vcat(w_dm_all...))
 end
-
 
 """
     construct_matrices(solver::DecompositionMethodSolver, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool = true) where {Ba<:AbsBasis} → (F::Matrix, G::Matrix)
