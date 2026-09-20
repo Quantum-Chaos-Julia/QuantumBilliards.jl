@@ -280,7 +280,7 @@ physical-boundary discretization.
 function solve_state(solver::DLP, pts::BoundaryPoints{T}, k, billiard::Bi; multithreaded::Bool=true) where {T<:Real,Bi<:AbsBilliard}
     kT = T(k)
     A = construct_matrices(solver, pts, kT; multithreaded)
-    @blas_1 vals, lvecs, rvecs, _ = KrylovKit.svdsolve(A, 1, :SR)
+    @blas_1 vals, lvecs, rvecs, _ = KrylovKit.svdsolve(A, 5, :SR)
     ten = vals[1]
     vec = symmetrize_layer_density(solver, Vector{Complex{T}}(rvecs[1]), pts, billiard)
     u = symmetrize_layer_density(solver, _bim_normal_derivative(solver, pts, lvecs[1]), pts, billiard)
@@ -586,7 +586,7 @@ and `pts` all correspond point-for-point to the complete physical boundary.
 function solve_state(solver::CFIE, pts::BoundaryPoints{T}, k, billiard::Bi; multithreaded::Bool=true) where {T<:Real,Bi<:AbsBilliard}
     kT = T(k)
     A = construct_matrices(solver,pts,kT; multithreaded)
-    @blas_1 vals, _, rvecs, _ = KrylovKit.svdsolve(A,1,:SR)
+    @blas_1 vals, _, rvecs, _ = KrylovKit.svdsolve(A,5,:SR)
     ten = vals[1]
     vec = symmetrize_layer_density(solver,Vector{Complex{T}}(rvecs[1]),pts,billiard)
     u = _cfie_normal_derivative(solver,pts,vec,kT)
