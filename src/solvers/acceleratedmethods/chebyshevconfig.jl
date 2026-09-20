@@ -64,11 +64,7 @@ Constructs a [`ChebyshevConfig`](@ref) with `-develop`-matching defaults.
 ## Returns
 * `cfg`: A [`ChebyshevConfig`](@ref) instance.
 """
-function ChebyshevConfig(::Type{T}=Float64; n_panels_h::Int=15000, M_h::Int=5,
-                          n_panels_j::Int=10000, M_j::Int=5, tol::Real=1e-13,
-                          max_iter::Int=20, sampling_points::Int=50_000,
-                          grow_panels::Real=1.5, grow_M::Int=2,
-                          param_strategy::Symbol=:global) where {T<:Real}
+function ChebyshevConfig(::Type{T}=Float64; n_panels_h::Int=15000, M_h::Int=5, n_panels_j::Int=10000, M_j::Int=5, tol::Real=1e-13, max_iter::Int=20, sampling_points::Int=50_000, grow_panels::Real=1.5, grow_M::Int=2, param_strategy::Symbol=:global) where {T<:Real}
     param_strategy in (:global, :segment, :manual) || throw(ArgumentError("param_strategy must be :global, :segment or :manual; received $param_strategy"))
     return ChebyshevConfig{T}(n_panels_h, M_h, n_panels_j, M_j, T(tol), max_iter, sampling_points, T(grow_panels), grow_M, param_strategy)
 end

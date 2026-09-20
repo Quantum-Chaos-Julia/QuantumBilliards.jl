@@ -1,5 +1,5 @@
 """
-    DoubleLayerPotentialSolver{T,G,Sy} <: SweepBIMSolver
+    DoubleLayerPotentialSolver{T,G,Sy,Ch} <: DLP
 
 `DoubleLayerPotentialSolver` is a concrete [`SweepBIMSolver`](@ref) implementing
 the (optionally Kress-corrected) direct boundary integral method for computing
@@ -37,7 +37,7 @@ The following functions can be evaluated for this type:
 - [`solve_wavenumber`](@ref)
 - [`k_sweep`](@ref)
 """
-struct DoubleLayerPotentialSolver{T<:Real,G<:BoundaryGrading,Sy<:Union{AbsSymmetry,Nothing},Ch<:Tuple} <: SweepBIMSolver
+struct DoubleLayerPotentialSolver{T<:Real,G<:BoundaryGrading,Sy<:Union{AbsSymmetry,Nothing},Ch<:Tuple} <: DLP
     pts_scaling_factor::Vector{T}
     min_pts::Int64
     grading::G

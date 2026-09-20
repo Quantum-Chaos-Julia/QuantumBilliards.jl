@@ -118,6 +118,9 @@ The following functions can be evaluated for any `SweepBIMSolver`:
 """
 abstract type SweepBIMSolver <: AbsBIMSolver end
 
+abstract type DLP <: SweepBIMSolver end
+abstract type CFIE <: SweepBIMSolver end
+
 """
 AcceleratedBIMSolver <: AbsBIMSolver
 
@@ -162,10 +165,6 @@ The following functions can be evaluated for any `AcceleratedBIMSolver`:
 abstract type AcceleratedBIMSolver <: AbsBIMSolver end
 
 abstract type AbsState end
-
-#abstract type AbsBasisEigenstate <: AbsState end
-
-#abstract type AbsBIMEigenstate <: AbsState end
 
 """
 AbsBasisSolver <: AbsSolver

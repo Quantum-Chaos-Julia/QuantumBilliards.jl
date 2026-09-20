@@ -1,5 +1,5 @@
 """
-    CombinedFieldIntegralEquationSolver{T,G,Sy} <: SweepBIMSolver
+    CombinedFieldIntegralEquationSolver{T,G,Sy,Ch} <: CFIE
 
 `CombinedFieldIntegralEquationSolver` is a concrete [`SweepBIMSolver`](@ref)
 implementing the (optionally Kress-corrected) combined-field boundary integral
@@ -42,7 +42,7 @@ The following functions can be evaluated for this type:
 - [`solve_wavenumber`](@ref)
 - [`k_sweep`](@ref)
 """
-struct CombinedFieldIntegralEquationSolver{T<:Real,G<:BoundaryGrading,Sy<:Union{AbsSymmetry,Nothing},Ch<:Tuple} <: SweepBIMSolver
+struct CombinedFieldIntegralEquationSolver{T<:Real,G<:BoundaryGrading,Sy<:Union{AbsSymmetry,Nothing},Ch<:Tuple} <: CFIE
     pts_scaling_factor::Vector{T}
     min_pts::Int64
     grading::G

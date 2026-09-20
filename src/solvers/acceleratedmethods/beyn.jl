@@ -299,7 +299,9 @@ outside the contour are discarded.
 * `X::Matrix{Complex{T}}`: Corresponding boundary-density vectors as columns.
 """
 function _beyn_projected_solve(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, rng=MersenneTwister(0))
-    T = _bim_numeric_type(solver); k0c = Complex{T}(k0); Rc = T(dk)/2; A0, A1 = construct_matrices(solver, pts, k0c, Rc; multithreaded, rng); N = size(A0, 1)
+    T = _bim_numeric_type(solver); k0c = Complex{T}(k0); Rc = T(dk)/2; 
+    @blas_1 A0, A1 = construct_matrices(solver, pts, k0c, Rc; multithreaded, rng)
+    N = size(A0, 1)
     @blas_multi_then_1 MAX_BLAS_THREADS U, Σ, W = svd!(A0; full=false)
     rk = count(>=(solver.svd_tol), Σ)
     rk == 0 && return Complex{T}[], Matrix{Complex{T}}(undef, N, 0)
@@ -321,7 +323,7 @@ end
 ################################################################################
 
 @inline function _beyn_residual(solver::BeynSolver, pts, k, x, y; multithreaded::Bool=true)
-    A = construct_matrices(solver.kernel, pts, k; multithreaded)
+    @blas_1 A = construct_matrices(solver.kernel, pts, k; multithreaded)
     @blas_multi_then_1 MAX_BLAS_THREADS mul!(y, A, x)
     return norm(y)
 end
