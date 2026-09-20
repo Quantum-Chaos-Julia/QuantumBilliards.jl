@@ -141,6 +141,13 @@ receives them as a single `Vector{Complex{T}}`.
 """
 _fold_boundary(::Type{T}, xy, symmetry::AbsSymmetry, character::Tuple) where {T<:Real} = symmetry_index_orbits(T,xy,symmetry,Complex{T}.(character)...)
 _fold_boundary(::Type{T}, xy, symmetry::CompositeReflection, character::Tuple) where {T<:Real} = symmetry_index_orbits(T,xy,symmetry,Complex{T}[character...])
+function _fold_boundary(::Type{T}, xy, symmetry::NFoldRotation, character::Tuple) where {T<:Real}
+    isempty(character) && return symmetry_index_orbits(T,xy,symmetry)
+    length(character)==1 || throw(ArgumentError("NFoldRotation requires exactly one sector"))
+    sector=only(character)
+    sector isa Int || throw(ArgumentError("NFoldRotation sector must be an Int"))
+    return symmetry_index_orbits(T,xy,symmetry,sector)
+end
 
 ################################################################################
 # BIM STATE CONSTRUCTION
