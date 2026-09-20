@@ -154,7 +154,7 @@ derivative `u = ∂ₙψ`:
 @inline function ϕ_slp(x::T, y::T, k::T, bd::BoundaryPoints{T}, u::AbstractVector, cheb, mode::Val) where {T<:Real}
     xy = bd.xy; ds = bd.ds
     S = promote_type(T, eltype(u)); acc = zero(S)
-    @inbounds @fastmath for j in eachindex(u)
+    @inbounds for j in eachindex(u)
         p = xy[j]
         dx = x - p[1]; dy = y - p[2]
         r2 = muladd(dx, dx, dy * dy)
@@ -191,7 +191,7 @@ with outgoing Helmholtz Green function
 @inline function ϕ_dlp(x::T, y::T, k::T, bd::BoundaryPoints{T}, μ::AbstractVector, cheb, mode::Val) where {T<:Real}
     xy = bd.xy; normal = bd.normal; ds = bd.ds
     S = promote_type(eltype(μ), Complex{T}); acc = zero(S); kquarter = k * T(0.25)
-    @inbounds @fastmath for j in eachindex(μ)
+    @inbounds for j in eachindex(μ)
         p = xy[j]; n = normal[j]
         dx = x - p[1]; dy = y - p[2]
         r2 = muladd(dx, dx, dy * dy)
@@ -230,7 +230,7 @@ irrelevant for an eigenfunction.
 @inline function ϕ_cfie(x::T, y::T, k::T, bd::BoundaryPoints{T}, μ::AbstractVector, cheb, mode::Val) where {T<:Real}
     xy = bd.xy; tangent = bd.tangent; ws = bd.ws
     S = promote_type(eltype(μ), Complex{T}); acc = zero(S); khalf = k * T(0.5)
-    @inbounds @fastmath for j in eachindex(μ)
+    @inbounds for j in eachindex(μ)
         p = xy[j]; t = tangent[j]
         dx = x - p[1]; dy = y - p[2]
         r2 = muladd(dx, dx, dy * dy)
