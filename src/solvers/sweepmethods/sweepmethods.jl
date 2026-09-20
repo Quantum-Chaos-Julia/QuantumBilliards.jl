@@ -139,8 +139,8 @@ receives them as a single `Vector{Complex{T}}`.
 ## Returns
 * `orbits::SymmetryOrbitMap{T}`: Symmetry-orbit mapping between the complete and fundamental-domain boundary discretizations.
 """
-_fold_boundary(::Type{T}, xy, symmetry::AbsSymmetry, character::Tuple) where {T<:Real} = symmetry_index_orbits(T, xy, symmetry, Complex{T}.(character...))
-_fold_boundary(::Type{T}, xy, symmetry::CompositeReflection, character::Tuple) where {T<:Real} = symmetry_index_orbits(T, xy, symmetry, Complex{T}[character...])
+_fold_boundary(::Type{T}, xy, symmetry::AbsSymmetry, character::Tuple) where {T<:Real} = symmetry_index_orbits(T,xy,symmetry,Complex{T}.(character)...)
+_fold_boundary(::Type{T}, xy, symmetry::CompositeReflection, character::Tuple) where {T<:Real} = symmetry_index_orbits(T,xy,symmetry,Complex{T}[character...])
 
 ################################################################################
 # BIM STATE CONSTRUCTION
