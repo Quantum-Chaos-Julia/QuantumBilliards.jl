@@ -91,51 +91,54 @@ end
 """
     evaluate_points(solver::VerginiSaracenoSolver, billiard::Bi, k) where {Bi<:AbsBilliard} → pts::BoundaryPoints
 
-Samples the boundary of `billiard` and computes the Vergini–Saraceno quadrature
-weights needed to construct the matrices in [`construct_matrices`](@ref).
+Samples the fundamental boundary of `billiard` and computes the quadrature
+weights required by the Vergini–Saraceno scaling method.
 
 ## Description
-The scaling factors and samplers are first adjusted to match the number of
-fundamental boundary curves with [`adjust_scaling_and_samplers`](@ref). Each curve
-is then sampled with its own sampler, using a number of points that scales with
-`solver.pts_scaling_factor` and the wavenumber `k`, and the quadrature weight at
-each point is computed as `w = ds / (r ⋅ n)`, where `r` is the boundary point and
-`n` its outward unit normal.
+Each fundamental boundary curve is sampled in its native parameter `t`. For
+quadrature nodes `tᵢ` with parameter-space weights `dtᵢ`, the physical
+arclength weights are
+
+`dsᵢ = |r'(tᵢ)| dtᵢ`.
+
+The outward unit normal is obtained by normalizing the gradient of the domain
+function pointwise. The Vergini–Saraceno weights are then
+
+`w_vsᵢ = dsᵢ / (r(tᵢ) ⋅ nᵢ)`.
+
+This construction includes the parametrization Jacobian explicitly and is
+therefore valid for arbitrary regular parametrizations; it does not assume
+that the curve parameter is proportional to arclength.
 
 ## Arguments
-* `solver`: The [`VerginiSaracenoSolver`](@ref) used to determine the sampling parameters.
-* `billiard`: The billiard whose boundary is sampled.
-* `k`: The wavenumber used to determine the number of boundary sampling points.
+* `solver::VerginiSaracenoSolver`: Solver defining the boundary sampling density.
+* `billiard::Bi`: Billiard whose fundamental boundary is sampled.
+* `k`: Wavenumber used to determine the number of boundary sampling points.
 
 ## Returns
-* `pts`: A [`BoundaryPoints`](@ref) instance with the `xy` and `w_vs` fields populated.
+* `pts::BoundaryPoints`: Boundary points with `xy` and `w_vs` populated.
 """
-function evaluate_points(solver::VerginiSaracenoSolver,billiard::Bi,k) where {Bi<:AbsBilliard}
-    bs,samplers=adjust_scaling_and_samplers(solver,billiard)
+function evaluate_points(solver::VerginiSaracenoSolver, billiard::Bi, k) where {Bi<:AbsBilliard}
+    bs, samplers = adjust_scaling_and_samplers(solver, billiard)
     curves = get_boundary_curves(billiard)
-    type = eltype(solver.pts_scaling_factor)
+    T = eltype(solver.pts_scaling_factor)
     Ns = _determine_bp_sizes(curves, bs, k)
     M = length(Ns)
-    xy_all = Vector{Vector{SVector{2,type}}}(undef, M)
-    w_all = Vector{Vector{type}}(undef, M)
-
+    xy_all = Vector{Vector{SVector{2,T}}}(undef, M)
+    w_all = Vector{Vector{T}}(undef, M)
     for i in eachindex(curves)
-        crv = curves[i]
-        L = crv.length
-        sampler = samplers[i]
+        crv = curves[i]; sampler = samplers[i]
         t, dt = sample_points(sampler, Ns[i])
-        ds = L*dt #this needs modification!!!
-        xy = curve(crv,t)
+        xy = curve(crv, t)
+        ds = norm.(tangent(crv, t)) .* dt
         normal = domain_gradient_vector(crv, xy)
-        normal .= normal./norm(normal)
+        normal ./= norm.(normal)
         rn = dot.(xy, normal)
         w = ds ./ rn
-        xy_all[i] = xy
-        w_all[i] = w       
+        xy_all[i] = xy; w_all[i] = w
     end
-    return BoundaryPoints(vcat(xy_all...);w_vs = vcat(w_all...))
+    return BoundaryPoints(vcat(xy_all...); w_vs=vcat(w_all...))
 end
-
 
 """
     construct_matrices(solver::VerginiSaracenoSolver, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool = true) where {Ba<:AbsBasis} → (F::Matrix, Fk::Matrix)
