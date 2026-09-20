@@ -19,6 +19,7 @@ wavenumber `k` (see [`solve`](@ref), [`sm_results`](@ref)).
 * `eps`: Relative tolerance used to filter small eigenvalues in the generalized eigenvalue decomposition.
 * `min_dim`: Minimum basis dimension.
 * `min_pts`: Minimum number of boundary sampling points.
+* `eigenvectors::Bool`: Whether `compute_spectrum` retains the basis eigenvectors returned by the scaling solve.
 
 ## API
 The following functions can be evaluated for this type:
@@ -36,56 +37,55 @@ mutable struct VerginiSaracenoSolver{T} <: AcceleratedBasisSolver where {T<:Real
     eps::T
     min_dim::Int64
     min_pts::Int64
+    eigenvectors::Bool
 end
 
 """
-    VerginiSaracenoSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}; min_dim::Int = 100, min_pts::Int = 500) where T<:Real → solver::VerginiSaracenoSolver{T}
+    VerginiSaracenoSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}; min_dim::Int=100, min_pts::Int=500, eigenvectors::Bool=true) where {T<:Real}
 
-Constructs a [`VerginiSaracenoSolver`](@ref) with a single `GaussLegendreNodes`
-sampler shared by every fundamental boundary curve.
+Construct a [`VerginiSaracenoSolver`](@ref) with a single
+[`GaussLegendreNodes`](@ref) sampler shared by every fundamental boundary
+curve.
 
 ## Arguments
-* `dim_scaling_factor`: Scaling factor used to determine the basis dimension.
-* `pts_scaling_factor`: Scaling factor, or vector thereof (one per fundamental boundary curve), used to determine the number of boundary sampling points.
+* `dim_scaling_factor::T`: Scaling factor used to determine the basis dimension from the boundary length and wavenumber.
+* `pts_scaling_factor::Union{T,Vector{T}}`: Boundary-point scaling factor, or one factor per fundamental boundary curve.
 
-## Keyword arguments
-* `min_dim::Int = 100`: Minimum basis dimension.
-* `min_pts::Int = 500`: Minimum number of boundary sampling points.
+## Keyword Arguments
+* `min_dim::Int=100`: Minimum basis dimension.
+* `min_pts::Int=500`: Minimum number of boundary sampling points.
+* `eigenvectors::Bool`: Whether `compute_spectrum` retains the basis eigenvectors returned by the scaling solve.
 
 ## Returns
-* `solver`: A [`VerginiSaracenoSolver{T}`](@ref) instance.
+* `VerginiSaracenoSolver{T}`: Configured solver.
 """
-function VerginiSaracenoSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}; min_dim = 100, min_pts = 500) where T<:Real 
-    d = dim_scaling_factor
-    bs = typeof(pts_scaling_factor) == T ? [pts_scaling_factor] : pts_scaling_factor
-    sampler = [GaussLegendreNodes()]
-    timer = TimerOutput()
-return VerginiSaracenoSolver(d, bs, sampler, eps(T), min_dim, min_pts)
+function VerginiSaracenoSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}; min_dim::Int=100, min_pts::Int=500, eigenvectors::Bool=true) where {T<:Real}
+    d = dim_scaling_factor; bs = pts_scaling_factor isa T ? [pts_scaling_factor] : pts_scaling_factor; sampler = [GaussLegendreNodes()]
+    return VerginiSaracenoSolver(d, bs, sampler, eps(T), min_dim, min_pts, eigenvectors)
 end
 
 """
-    VerginiSaracenoSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}, samplers::Vector{AbsSampler}; min_dim::Int = 100, min_pts::Int = 500) where T<:Real → solver::VerginiSaracenoSolver{T}
+    VerginiSaracenoSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}, samplers::Vector{AbsSampler}; min_dim::Int=100, min_pts::Int=500, eigenvectors::Bool=true) where {T<:Real}
 
-Constructs a [`VerginiSaracenoSolver`](@ref) with a user-supplied sampler for each
-fundamental boundary curve.
+Construct a [`VerginiSaracenoSolver`](@ref) with a user-supplied sampler for
+each fundamental boundary curve.
 
 ## Arguments
-* `dim_scaling_factor`: Scaling factor used to determine the basis dimension.
-* `pts_scaling_factor`: Scaling factor, or vector thereof (one per fundamental boundary curve), used to determine the number of boundary sampling points.
-* `samplers`: Vector of samplers, one per fundamental boundary curve.
+* `dim_scaling_factor::T`: Scaling factor used to determine the basis dimension from the boundary length and wavenumber.
+* `pts_scaling_factor::Union{T,Vector{T}}`: Boundary-point scaling factor, or one factor per fundamental boundary curve.
+* `samplers::Vector{AbsSampler}`: Boundary samplers.
 
-## Keyword arguments
-* `min_dim::Int = 100`: Minimum basis dimension.
-* `min_pts::Int = 500`: Minimum number of boundary sampling points.
+## Keyword Arguments
+* `min_dim::Int=100`: Minimum basis dimension.
+* `min_pts::Int=500`: Minimum number of boundary sampling points.
+* `eigenvectors::Bool`: Whether `compute_spectrum` retains the basis eigenvectors returned by the scaling solve.
 
 ## Returns
-* `solver`: A [`VerginiSaracenoSolver{T}`](@ref) instance.
+* `VerginiSaracenoSolver{T}`: Configured solver.
 """
-function VerginiSaracenoSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}, samplers::Vector{AbsSampler}; min_dim = 100, min_pts = 500) where {T<:Real} 
-    d = dim_scaling_factor
-    bs = typeof(pts_scaling_factor) == T ? [pts_scaling_factor] : pts_scaling_factor
-    timer = TimerOutput()
-    return VerginiSaracenoSolver(d, bs, samplers, eps(T), min_dim, min_pts)
+function VerginiSaracenoSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}, samplers::Vector{AbsSampler}; min_dim::Int=100, min_pts::Int=500, eigenvectors::Bool=true) where {T<:Real}
+    d = dim_scaling_factor; bs = pts_scaling_factor isa T ? [pts_scaling_factor] : pts_scaling_factor
+    return VerginiSaracenoSolver(d, bs, samplers, eps(T), min_dim, min_pts, eigenvectors)
 end
 
 """

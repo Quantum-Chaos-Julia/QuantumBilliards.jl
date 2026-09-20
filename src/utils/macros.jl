@@ -1,12 +1,16 @@
 
 const MAX_BLAS_THREADS=Sys.CPU_THREADS
 
+#expand for other types of numbers
 function set_precision(a)
-    #expand for other types of numbers
     t = typeof(a)
     return t == Float32 ? Float32(1e-8) : convert(t,1e-16) 
 end
 
+# Runs a loop with ProgressMeter only when requested.
+macro maybe_showprogress(show_progress, loop)
+    return esc(:($show_progress ? (@showprogress $loop) : $loop))
+end
 """
     use_threads(args...)
     

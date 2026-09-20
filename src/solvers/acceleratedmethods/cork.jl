@@ -928,7 +928,6 @@ of each window.
 function CORKSolver(kernel::K; p::Int=16, guard::Real=0.05, nlevels::Int=200, Rmax::Real=0.8, b::Int=10, mstart::Int=30*b, mstep::Int=10*b, stable_checks::Int=1, imag_tol::Real=1e-8, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, eigenvectors::Bool=false, validate::Bool=false, verbose::Bool=false, taylor_tol::Real=1e-10) where {K<:SweepBIMSolver} 
     T = _bim_numeric_type(kernel)
     T === Float64 || throw(ArgumentError("CORKSolver currently requires a Float64 BIM kernel"))
-    p >= 2 || throw(ArgumentError("p must be at least 2; received p=$p"))
     mstart % b == 0 || throw(ArgumentError("mstart must be divisible by b"))
     mstep % b == 0 || throw(ArgumentError("mstep must be divisible by b"))
     return CORKSolver{T,K}(kernel,p,T(guard),nlevels,T(Rmax),b,mstart,mstep,stable_checks,T(imag_tol),T(edge_tol),T(res_tol),T(stable_tol),T(imag_search_tol),eigenvectors,validate,verbose,T(taylor_tol))
@@ -962,9 +961,7 @@ Execute the complete Chebyshev-CORK pipeline on the interval `[k₀-dk/2,k₀+dk
 """
 function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=true, eigenvectors::Bool=solver.eigenvectors)
     k0f = Float64(k0); Δ = Float64(dk) / 2
-    Δ > 0 || throw(ArgumentError("dk must be positive; received dk=$dk"))
     Δpoly = Δ * (1 + solver.guard)
-    k0f > Δpoly || throw(ArgumentError("CORK polynomial interval reaches k=0"))
     P = nothing; tbuild = 0.0
     @timeit_debug "CORK polynomial construction" begin
         P, tbuild = build_cork_polynomial(solver.kernel, pts, k0f, Δpoly, solver.p; multithreaded = multithreaded)
@@ -1011,24 +1008,24 @@ end
 """
     solve_vectors(solver::CORKSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true)
 
-Compute the accepted CORK roots and reconstruct their corresponding physical
-Fredholm vectors in `[k₀-dk/2,k₀+dk/2]`.
+Compute the accepted CORK roots and their corresponding layer densities in
+`[k₀-dk/2,k₀+dk/2]`.
 
 ## Arguments
 - `solver::CORKSolver`: Configured CORK eigensolver.
 - `pts::BoundaryPoints`: Boundary discretization at the expansion center.
 - `k0`: Center of the requested physical interval.
 - `dk`: Full width of the requested physical interval.
-- `multithreaded::Bool`: Whether polynomial assembly uses Julia threads.
+- `multithreaded::Bool=true`: Whether polynomial assembly uses Julia threads.
 
 ## Returns
 - `Vector{ComplexF64}`: Accepted physical wavenumbers.
 - `Vector{Float64}`: Corresponding projected CORK residual indicators.
-- `Matrix{ComplexF64}`: Corresponding normalized physical Fredholm vectors.
+- `Matrix{ComplexF64}`: Corresponding layer densities stored column-wise.
 """
 function solve_vectors(solver::CORKSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true)
-    P, S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = _cork_solve_core(solver, pts, k0, dk; multithreaded=multithreaded, eigenvectors=true)
-    λ = ComplexF64[complex(x[1],x[2]) for x in ks]; ts = Float64[x[3] for x in ks]
+    P, S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = _cork_solve_core(solver, pts, k0, dk; multithreaded, eigenvectors=true)
+    λ = ComplexF64[complex(x[1], x[2]) for x in ks]; ts = Float64[x[3] for x in ks]
     return λ, ts, Ψ
 end
 

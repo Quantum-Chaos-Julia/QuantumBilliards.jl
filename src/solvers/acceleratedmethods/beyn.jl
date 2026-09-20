@@ -26,7 +26,7 @@
 #     B = Uᵣ* A₁ Wᵣ Σᵣ⁻¹.
 #
 # The eigenvalues of B approximate the nonlinear eigenvalues k inside Γ, while
-# the corresponding boundary densities are reconstructed as
+# the corresponding layer densities are reconstructed as
 #
 #     X = UᵣY,
 #
@@ -72,6 +72,7 @@ order and terminates after a prescribed sequence of residual-good roots.
 * `imag_k_check::Bool`: Enable global imaginary-`k` screening.
 * `imag_k_pad::Int`: Consecutive good roots required before stopping.
 * `imag_k_group_size::Int`: Maximum residual-check batch size.
+* `eigenvectors::Bool`: Whether `compute_spectrum` retains the layer densities returned by the Beyn solve.
 """
 struct BeynSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
     kernel::K
@@ -87,6 +88,7 @@ struct BeynSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
     imag_k_check::Bool
     imag_k_pad::Int
     imag_k_group_size::Int
+    eigenvectors::Bool
 end
 
 """
@@ -118,15 +120,14 @@ global imaginary-`k` screening by default.
 * `imag_k_check::Bool=true`: Enable global imaginary-`k` screening in `compute_spectrum`.
 * `imag_k_pad::Int=20`: Consecutive residual-good roots required before stopping.
 * `imag_k_group_size::Int=20`: Maximum residual-check batch size.
+* `eigenvectors::Bool`: Whether `compute_spectrum` retains the layer densities returned by the Beyn solve.
 
 ## Returns
 * `BeynSolver{T,K}`: Configured Beyn solver.
 """
-function BeynSolver(kernel::K; m::Int=10, nq::Int=48, r::Int=48, Rmax::Real=1.0, svd_tol::Real=1e-12, res_tol::Real=1e-9, auto_discard_spurious::Bool=true, use_chebyshev::Bool=true, n_panels_h::Int=15000, M_h::Int=5, n_panels_j::Int=10000, M_j::Int=5, cheb_config::Union{Nothing,ChebyshevConfig}=nothing, imag_k_check::Bool=true, imag_k_pad::Int=20, imag_k_group_size::Int=20) where {K<:SweepBIMSolver}
-    m > 0 || throw(ArgumentError("m must be positive")); nq > 0 || throw(ArgumentError("nq must be positive")); r > 0 || throw(ArgumentError("r must be positive")); Rmax > 0 || throw(ArgumentError("Rmax must be positive"))
-    imag_k_pad > 0 || throw(ArgumentError("imag_k_pad must be positive")); imag_k_group_size > 0 || throw(ArgumentError("imag_k_group_size must be positive"))
+function BeynSolver(kernel::K; m::Int=100, nq::Int=40, r::Int=200, Rmax::Real=0.5, svd_tol::Real=1e-11, res_tol::Real=1e-8, auto_discard_spurious::Bool=true, use_chebyshev::Bool=true, n_panels_h::Int=15000, M_h::Int=5, n_panels_j::Int=10000, M_j::Int=5, cheb_config::Union{Nothing,ChebyshevConfig}=nothing, imag_k_check::Bool=true, imag_k_pad::Int=20, imag_k_group_size::Int=20, eigenvectors::Bool=true) where {K<:SweepBIMSolver}
     T = _bim_numeric_type(kernel); cfg = cheb_config === nothing ? ChebyshevConfig(T; n_panels_h, M_h, n_panels_j, M_j) : cheb_config
-    return BeynSolver{T,K}(kernel, m, nq, r, T(Rmax), T(svd_tol), T(res_tol), auto_discard_spurious, use_chebyshev, cfg, imag_k_check, imag_k_pad, imag_k_group_size)
+    return BeynSolver{T,K}(kernel, m, nq, r, T(Rmax), T(svd_tol), T(res_tol), auto_discard_spurious, use_chebyshev, cfg, imag_k_check, imag_k_pad, imag_k_group_size, eigenvectors)
 end
 
 _bim_numeric_type(::BeynSolver{T}) where {T} = T
@@ -400,12 +401,8 @@ multi-`k` Chebyshev backend when available.
 """
 function _beyn_imag_k_check(solver::BeynSolver, ks_all, X_all, all_pts; pad::Int=solver.imag_k_pad, group_size::Int=solver.imag_k_group_size, multithreaded::Bool=true)
     T = _bim_numeric_type(solver); nw = length(ks_all)
-    length(X_all) == nw || throw(DimensionMismatch("X_all and ks_all differ in length")); length(all_pts) == nw || throw(DimensionMismatch("all_pts and ks_all differ in length"))
-    pad > 0 || throw(ArgumentError("pad must be positive")); group_size > 0 || throw(ArgumentError("group_size must be positive"))
     keep = [trues(length(ks_all[i])) for i in 1:nw]; residuals = [fill(T(NaN), length(ks_all[i])) for i in 1:nw]; candidates = Tuple{Int,Int,T}[]
     @inbounds for i in 1:nw
-        size(X_all[i], 2) == length(ks_all[i]) || throw(DimensionMismatch("window $i: eigenvalue/eigenvector count mismatch"))
-        size(X_all[i], 1) == boundary_matrix_size(solver.kernel, all_pts[i]) || throw(DimensionMismatch("window $i: eigenvector/boundary-matrix size mismatch"))
         for j in eachindex(ks_all[i])
             push!(candidates, (i, j, abs(imag(ks_all[i][j]))))
         end
