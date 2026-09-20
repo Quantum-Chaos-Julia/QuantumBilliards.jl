@@ -250,7 +250,7 @@ end
 ################################################################################
 
 """
-    wavefunctions(solver::SweepBIMSolver, ks::Vector{T}, vec_u, vec_pts::Vector{<:BoundaryPoints{T}}, billiard::Bi; layer_density::Bool = true, b::Union{Real,Symbol} = :auto, inside_only::Bool = true, MIN_CHUNK::Int = 4096, float32_bessel::Bool = true, use_chebyshev::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(T))
+    wavefunction(solver::SweepBIMSolver, ks::Vector{T}, vec_u, vec_pts::Vector{<:BoundaryPoints{T}}, billiard::Bi; layer_density::Bool = true, b::Union{Real,Symbol} = :auto, inside_only::Bool = true, MIN_CHUNK::Int = 4096, float32_bessel::Bool = true, use_chebyshev::Bool = true, show_progress::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(T))
 
 Reconstruct one or more BIM eigenfunctions on a common Cartesian grid.
 
@@ -264,146 +264,167 @@ normal derivative `u = ∂ₙψ` and
 
     ψ(x) = 1/4 ∫∂Ω Y₀(k|x-q|) u(q) ds_q.
 
+The Cartesian grid is constructed once from the largest wave number in `ks`.
 The boundary data must already represent the complete physical boundary.
 
 ## Arguments
 - `solver::SweepBIMSolver`: BIM solver associated with the states.
 - `ks::Vector{T}`: Wave numbers.
 - `vec_u`: Native layer densities or physical boundary normal derivatives.
-- `vec_pts::Vector{<:BoundaryPoints{T}}`: Corresponding full-boundary
-  discretizations.
+- `vec_pts::Vector{<:BoundaryPoints{T}}`: Corresponding full-boundary discretizations.
 - `billiard::Bi`: Billiard geometry.
 
-## Kwargs
-- `layer_density::Bool = true`: Use the native BIM density rather than
-  `u = ∂ₙψ`.
-- `b::Union{Real,Symbol} = :auto`: Grid points per wavelength; `:auto` uses
-  `_bim_grid_scale(solver)`.
+## Keyword Arguments
+- `layer_density::Bool = true`: Use the native BIM density rather than `u = ∂ₙψ`.
+- `b::Union{Real,Symbol} = :auto`: Grid points per wavelength; `:auto` uses `_bim_grid_scale(solver)`.
 - `inside_only::Bool = true`: Evaluate only inside the billiard.
 - `MIN_CHUNK::Int = 4096`: Minimum spatial workload per active thread.
-- `float32_bessel::Bool = true`: Use Float32 Bessel/Hankel evaluation when
-  Chebyshev acceleration is disabled.
+- `float32_bessel::Bool = true`: Use Float32 Bessel/Hankel evaluation when Chebyshev acceleration is disabled.
 - `use_chebyshev::Bool = true`: Use Chebyshev-accelerated radial functions.
-- `cheb_config::ChebyshevConfig = ChebyshevConfig(T)`: Chebyshev tuning
-  configuration.
+- `show_progress::Bool = true`: Display progress for individual eigenstates.
+- `cheb_config::ChebyshevConfig = ChebyshevConfig(T)`: Chebyshev tuning configuration.
 
 ## Returns
 - `Psi2ds::Vector{Matrix{V}}`: Reconstructed wavefunctions.
 - `x_grid::Vector{T}`: Cartesian x coordinates.
 - `y_grid::Vector{T}`: Cartesian y coordinates.
 """
-function wavefunctions(solver::SweepBIMSolver, ks::Vector{T}, vec_u, vec_pts::Vector{<:BoundaryPoints{T}}, billiard::Bi; layer_density::Bool = true, b::Union{Real,Symbol} = :auto, inside_only::Bool = true, MIN_CHUNK::Int = 4096, float32_bessel::Bool = true, use_chebyshev::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(T)) where {Bi<:BilliardGeometry.AbsBilliard,T<:Real}
-    kwargs = (; b, inside_only, MIN_CHUNK, cheb_config)
-    if layer_density
-        if use_chebyshev
-            return _wavefunctions(solver, ks, vec_u, vec_pts, billiard, Val(:density), Val(:cheb); kwargs...)
-        elseif float32_bessel
-            return _wavefunctions(solver, ks, vec_u, vec_pts, billiard, Val(:density), Val(:f32); kwargs...)
-        else
-            return _wavefunctions(solver, ks, vec_u, vec_pts, billiard, Val(:density), Val(:direct); kwargs...)
-        end
-    elseif use_chebyshev
-        return _wavefunctions(solver, ks, vec_u, vec_pts, billiard, Val(:boundary), Val(:cheb); kwargs...)
-    elseif float32_bessel
-        return _wavefunctions(solver, ks, vec_u, vec_pts, billiard, Val(:boundary), Val(:f32); kwargs...)
-    else
-        return _wavefunctions(solver, ks, vec_u, vec_pts, billiard, Val(:boundary), Val(:direct); kwargs...)
-    end
+function wavefunction(solver::SweepBIMSolver, ks::Vector{T}, vec_u, vec_pts::Vector{<:BoundaryPoints{T}}, billiard::Bi; layer_density::Bool=true, b::Union{Real,Symbol}=:auto, inside_only::Bool=true, MIN_CHUNK::Int=4096, float32_bessel::Bool=true, use_chebyshev::Bool=true, show_progress::Bool=true, cheb_config::ChebyshevConfig=ChebyshevConfig(T)) where {Bi<:BilliardGeometry.AbsBilliard,T<:Real}
+    kmax = maximum(ks); bval = b === :auto ? T(_bim_grid_scale(solver)) : T(b)
+    x_grid,y_grid,pts,indices,nx,ny = _wavefunction_grid(kmax,solver,billiard,bval;inside_only)
+    representation = layer_density ? Val(:density) : Val(:boundary)
+    mode = use_chebyshev ? Val(:cheb) : float32_bessel ? Val(:f32) : Val(:direct)
+    Psi2ds = _wavefunctions(solver,ks,vec_u,vec_pts,x_grid,y_grid,pts,indices,nx,ny,representation,mode;MIN_CHUNK,show_progress,cheb_config)
+    return Psi2ds,x_grid,y_grid
+end
+
+# Native DLP layer density μ: reconstruct with the double-layer potential.
+function _wavefunctions(solver::DLP, ks::Vector{T}, vec_u, vec_pts::Vector{<:BoundaryPoints{T}}, x_grid::Vector{T}, y_grid::Vector{T}, pts, indices, nx::Int, ny::Int, ::Val{:density}, mode::Val{M}; MIN_CHUNK::Int=4096, show_progress::Bool=true, cheb_config::ChebyshevConfig=ChebyshevConfig(T)) where {T<:Real,M}
+    return _wavefunctions_impl(solver,ks,vec_u,vec_pts,x_grid,y_grid,pts,indices,nx,ny,Val(:dlp),mode,ϕ_dlp;MIN_CHUNK,show_progress,cheb_config)
+end
+
+# Native CFIE layer density μ: reconstruct with the combined-field potential.
+function _wavefunctions(solver::CFIE, ks::Vector{T}, vec_u, vec_pts::Vector{<:BoundaryPoints{T}}, x_grid::Vector{T}, y_grid::Vector{T}, pts, indices, nx::Int, ny::Int, ::Val{:density}, mode::Val{M}; MIN_CHUNK::Int=4096, show_progress::Bool=true, cheb_config::ChebyshevConfig=ChebyshevConfig(T)) where {T<:Real,M}
+    return _wavefunctions_impl(solver,ks,vec_u,vec_pts,x_grid,y_grid,pts,indices,nx,ny,Val(:cfie),mode,ϕ_cfie;MIN_CHUNK,show_progress,cheb_config)
+end
+
+# Physical boundary derivative u=∂ₙψ: SLP reconstruction is independent of the original BIM formulation.
+function _wavefunctions(solver::SweepBIMSolver, ks::Vector{T}, vec_u, vec_pts::Vector{<:BoundaryPoints{T}}, x_grid::Vector{T}, y_grid::Vector{T}, pts, indices, nx::Int, ny::Int, ::Val{:boundary}, mode::Val{M}; MIN_CHUNK::Int=4096, show_progress::Bool=true, cheb_config::ChebyshevConfig=ChebyshevConfig(T)) where {T<:Real,M}
+    return _wavefunctions_impl(solver,ks,vec_u,vec_pts,x_grid,y_grid,pts,indices,nx,ny,Val(:slp),mode,ϕ_slp;MIN_CHUNK,show_progress,cheb_config)
 end
 
 """
-    _wavefunctions(solver::SweepBIMSolver, ks::Vector{T}, vec_u, vec_pts::Vector{<:BoundaryPoints{T}}, billiard::Bi, representation::Val{R}, mode::Val{M}; b::Union{Real,Symbol} = :auto, inside_only::Bool = true, MIN_CHUNK::Int = 4096, cheb_config::ChebyshevConfig = ChebyshevConfig(T))
+    _wavefunctions_impl(solver::SweepBIMSolver, ks::Vector{T}, vec_u, vec_pts::Vector{<:BoundaryPoints{T}}, x_grid::Vector{T}, y_grid::Vector{T}, pts, indices, nx::Int, ny::Int, representation::Val{R}, mode::Val{M}, ϕ::F; MIN_CHUNK::Int = 4096, show_progress::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(T))
 
-Internal BIM wavefunction reconstruction kernel.
+Evaluate BIM wavefunctions on a preconstructed Cartesian grid.
 
-`Val(:density)` selects the native DLP/CFIE layer representation and
-`Val(:boundary)` the physical normal derivative `u = ∂ₙψ`. The evaluation
-mode is selected by `Val(:cheb)`, `Val(:f32)`, or `Val(:direct)`.
+The Cartesian grid and its active point indices are supplied by the caller so
+that grid construction and geometric masking can be shared across multiple
+reconstruction batches. The layer-potential evaluator is selected by dispatch
+before entering the threaded evaluation kernel.
 
 ## Arguments
 - `solver::SweepBIMSolver`: BIM solver.
 - `ks::Vector{T}`: Wave numbers.
 - `vec_u`: Boundary vectors.
 - `vec_pts::Vector{<:BoundaryPoints{T}}`: Full-boundary discretizations.
-- `billiard::Bi`: Billiard geometry.
-- `representation::Val{R}`: Boundary representation.
-- `mode::Val{M}`: Radial-function evaluation mode.
+- `x_grid::Vector{T}`: Cartesian x coordinates.
+- `y_grid::Vector{T}`: Cartesian y coordinates.
+- `pts`: Flattened Cartesian grid points.
+- `indices`: Grid-point indices at which the wavefunctions are evaluated.
+- `nx::Int`: Number of x-grid points.
+- `ny::Int`: Number of y-grid points.
+- `representation::Val{R}`: `Val(:dlp)`, `Val(:cfie)`, or `Val(:slp)`.
+- `mode::Val{M}`: `Val(:cheb)`, `Val(:f32)`, or `Val(:direct)`.
+- `ϕ::F`: Specialized layer-potential evaluator.
 
-## Kwargs
-- `b::Union{Real,Symbol} = :auto`: Grid points per wavelength.
-- `inside_only::Bool = true`: Evaluate only inside the billiard.
+## Keyword Arguments
 - `MIN_CHUNK::Int = 4096`: Minimum spatial workload per active thread.
-- `cheb_config::ChebyshevConfig = ChebyshevConfig(T)`: Chebyshev tuning
-  configuration.
+- `show_progress::Bool = true`: Display progress for individual eigenstates.
+- `cheb_config::ChebyshevConfig = ChebyshevConfig(T)`: Chebyshev tuning configuration.
 
 ## Returns
 - `Psi2ds::Vector{Matrix{V}}`: Reconstructed wavefunctions.
-- `x_grid::Vector{T}`: Cartesian x coordinates.
-- `y_grid::Vector{T}`: Cartesian y coordinates.
 """
-function _wavefunctions(solver::SweepBIMSolver, ks::Vector{T}, vec_u, vec_pts::Vector{<:BoundaryPoints{T}}, billiard::Bi, representation::Val{R}, mode::Val{M}; b::Union{Real,Symbol} = :auto, inside_only::Bool = true, MIN_CHUNK::Int = 4096, cheb_config::ChebyshevConfig = ChebyshevConfig(T)) where {Bi<:BilliardGeometry.AbsBilliard,T<:Real,R,M}
-    kmax, idx_max = findmax(ks)
-    bval = b === :auto ? T(_bim_grid_scale(solver)) : T(b)
-    x_grid, y_grid, pts, indices, nx, ny = _wavefunction_grid(kmax, solver, billiard, bval; inside_only = inside_only)
+function _wavefunctions_impl(solver::SweepBIMSolver, ks::Vector{T}, vec_u, vec_pts::Vector{<:BoundaryPoints{T}}, x_grid::Vector{T}, y_grid::Vector{T}, pts, indices, nx::Int, ny::Int, representation::Val{R}, mode::Val{M}, ϕ::F; MIN_CHUNK::Int=4096, show_progress::Bool=true, cheb_config::ChebyshevConfig=ChebyshevConfig(T)) where {T<:Real,R,M,F}
+    _,idx_max = findmax(ks)
     if M === :cheb
-        ks_cheb = ComplexF64.(ks)
-        bd = vec_pts[idx_max]
-        xmin = Float64(x_grid[1]); xmax = Float64(x_grid[end]); ymin = Float64(y_grid[1]); ymax = Float64(y_grid[end])
-        rmax = 0.0
+        ks_cheb = ComplexF64.(ks); bd = vec_pts[idx_max]
+        xmin = Float64(x_grid[1]); xmax = Float64(x_grid[end]); ymin = Float64(y_grid[1]); ymax = Float64(y_grid[end]); rmax = 0.0
         @inbounds for p in bd.xy
-            rmax = max(rmax, hypot(xmin - p[1], ymin - p[2]), hypot(xmin - p[1], ymax - p[2]), hypot(xmax - p[1], ymin - p[2]), hypot(xmax - p[1], ymax - p[2]))
+            rmax = max(rmax,hypot(xmin-p[1],ymin-p[2]),hypot(xmin-p[1],ymax-p[2]),hypot(xmax-p[1],ymin-p[2]),hypot(xmax-p[1],ymax-p[2]))
         end
         rmax *= 1.05
-        rmin = hankel_z_chebyshev_cutoff / maximum(abs, ks_cheb)
-        if R === :density && solver isa CFIE
-            plans0, plans1, _, _, _ = tune_cfie_cheb_plans(rmin, rmax, ks_cheb, cheb_config)
-            cheb_plans = [(plans0[i], plans1[i]) for i in eachindex(ks)]
-        elseif R === :density && solver isa DLP
-            plans1, _, _ = tune_dlp_cheb_plans(rmin, rmax, ks_cheb, cheb_config)
+        rmin = hankel_z_chebyshev_cutoff/maximum(abs,ks_cheb)
+        if R === :cfie
+            plans0,plans1,_,_,_ = tune_cfie_cheb_plans(rmin,rmax,ks_cheb,cheb_config)
+            cheb_plans = [(plans0[i],plans1[i]) for i in eachindex(ks)]
+        elseif R === :dlp
+            plans1,_,_ = tune_dlp_cheb_plans(rmin,rmax,ks_cheb,cheb_config)
             cheb_plans = plans1
-        elseif R === :boundary
-            plans0, _, _, _, _ = tune_cfie_cheb_plans(rmin, rmax, ks_cheb, cheb_config)
-            cheb_plans = plans0
         else
-            throw(ArgumentError("Native layer-density reconstruction requires a DLP or CFIE solver"))
+            plans0,_,_,_,_ = tune_cfie_cheb_plans(rmin,rmax,ks_cheb,cheb_config)
+            cheb_plans = plans0
         end
     else
-        cheb_plans = fill(nothing, length(ks))
+        cheb_plans = fill(nothing,length(ks))
     end
-    if R === :density && solver isa CFIE
-        ϕ = ϕ_cfie
-        V = Complex{T}
-    elseif R === :density && solver isa DLP
-        ϕ = ϕ_dlp
-        V = promote_type(T, eltype(vec_u[1]))
-    elseif R === :boundary
-        ϕ = ϕ_slp
-        V = promote_type(T, eltype(vec_u[1]))
-    else
-        throw(ArgumentError("Native layer-density reconstruction requires a DLP or CFIE solver"))
-    end
-    Psi2ds = Vector{Matrix{V}}(undef, length(ks))
-    nmask = length(indices); NT_eff = max(1, min(Threads.nthreads(), cld(nmask, MIN_CHUNK))); q, r = divrem(nmask, NT_eff)
-    progress = length(ks) > 1 ? Progress(length(ks); desc = "Constructing wavefunction matrices...") : nothing
-    @inbounds for i in eachindex(ks)
-        Psi = zeros(V, nx * ny)
-        k = ks[i]; u = vec_u[i]; bd = vec_pts[i]; cheb = cheb_plans[i]
+    V = R === :slp ? promote_type(T,eltype(vec_u[1])) : promote_type(eltype(vec_u[1]),Complex{T})
+    Psi2ds = Vector{Matrix{V}}(undef,length(ks))
+    nmask = length(indices); NT_eff = max(1,min(Threads.nthreads(),cld(nmask,MIN_CHUNK))); q,r = divrem(nmask,NT_eff)
+    @maybe_showprogress show_progress for i in eachindex(ks)
+        Psi = zeros(V,nx*ny); k = ks[i]; u = vec_u[i]; bd = vec_pts[i]; cheb = cheb_plans[i]
         Threads.@threads :static for t in 1:NT_eff
-            lo = (t - 1) * q + min(t - 1, r) + 1
-            hi = lo + q - 1 + (t <= r ? 1 : 0)
-            for jj in lo:hi
+            lo = (t-1)*q+min(t-1,r)+1; hi = lo+q-1+(t<=r ? 1 : 0)
+            @inbounds for jj in lo:hi
                 idx = indices[jj]; p = pts[idx]
-                Psi[idx] = ϕ(p[1], p[2], k, bd, u, cheb, mode)
+                Psi[idx] = ϕ(p[1],p[2],k,bd,u,cheb,mode)
             end
         end
-        Psi2ds[i] = reshape(Psi, nx, ny)
-        progress !== nothing && next!(progress)
+        Psi2ds[i] = reshape(Psi,nx,ny)
     end
-    return Psi2ds, x_grid, y_grid
+    return Psi2ds
 end
 
 """
-    wavefunction(state::BIMEigenstate; b::Union{Real,Symbol} = :auto, inside_only::Bool = true, MIN_CHUNK::Int = 4096, float32_bessel::Bool = true, use_chebyshev::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(...))
+    wavefunction(states::AbstractVector{<:BIMEigenstate}; b::Union{Real,Symbol} = :auto, inside_only::Bool = true, MIN_CHUNK::Int = 4096, float32_bessel::Bool = true, use_chebyshev::Bool = true, show_progress::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(eltype(first(states).pts.ds), tol = 1e-10))
+
+Reconstruct a collection of BIM eigenstates on one common Cartesian grid.
+
+## Arguments
+- `states::AbstractVector{<:BIMEigenstate}`: BIM eigenstates to reconstruct.
+
+## Keyword Arguments
+- `b::Union{Real,Symbol} = :auto`: Grid points per wavelength; `:auto` uses the solver grid scale.
+- `inside_only::Bool = true`: Evaluate only inside the billiard.
+- `MIN_CHUNK::Int = 4096`: Minimum spatial workload per active thread.
+- `float32_bessel::Bool = true`: Use Float32 Bessel/Hankel evaluation when Chebyshev acceleration is disabled.
+- `use_chebyshev::Bool = true`: Use Chebyshev-accelerated radial functions.
+- `show_progress::Bool = true`: Display progress for individual eigenstates.
+- `cheb_config::ChebyshevConfig`: Chebyshev tuning configuration.
+
+## Returns
+- `Psi2ds::Vector{Matrix{V}}`: Reconstructed wavefunctions in the same order as `states`.
+- `x_grid::Vector{T}`: Cartesian x coordinates.
+- `y_grid::Vector{T}`: Cartesian y coordinates.
+"""
+function wavefunction(states::AbstractVector{<:BIMEigenstate}; b::Union{Real,Symbol}=:auto, inside_only::Bool=true, MIN_CHUNK::Int=4096, float32_bessel::Bool=true, use_chebyshev::Bool=true, show_progress::Bool=true, cheb_config::ChebyshevConfig=ChebyshevConfig(eltype(first(states).pts.ds),tol=1e-10))
+    s0 = first(states); T = eltype(s0.pts.ds)
+    ks = T[real(s.k) for s in states]; kmax = maximum(ks)
+    bval = b === :auto ? T(_bim_grid_scale(s0.solver)) : T(b)
+    x_grid,y_grid,pts,indices,nx,ny = _wavefunction_grid(kmax,s0.solver,s0.billiard,bval;inside_only)
+    layer_density = all(s.vec !== nothing for s in states)
+    vec_u = layer_density ? [s.vec for s in states] : [s.u for s in states]
+    any(isnothing,vec_u) && error("BIMEigenstates must provide the same boundary representation")
+    vec_pts = [s.pts for s in states]
+    representation = layer_density ? Val(:density) : Val(:boundary)
+    mode = use_chebyshev ? Val(:cheb) : float32_bessel ? Val(:f32) : Val(:direct)
+    Psi2ds = _wavefunctions(s0.solver,ks,vec_u,vec_pts,x_grid,y_grid,pts,indices,nx,ny,representation,mode;MIN_CHUNK,show_progress,cheb_config)
+    return Psi2ds,x_grid,y_grid
+end
+
+"""
+    wavefunction(state::BIMEigenstate; b::Union{Real,Symbol} = :auto, inside_only::Bool = true, MIN_CHUNK::Int = 4096, float32_bessel::Bool = true, use_chebyshev::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(eltype(state.pts.ds), tol = 1e-10))
 
 Reconstruct the interior wavefunction of a BIM eigenstate.
 
@@ -416,19 +437,17 @@ Otherwise the physical boundary normal derivative `state.u = ∂ₙψ` is used,
 
     ψ(x) = 1/4 ∫∂Ω Y₀(k|x-q|) u(q) ds_q.
 
-Both representations are assumed to already be expanded onto the complete
-physical boundary `state.pts`.
+Both representations are assumed to already cover the complete physical
+boundary.
 
 ## Arguments
 - `state::BIMEigenstate`: BIM eigenstate to reconstruct.
 
-## Kwargs
-- `b::Union{Real,Symbol} = :auto`: Grid points per wavelength; `:auto` uses
-  `_bim_grid_scale(state.solver)`.
+## Keyword Arguments
+- `b::Union{Real,Symbol} = :auto`: Grid points per wavelength.
 - `inside_only::Bool = true`: Evaluate only inside the billiard.
 - `MIN_CHUNK::Int = 4096`: Minimum spatial workload per active thread.
-- `float32_bessel::Bool = true`: Use Float32 Bessel/Hankel evaluation when
-  Chebyshev acceleration is disabled.
+- `float32_bessel::Bool = true`: Use Float32 radial functions when Chebyshev acceleration is disabled.
 - `use_chebyshev::Bool = true`: Use Chebyshev-accelerated radial functions.
 - `cheb_config::ChebyshevConfig`: Chebyshev tuning configuration.
 
@@ -437,18 +456,17 @@ physical boundary `state.pts`.
 - `x_grid::Vector{T}`: Cartesian x coordinates.
 - `y_grid::Vector{T}`: Cartesian y coordinates.
 """
-function wavefunction(state::BIMEigenstate; b::Union{Real,Symbol} = :auto, inside_only::Bool = true, MIN_CHUNK::Int = 4096, float32_bessel::Bool = true, use_chebyshev::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(eltype(state.pts.ds), tol=1e-10))
-    T = eltype(state.pts.ds)
-    ks = T[real(state.k)]
-    kwargs = (; b, inside_only, MIN_CHUNK, float32_bessel, use_chebyshev, cheb_config)
+function wavefunction(state::BIMEigenstate; b::Union{Real,Symbol}=:auto, inside_only::Bool=true, MIN_CHUNK::Int=4096, float32_bessel::Bool=true, use_chebyshev::Bool=true, cheb_config::ChebyshevConfig=ChebyshevConfig(eltype(state.pts.ds),tol=1e-10))
+    T = eltype(state.pts.ds); ks = T[real(state.k)]
+    kwargs = (;b,inside_only,MIN_CHUNK,float32_bessel,use_chebyshev,show_progress=false,cheb_config)
     if state.vec !== nothing
-        Psi, x_grid, y_grid = wavefunctions(state.solver, ks, [state.vec], [state.pts], state.billiard; layer_density = true, kwargs...)
+        Psi,x_grid,y_grid = wavefunction(state.solver,ks,[state.vec],[state.pts],state.billiard;layer_density=true,kwargs...)
     elseif state.u !== nothing
-        Psi, x_grid, y_grid = wavefunctions(state.solver, ks, [state.u], [state.pts], state.billiard; layer_density = false, kwargs...)
+        Psi,x_grid,y_grid = wavefunction(state.solver,ks,[state.u],[state.pts],state.billiard;layer_density=false,kwargs...)
     else
         error("BIMEigenstate has neither vec nor u")
     end
-    return Psi[1], x_grid, y_grid
+    return Psi[1],x_grid,y_grid
 end
 
 ################################################################################
