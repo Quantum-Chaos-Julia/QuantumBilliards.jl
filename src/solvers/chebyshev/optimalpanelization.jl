@@ -249,10 +249,6 @@ function _build_j_plans(ν::Int, ks::AbstractVector{ComplexF64}, rmin::Float64, 
     return plans
 end
 
-################################################################################
-# LOW-LEVEL SELECTIVE PLAN TUNER
-################################################################################
-
 """
     _tune_cheb_plans(rmin::Float64, rmax::Float64, ks::AbstractVector{ComplexF64}, cfg::ChebyshevConfig{T}; h_orders::Tuple = (), j_orders::Tuple = ()) where {T<:Real}
 
@@ -295,13 +291,6 @@ function _tune_cheb_plans(rmin::Float64, rmax::Float64, ks::AbstractVector{Compl
     cfg_used = ChebyshevConfig(T; n_panels_h = nh, M_h = Mh, n_panels_j = nj, M_j = Mj, tol = cfg.tol, max_iter = cfg.max_iter, sampling_points = cfg.sampling_points, grow_panels = cfg.grow_panels, grow_M = cfg.grow_M, param_strategy = cfg.param_strategy)
     return (; h0, h1), (; j0, j1), cfg_used
 end
-
-################################################################################
-# PUBLIC BIM PLAN-TUNING API
-# These are intentionally thin wrappers around `_tune_cheb_plans`. They only
-# specify the cylindrical functions required by each BIM formulation and
-# preserve the established public return format.
-################################################################################
 
 """
     tune_dlp_cheb_plans(rmin::Float64, rmax::Float64, ks::AbstractVector{ComplexF64}, cfg::ChebyshevConfig{T}) where {T<:Real}

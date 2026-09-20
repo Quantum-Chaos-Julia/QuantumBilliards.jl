@@ -1,5 +1,5 @@
 """
-    CompositeBIMSolver{T,CS,Sy} <: SweepBIMSolver
+    CompositeBIMSolver{T,CS,Sy} <: CFIE
 
 `CompositeBIMSolver` is a concrete [`SweepBIMSolver`](@ref) for multiply
 connected geometries whose connected boundary components require different
@@ -39,7 +39,7 @@ The following functions can be evaluated for this type:
     bodies are not yet implemented; every method below raises an `error` until
     Step 2 of the migration plan lands.
 """
-struct CompositeBIMSolver{T<:Real,CS<:Tuple,Sy<:Union{AbsSymmetry,Nothing},Ch<:Tuple} <: SweepBIMSolver
+struct CompositeBIMSolver{T<:Real,CS<:Tuple,Sy<:Union{AbsSymmetry,Nothing},Ch<:Tuple} <: CFIE
     component_solvers::CS
     symmetry::Sy
     character::Ch
