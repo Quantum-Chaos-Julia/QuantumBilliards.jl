@@ -48,15 +48,16 @@ single basis resized to the largest wavenumber in `ks`.
 
 ## Returns
 * `res::AbstractVector`: Tensions corresponding to the wavenumbers in `ks`.
+* `show_progress::Bool`: Whether a progress bar was displayed during the sweep.
 """
-function k_sweep(solver::SweepBasisSolver, basis::AbsBasis, billiard::AbsBilliard, ks; multithreaded=true)
+function k_sweep(solver::SweepBasisSolver, basis::AbsBasis, billiard::AbsBilliard, ks; multithreaded=true, show_progress=false)
     k = maximum(ks)
     L = CompositeCurve(get_boundary_curves(billiard)).length
     dim = max(solver.min_dim,round(Int, L*k*solver.dim_scaling_factor/(2*pi)))
     new_basis = resize_basis(basis,billiard,dim,k)
     pts = evaluate_points(solver, billiard, k)
     res = similar(ks)
-    for (i,k) in enumerate(ks)
+    @maybe_showprogress show_progress for (i,k) in enumerate(ks)
         res[i] = solve(solver,new_basis,pts,k; multithreaded)
     end
     return res
@@ -106,15 +107,16 @@ largest wavenumber in `ks`.
 
 ## Keyword Arguments
 * `multithreaded::Bool = true`: Whether the matrix construction is multithreaded.
+* `show_progress::Bool = false`: Whether a progress bar is displayed during the sweep.
 
 ## Returns
 * `res::AbstractVector`: Tensions corresponding to the wavenumbers in `ks`.
 """
-function k_sweep(solver::SweepBIMSolver, billiard::Bi, ks; multithreaded::Bool=true) where {Bi<:AbsBilliard}
+function k_sweep(solver::SweepBIMSolver, billiard::Bi, ks; multithreaded::Bool=true, show_progress::Bool=false) where {Bi<:AbsBilliard}
     k = maximum(ks)
     pts = evaluate_points(solver, billiard, k)
     res = similar(ks)
-    for (i,k) in enumerate(ks)
+    @maybe_showprogress show_progress for (i,k) in enumerate(ks)
         res[i] = solve(solver, pts, k; multithreaded)
     end
     return res
