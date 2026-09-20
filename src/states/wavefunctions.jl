@@ -437,7 +437,7 @@ physical boundary `state.pts`.
 - `x_grid::Vector{T}`: Cartesian x coordinates.
 - `y_grid::Vector{T}`: Cartesian y coordinates.
 """
-function wavefunction(state::BIMEigenstate; b::Union{Real,Symbol} = :auto, inside_only::Bool = true, MIN_CHUNK::Int = 4096, float32_bessel::Bool = true, use_chebyshev::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(eltype(state.pts.ds)))
+function wavefunction(state::BIMEigenstate; b::Union{Real,Symbol} = :auto, inside_only::Bool = true, MIN_CHUNK::Int = 4096, float32_bessel::Bool = true, use_chebyshev::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(eltype(state.pts.ds), tol=1e-10))
     T = eltype(state.pts.ds)
     ks = T[real(state.k)]
     kwargs = (; b, inside_only, MIN_CHUNK, float32_bessel, use_chebyshev, cheb_config)
@@ -467,7 +467,7 @@ To bound memory usage, the evaluation points are divided into chunks such that
 each basis matrix occupies at most approximately `memory_limit`. Each chunk is
 constructed with `basis_matrix`, so the standard filtering of numerically small
 basis-matrix elements is applied before multiplication by the state vector.
-    
+
 If `inside_only = true`, only points inside the billiard are evaluated and
 exterior values are set to `NaN`.
 
