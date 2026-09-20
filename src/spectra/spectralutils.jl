@@ -352,35 +352,36 @@ function overlap_and_merge_ebim!(k_left::Vector{K}, ten_left::Vector{T}, k_right
 end
 
 """
-    compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::Function=(k->0.05*k^(-1/3)), tol=1e-5, spacing_frac=0.02, tolmax=5e-3, local_window::Int=4, seg_reuse_frac=0.95, multithreaded::Bool=true, show_progress::Bool=true) where {Bi<:AbsBilliard} → SpectralData
+    compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::Function = k -> 0.05*k^(-1/3), tol = 1e-5, spacing_frac = 0.02, tolmax = 5e-3, local_window::Int = 4, seg_reuse_frac = 0.95, multithreaded::Bool = true, show_progress::Bool = true) where {Bi<:AbsBilliard}
 
-Computes the expanded-BIM spectrum over the requested wavenumber interval
-from a dense adaptive grid of local eigenvalue corrections.
+Compute the spectrum of `billiard` on `[k1,k2]` with the expanded BIM solver.
 
-Nearby corrected roots are clustered using the local spectral spacing. When
-`solver.eigenvectors=true`, each retained root stores the partial
-[`BIMEigenstate`](@ref) available directly from the spectral calculation.
-Since the expanded-BIM correction does not compute a layer density,
-`state.vec=nothing`.
+The interval is sampled at correction points separated by `dk(k)`. Boundary
+discretizations are reused over neighboring correction points according to
+`seg_reuse_frac`, while the corrected eigenvalues are merged and filtered by
+[`overlap_and_merge_ebim!`](@ref).
+
+`ExpandedBIMSolver` computes eigenvalues and tensions only; no eigenvectors or
+eigenstates are constructed.
 
 ## Arguments
-* `solver::ExpandedBIMSolver`: Expanded boundary-integral eigensolver.
-* `billiard::Bi`: Billiard geometry.
-* `k1`: Lower bound of the requested real-wavenumber interval.
-* `k2`: Upper bound of the requested real-wavenumber interval.
+* `solver::ExpandedBIMSolver`: Expanded BIM eigensolver.
+* `billiard::Bi`: Billiard whose spectrum is computed.
+* `k1`: Lower wavenumber bound.
+* `k2`: Upper wavenumber bound.
 
 ## Keyword Arguments
-* `dk::Function=(k->0.05*k^(-1/3))`: Adaptive spacing between expansion wavenumbers.
-* `tol=1e-5`: Minimum absolute separation used when clustering corrected roots.
-* `spacing_frac=0.02`: Fraction of the local spectral spacing used as an adaptive clustering threshold.
-* `tolmax=5e-3`: Maximum clustering threshold.
-* `local_window::Int=4`: Number of neighboring spacings on each side used to estimate the local spectral spacing.
-* `seg_reuse_frac=0.95`: Controls how far a boundary discretization may be reused before it is regenerated.
-* `multithreaded::Bool=true`: Enable multithreaded boundary-integral matrix construction.
-* `show_progress::Bool=true`: Display a progress bar during the correction sweep.
+* `dk::Function = k -> 0.05*k^(-1/3)`: Spacing between consecutive EBIM correction points.
+* `tol = 1e-5`: Eigenvalue merging tolerance.
+* `spacing_frac = 0.02`: Local-spacing fraction used for merging nearby eigenvalues.
+* `tolmax = 5e-3`: Maximum merging tolerance.
+* `local_window::Int = 4`: Number of neighboring levels used to estimate the local spacing.
+* `seg_reuse_frac = 0.95`: Controls reuse of one boundary discretization over neighboring correction points.
+* `multithreaded::Bool = true`: Whether matrix construction is multithreaded.
+* `show_progress::Bool = true`: Whether to display a progress bar.
 
 ## Returns
-* `data::SpectralData`: Merged and sorted complex spectrum restricted to `k1 ≤ Re(k) ≤ k2`, including partial [`BIMEigenstate`](@ref)s when `solver.eigenvectors=true`.
+* `data::SpectralData`: Finalized eigenvalues, tensions, and control flags without eigenstates.
 """
 function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::Function=(k->0.05*k^(-1/3)), tol=1e-5, spacing_frac=0.02, tolmax=5e-3, local_window::Int=4, seg_reuse_frac=0.95, multithreaded::Bool=true, show_progress::Bool=true) where {Bi<:AbsBilliard}
     T = _bim_numeric_type(solver); k1T, k2T = T(k1), T(k2); tolT, spacingT, tolmaxT, reuseT = T(tol), T(spacing_frac), T(tolmax), T(seg_reuse_frac)
@@ -388,49 +389,39 @@ function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::F
     ks_grid = T[]; k = k1T
     while k<k2T
         Δk = T(dk(k)); Δk>0 || throw(ArgumentError("dk(k) must be positive; received dk($k)=$Δk"))
-        push!(ks_grid, k); k += Δk
+        push!(ks_grid,k); k += Δk
     end
-    n = length(ks_grid); n==0 && throw(ArgumentError("Spectrum interval [$k1,$k2] contains no correction points"))
-    ks_corr = Vector{Complex{T}}(undef, n); ts_corr = Vector{T}(undef, n)
-    pts0 = evaluate_points(solver, billiard, ks_grid[1]); pts_type = typeof(pts0); pts_corr = solver.eigenvectors ? Vector{pts_type}(undef, n) : nothing
-    seg_first = 1; pts = pts0; cheb_override = nothing
+    n = length(ks_grid); n>0 || throw(ArgumentError("Spectrum interval [$k1,$k2] contains no correction points"))
+    ks_corr = Vector{Complex{T}}(undef,n); ts_corr = Vector{T}(undef,n)
+    pts = evaluate_points(solver,billiard,ks_grid[1]); cheb_override = nothing
     if solver.use_chebyshev
         solver.cheb_config.param_strategy===:manual && (cheb_override = solver.cheb_config)
-        solver.cheb_config.param_strategy===:global && (cheb_override = _tune_ebim_cheb_config(solver, evaluate_points(solver, billiard, ks_grid[end]), ks_grid[end]))
-        solver.cheb_config.param_strategy===:segment && (cheb_override = _tune_ebim_cheb_config(solver, pts, ks_grid[1]))
+        solver.cheb_config.param_strategy===:global && (cheb_override = _tune_ebim_cheb_config(solver,evaluate_points(solver,billiard,ks_grid[end]),ks_grid[end]))
+        solver.cheb_config.param_strategy===:segment && (cheb_override = _tune_ebim_cheb_config(solver,pts,ks_grid[1]))
     end
     progress = show_progress ? Progress(n) : nothing
+    seg_first = 1
     while seg_first<=n
         seg_last = seg_first
         while seg_last<n && ks_grid[seg_last+1]<=ks_grid[seg_first]/reuseT
             seg_last += 1
         end
         if seg_last!=seg_first
-            pts = evaluate_points(solver, billiard, ks_grid[seg_last])
-            solver.use_chebyshev && solver.cheb_config.param_strategy===:segment && (cheb_override = _tune_ebim_cheb_config(solver, pts, ks_grid[seg_last]))
+            pts = evaluate_points(solver,billiard,ks_grid[seg_last])
+            solver.use_chebyshev && solver.cheb_config.param_strategy===:segment && (cheb_override = _tune_ebim_cheb_config(solver,pts,ks_grid[seg_last]))
         end
         for i in seg_first:seg_last
-            ks_corr[i], ts_corr[i] = solve(solver, pts, ks_grid[i]; multithreaded, cheb_override)
-            pts_corr!==nothing && (pts_corr[i] = pts)
+            ks_corr[i], ts_corr[i] = solve(solver,pts,ks_grid[i]; multithreaded,cheb_override)
             show_progress && next!(progress)
         end
         seg_first = seg_last+1
     end
     ks = Complex{T}[]; ts = T[]; control = Bool[]
-    if solver.eigenvectors
-        states_corr = [BIMEigenstate(ks_corr[i], nothing, ts_corr[i], solver.kernel, billiard, pts_corr[i]) for i in eachindex(ks_corr)]
-        states = similar(states_corr, 0)
-        for i in eachindex(ks_corr)
-            overlap_and_merge_ebim!(ks, ts, ks_corr[i:i], ts_corr[i:i], control; tol=tolT, spacing_frac=spacingT, tolmax=tolmaxT, local_window, states_left=states, states_right=states_corr[i:i])
-        end
-        keep = (k1T.<=real.(ks)).&(real.(ks).<=k2T)
-        return _finalize_spectrum(ks[keep], ts[keep], control[keep]; states=states[keep])
-    end
     for i in eachindex(ks_corr)
-        overlap_and_merge_ebim!(ks, ts, ks_corr[i:i], ts_corr[i:i], control; tol=tolT, spacing_frac=spacingT, tolmax=tolmaxT, local_window)
+        overlap_and_merge_ebim!(ks,ts,ks_corr[i:i],ts_corr[i:i],control; tol=tolT,spacing_frac=spacingT,tolmax=tolmaxT,local_window)
     end
     keep = (k1T.<=real.(ks)).&(real.(ks).<=k2T)
-    return _finalize_spectrum(ks[keep], ts[keep], control[keep])
+    return _finalize_spectrum(ks[keep],ts[keep],control[keep])
 end
 
 """
