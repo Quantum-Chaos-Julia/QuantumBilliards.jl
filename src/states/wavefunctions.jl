@@ -52,7 +52,7 @@ end
 ################################################################################
 
 function _wavefunction_grid(k::T, solver::SweepBIMSolver, billiard::Bi, b::T; inside_only::Bool = true) where {T<:Real,Bi<:BilliardGeometry.AbsBilliard}
-    curves = billiard.full_boundary
+    curves = full_boundary(billiard)
     xlim, ylim = boundary_limits(curves)
     dx = T(2pi) / (b * k)
     nx = max(2, ceil(Int, (xlim[2] - xlim[1]) / dx) + 1)
