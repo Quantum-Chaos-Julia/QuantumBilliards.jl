@@ -114,17 +114,25 @@ function evaluate_points(solver::VerginiSaracenoSolver, billiard::Bi, k) where {
     curves = get_boundary_curves(billiard)
     T = eltype(solver.pts_scaling_factor)
     Ns = _determine_bp_sizes(curves, bs, k)
-    M = length(Ns)
-    xy_all = Vector{Vector{SVector{2,T}}}(undef, M)
-    w_all = Vector{Vector{T}}(undef, M)
+    xy_all = Vector{Vector{SVector{2,T}}}(undef, length(curves))
+    w_all = Vector{Vector{T}}(undef, length(curves))
     for i in eachindex(curves)
-        crv = curves[i]; sampler = samplers[i]
-        t, dt = sample_points(sampler, Ns[i])
+        crv = curves[i]; sampler = samplers[i]; N = Ns[i]; L = crv.length
+        if crv isa AbsPolarCurve && sampler isa PolarSampler
+            t, dt = sample_points(sampler, crv, N)
+        else
+            t, dt = sample_points(sampler, N)
+        end
         xy = curve(crv, t)
-        ds = norm.(tangent(crv, t)) .* dt
-        normal = normalize.(domain_gradient_vector(crv, xy))
-        rn = dot.(xy, normal)
-        w = ds ./ rn
+        normal = normal_vec(crv, t)
+        if crv isa AbsPolarCurve
+            s = arc_length(crv, t)
+            ds = diff(s)
+            push!(ds, L + s[1] - s[end])
+        else
+            ds = L .* dt
+        end
+        w = ds ./ dot.(xy, normal)
         xy_all[i] = xy; w_all[i] = w
     end
     return BoundaryPoints(vcat(xy_all...); w_vs = vcat(w_all...))
