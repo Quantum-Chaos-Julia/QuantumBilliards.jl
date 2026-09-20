@@ -88,6 +88,28 @@ end
     return Complex{T}(Bessels.hankelh1(0, z)), Complex{T}(Bessels.hankelh1(1, z))
 end
 
+"""
+    ϕ_slp(x::T, y::T, k::T, bd::BoundaryPoints{T}, u::AbstractVector{K}, cheb, mode::Val) where {T<:Real,K<:Number}
+
+Evaluate the single-layer reconstruction of a Dirichlet eigenfunction at `(x,y)` from its physical boundary normal derivative `u = ∂ₙψ`.
+
+The reconstruction is
+
+    ψ(x) = 1/4 ∫∂Ω Y₀(k|x-q|)u(q)ds_q,
+
+discretized using the boundary quadrature weights `bd.ds`. The cylindrical function is evaluated either directly or from a Chebyshev approximation according to `mode`.
+
+## Arguments
+- `x::T`, `y::T`: Cartesian coordinates of the evaluation point.
+- `k::T`: Wave number.
+- `bd::BoundaryPoints{T}`: Full physical boundary discretization.
+- `u::AbstractVector{K}`: Physical boundary normal derivative `∂ₙψ`.
+- `cheb`: Chebyshev Hankel plan, or `nothing` for direct evaluation.
+- `mode::Val`: Evaluation mode, `Val(:cheb)` or `Val(:direct)`.
+
+## Returns
+- Reconstructed eigenfunction value at `(x,y)`.
+"""
 @inline function ϕ_slp(x::T, y::T, k::T, bd::BoundaryPoints{T}, u::AbstractVector{K}, cheb, mode::Val) where {T<:Real,K<:Number}
     acc = zero(promote_type(T, K))
     @inbounds for j in eachindex(u)
@@ -98,6 +120,24 @@ end
     return acc * T(0.25)
 end
 
+"""
+    ϕ_dlp(x::T, y::T, k::T, bd::BoundaryPoints{T}, μ::AbstractVector{K}, cheb, mode::Val) where {T<:Real,K<:Number}
+
+Evaluate the double-layer potential at `(x,y)` from a DLP layer density `μ`.
+
+For the outgoing Helmholtz Green function `G = (i/4)H₀⁽¹⁾(kr)`, the reconstruction is evaluated using its normal derivative and the boundary quadrature weights `bd.ds`. The Hankel function is evaluated either directly or from a Chebyshev approximation according to `mode`.
+
+## Arguments
+- `x::T`, `y::T`: Cartesian coordinates of the evaluation point.
+- `k::T`: Wave number.
+- `bd::BoundaryPoints{T}`: Full physical boundary discretization.
+- `μ::AbstractVector{K}`: DLP layer density.
+- `cheb`: Chebyshev `H₁⁽¹⁾` plan, or `nothing` for direct evaluation.
+- `mode::Val`: Evaluation mode, `Val(:cheb)` or `Val(:direct)`.
+
+## Returns
+- Double-layer potential at `(x,y)`.
+"""
 @inline function ϕ_dlp(x::T, y::T, k::T, bd::BoundaryPoints{T}, μ::AbstractVector{K}, cheb, mode::Val) where {T<:Real,K<:Number}
     acc = zero(promote_type(K, Complex{T})); k4 = k * T(0.25)
     @inbounds for j in eachindex(μ)
@@ -109,6 +149,24 @@ end
     return acc
 end
 
+"""
+    ϕ_cfie(x::T, y::T, k::T, bd::BoundaryPoints{T}, μ::AbstractVector{K}, cheb, mode::Val) where {T<:Real,K<:Number}
+
+Evaluate the combined-field potential at `(x,y)` from a CFIE layer density `μ`.
+
+The reconstruction combines double- and single-layer Helmholtz potentials using the CFIE discretization stored in `bd`. Both `H₀⁽¹⁾` and `H₁⁽¹⁾` are evaluated either directly or from Chebyshev approximations according to `mode`.
+
+## Arguments
+- `x::T`, `y::T`: Cartesian coordinates of the evaluation point.
+- `k::T`: Wave number.
+- `bd::BoundaryPoints{T}`: Full physical boundary discretization.
+- `μ::AbstractVector{K}`: CFIE layer density.
+- `cheb`: Tuple of Chebyshev `H₀⁽¹⁾` and `H₁⁽¹⁾` plans, or `nothing` for direct evaluation.
+- `mode::Val`: Evaluation mode, `Val(:cheb)` or `Val(:direct)`.
+
+## Returns
+- Combined-field potential at `(x,y)`.
+"""
 @inline function ϕ_cfie(x::T, y::T, k::T, bd::BoundaryPoints{T}, μ::AbstractVector{K}, cheb, mode::Val) where {T<:Real,K<:Number}
     acc = zero(promote_type(K, Complex{T})); k2 = k * T(0.5)
     @inbounds for j in eachindex(μ)
