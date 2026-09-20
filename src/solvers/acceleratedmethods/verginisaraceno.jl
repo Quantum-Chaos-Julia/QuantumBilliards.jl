@@ -110,18 +110,24 @@ assume constant-speed boundary curves.
 * `pts::BoundaryPoints`: Boundary points with `xy`, `normal`, `ds` and `w_vs` populated.
 """
 function evaluate_points(solver::VerginiSaracenoSolver, billiard::Bi, k) where {Bi<:AbsBilliard}
-    bs, samplers = adjust_scaling_and_samplers(solver, billiard); curves = get_boundary_curves(billiard); T = eltype(solver.pts_scaling_factor)
-    Ns = _determine_bp_sizes(curves, bs, k); M = length(Ns)
-    xy_all = Vector{Vector{SVector{2,T}}}(undef, M); normal_all = Vector{Vector{SVector{2,T}}}(undef, M)
-    ds_all = Vector{Vector{T}}(undef, M); w_all = Vector{Vector{T}}(undef, M)
+    bs, samplers = adjust_scaling_and_samplers(solver, billiard)
+    curves = get_boundary_curves(billiard)
+    T = eltype(solver.pts_scaling_factor)
+    Ns = _determine_bp_sizes(curves, bs, k)
+    M = length(Ns)
+    xy_all = Vector{Vector{SVector{2,T}}}(undef, M)
+    w_all = Vector{Vector{T}}(undef, M)
     for i in eachindex(curves)
-        crv = curves[i]; sampler = samplers[i]; t, dt = sample_points(sampler, Ns[i])
-        xy = curve(crv, t); tan = tangent(crv, t); ds = norm.(tan).*dt
-        normal = domain_gradient_vector(crv, xy); normal .= normal./norm.(normal)
+        crv = curves[i]; sampler = samplers[i]
+        t, dt = sample_points(sampler, Ns[i])
+        xy = curve(crv, t)
+        ds = norm.(tangent(crv, t)) .* dt
+        normal = normalize.(domain_gradient_vector(crv, xy))
         rn = dot.(xy, normal)
-        xy_all[i] = xy; normal_all[i] = normal; ds_all[i] = ds; w_all[i] = ds./rn
+        w = ds ./ rn
+        xy_all[i] = xy; w_all[i] = w
     end
-    return BoundaryPoints(vcat(xy_all...); normal = vcat(normal_all...), ds = vcat(ds_all...), w_vs = vcat(w_all...))
+    return BoundaryPoints(vcat(xy_all...); w_vs = vcat(w_all...))
 end
 
 """
