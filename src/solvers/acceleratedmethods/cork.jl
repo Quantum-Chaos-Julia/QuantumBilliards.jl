@@ -827,9 +827,8 @@ up to the largest block-compatible dimension
 function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ::Float64, Δpoly::Float64, b::Int = 10, mstart::Int = 200, mstep::Int = 100, stable_checks::Int = 2, imag_tol::Float64 = 1e-7, edge_tol::Float64 = 1e-8, res_tol::Float64 = 1e-8, stable_tol::Float64 = 1e-8, imag_search_tol::Float64 = 1e-4, eigenvectors::Bool = false, verbose::Bool = false)
     mstart % b == 0 || error("mstart must be divisible by block size")
     mstep % b == 0 || error("mstep must be divisible by block size")
-    S = init_cork(B, p, N; b = b); mdim = size(S.Hb, 2)
-    m = min(mstart, mdim)
-    kmin = k0 - Δ; kmax = k0 + Δ; prev = Tuple{Float64,Float64,Float64}[]; nstable = 0; t0 = time_ns()
+    S = init_cork(B, p, N; b = b); mdim = size(S.Hb, 2); m = min(mstart, mdim)
+    kmin = k0 - Δ; kmax = k0 + Δ; prev = Tuple{Float64,Float64,Float64}[]; have_prev = false; nstable = 0; t0 = time_ns()
     verbose && @printf("Interval k: [%.3f, %.3f]\n", kmin, kmax)
     while true
         extend!(S, B, F, m)
@@ -841,16 +840,25 @@ function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ
         edges = (isempty(requested) ? nothing : first(requested), isempty(requested) ? nothing : last(requested))
         edge_good = (edges[1] !== nothing && abs(edges[1][2]) <= imag_tol && edges[1][3] <= res_tol, edges[2] !== nothing && abs(edges[2][2]) <= imag_tol && edges[2][3] <= res_tol)
         edge_ok = all(edge_good)
-        drift = length(prev) == length(ks) && !isempty(ks) ? maximum(abs(complex(ks[i][1], ks[i][2]) - complex(prev[i][1], prev[i][2])) for i = eachindex(ks)) : Inf
+        if have_prev && isempty(prev) && isempty(ks)
+            drift = 0.0
+        elseif have_prev && length(prev) == length(ks) && !isempty(ks)
+            drift = maximum(abs(complex(ks[i][1], ks[i][2]) - complex(prev[i][1], prev[i][2])) for i = eachindex(ks))
+        else
+            drift = Inf
+        end
         nstable = isfinite(drift) && drift <= stable_tol ? nstable + 1 : 0
+        empty_ok = have_prev && isempty(prev) && isempty(requested) && isempty(ks)
+        converged = nstable >= stable_checks && (edge_ok || empty_ok)
         maxρ = isempty(phys) ? Inf : maximum(x[3] for x in phys)
-        verbose && @printf("m=%4d/%4d rank=%4d ritz=%4d conv=%4d states=%4d maxρ=%9.2e drift=%9.2e stable=%d/%d edges=%s applies=%4d time=%7.3f\n", m, mdim, S.r, length(requested), length(phys), length(ks), maxρ, drift, nstable, stable_checks, edge_ok ? "PASS" : "FAIL", S.napply, (time_ns() - t0) * 1e-9)
-        if nstable >= stable_checks && edge_ok
+        status = empty_ok ? "EMPTY" : edge_ok ? "PASS" : "FAIL"
+        verbose && @printf("m=%4d/%4d rank=%4d ritz=%4d conv=%4d states=%4d maxρ=%9.2e drift=%9.2e stable=%d/%d edges=%s applies=%4d time=%7.3f\n", m, mdim, S.r, length(requested), length(phys), length(ks), maxρ, drift, nstable, stable_checks, status, S.napply, (time_ns() - t0) * 1e-9)
+        if converged
             Ψ = eigenvectors ? reconstruct_cork_eigenvectors(S, Matrix{ComplexF64}(Vphys), m) : nothing
             return S, ks, Ψ, requested, allroots, edges, edge_good, m
         end
-        m == mdim && error("Reached full CORK Krylov dimension m=$mdim for matrix size N=$N without spectrum stability and converged requested edge roots.")
-        prev = ks; m = min(m + mstep, mdim)
+        m == mdim && error("Reached full CORK Krylov dimension m=$mdim for matrix size N=$N without a stable requested spectrum.")
+        prev = copy(ks); have_prev = true; m = min(m + mstep, mdim)
     end
 end
 
