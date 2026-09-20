@@ -378,7 +378,7 @@ eigenstates are constructed.
 * `k2`: Upper wavenumber bound.
 
 ## Keyword Arguments
-* `dk::Function = k -> 0.05*k^(-1/3)`: Spacing between consecutive EBIM expansion centers.
+* `dk::Function = k -> 0.05`: Spacing between consecutive EBIM expansion centers. Best practice is this to scale as `k^(-1/3)`.
 * `tol = 1e-5`: Eigenvalue merging tolerance.
 * `spacing_frac = 0.02`: Local-spacing fraction used for merging nearby eigenvalues.
 * `tolmax = 5e-3`: Maximum merging tolerance.
@@ -390,7 +390,7 @@ eigenstates are constructed.
 ## Returns
 * `data::SpectralData`: Finalized eigenvalues, tensions, and control flags without eigenstates.
 """
-function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::Function = (k -> 0.05*k^(-1/3)), tol = 1e-5, spacing_frac = 0.02, tolmax = 5e-3, local_window::Int = 4, seg_reuse_frac = 0.95, multithreaded::Bool = true, show_progress::Bool = true) where {Bi<:AbsBilliard}
+function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::Function = (k -> 0.05), tol = 1e-5, spacing_frac = 0.02, tolmax = 5e-3, local_window::Int = 4, seg_reuse_frac = 0.95, multithreaded::Bool = true, show_progress::Bool = true) where {Bi<:AbsBilliard}
     T = _bim_numeric_type(solver); k1T, k2T = T(k1), T(k2); tolT, spacingT, tolmaxT, reuseT = T(tol), T(spacing_frac), T(tolmax), T(seg_reuse_frac)
     k1T < k2T || throw(ArgumentError("require k1 < k2")); 0 < reuseT <= 1 || throw(ArgumentError("seg_reuse_frac must satisfy 0 < seg_reuse_frac <= 1"))
     fundamental = solver.kernel.symmetry !== nothing
@@ -507,7 +507,7 @@ function compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; multithreade
         b-a<dkprev && (intervals[end] = (a, a+dkprev))
     end
     check_indices = unique(round.(Int, range(1, length(intervals), length=min(5, length(intervals)))))
-    for i in check_indices
+    @time "Polynomial Validation..." for i in check_indices
         a, b = intervals[i]; k0 = (a+b)/2; Δpoly = (1+solver.guard)*(b-a)/2; pts = evaluate_points(solver, billiard, k0)
         P, _ = build_cork_polynomial(solver.kernel, pts, Float64(k0), Float64(Δpoly), solver.p; multithreaded)
         validate_polynomial!(solver.kernel, pts, P, solver.taylor_tol; multithreaded)
