@@ -1,15 +1,34 @@
 ################################################################################
-# Chebyshev-accelerated CFIE Fredholm matrix assembly.
+# CHEBYSHEV-ACCELERATED CFIE FREDHOLM ASSEMBLY
 #
-# New code mirroring solvers/sweepmethods/cfie.jl's
-# `_cfie_fredholm_full!`/`_cfie_fredholm_reduced!`/`_cfie_kernel_entry` and
-# solvers/acceleratedmethods/ebim.jl's `_cfie_kernel_entry_with_derivatives`,
-# with `_bim_hankelh1`/`_bim_besselj` calls replaced by Chebyshev plan
-# evaluations — see dlp.jl in this directory for the DLP counterpart and the
-# module-level design note there.
+# This file provides Chebyshev-accelerated assembly of the CFIE Fredholm
+# operator
+#
+#                       A(k) = I - (D(k) + ikS(k)).
+#
+# The boundary discretization, Kress quadrature scheme, diagonal limits, and
+# symmetry reduction are identical to the direct CFIE implementation. Only the
+# repeated radial special-function evaluations in the off-diagonal kernels are
+# replaced by the piecewise-Chebyshev plans defined in bessels.jl.
+#
+# The Kress splitting of the double-layer contribution requires H₁⁽¹⁾ and J₁,
+# while the single-layer contribution requires H₀⁽¹⁾ and J₀. The value-only
+# path therefore evaluates all four functions through Chebyshev interpolation.
+# The derivative path inserts the same values into the analytic first- and
+# second-k-derivative formulas used by EBIM; the Chebyshev polynomials
+# themselves are not differentiated.
+#
+# For Beyn contour calculations, the multi-k routines traverse each boundary
+# pair only once and evaluate all four special functions for every contour
+# wavenumber during that visit, avoiding repeated streaming of the O(N²)
+# geometry data.
+#
+# All required plans are constructed by the tuning functions in
+# optimalpanelization.jl. Plans in a multi-wavenumber set share the same radial
+# panelization so that panel indices and local Chebyshev coordinates can be
+# reused across wavenumbers.
 ################################################################################
 
-# Full (unfolded) Chebyshev-accelerated CFIE Fredholm matrix A(k) = I - (D(k)+ikS(k)), value only.
 function _cfie_fredholm_full_cheb!(F::AbstractMatrix{ComplexF64}, pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, k::ComplexF64, plan0::ChebHankelPlanH, plan1::ChebHankelPlanH, planj0::ChebJPlan, planj1::ChebJPlan; multithreaded::Bool=true) where {T<:Real}
     invtwopi = inv(2*pi)
     αL1 = -k*invtwopi
@@ -65,7 +84,6 @@ function _cfie_fredholm_full_cheb!(F::AbstractMatrix{ComplexF64}, pts::BoundaryP
     return F
 end
 
-# Single Kress-corrected (D(k)+ikS(k)) kernel entry, Chebyshev-evaluated (mirrors `_cfie_kernel_entry`).
 @inline function _cfie_kernel_entry_cheb(pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, k::ComplexF64, plan0::ChebHankelPlanH, plan1::ChebHankelPlanH, planj0::ChebJPlan, planj1::ChebJPlan, i::Int, j::Int) where {T<:Real}
     invtwopi = inv(2*pi)
     ik = im*k
@@ -104,7 +122,6 @@ end
     return dval+ik*sval
 end
 
-# Symmetry-reduced Chebyshev-accelerated CFIE Fredholm matrix, value only (mirrors `_cfie_fredholm_reduced!`).
 function _cfie_fredholm_reduced_cheb!(F::AbstractMatrix{ComplexF64}, pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, orbits::SymmetryOrbitMap{T}, k::ComplexF64, plan0::ChebHankelPlanH, plan1::ChebHankelPlanH, planj0::ChebJPlan, planj1::ChebJPlan; multithreaded::Bool=true) where {T<:Real}
     m = fundamental_size(orbits)
     N = length(orbits)
@@ -130,7 +147,6 @@ function _cfie_fredholm_reduced_cheb!(F::AbstractMatrix{ComplexF64}, pts::Bounda
     return F
 end
 
-# `(D(k)+ikS(k))` kernel entry plus its first two `k`-derivatives, Chebyshev-evaluated (mirrors `_cfie_kernel_entry_with_derivatives` in ebim.jl).
 @inline function _cfie_kernel_entry_with_derivatives_cheb(pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, k::ComplexF64, plan0::ChebHankelPlanH, plan1::ChebHankelPlanH, planj0::ChebJPlan, planj1::ChebJPlan, i::Int, j::Int) where {T<:Real}
     invtwopi = inv(2*pi)
     ik = im*k
@@ -189,13 +205,6 @@ end
     return val, dval, ddval
 end
 
-################################################################################
-# Single-pass, all-wavenumbers-at-once CFIE Fredholm assembly (Beyn's contour
-# nodes) — see dlp.jl's analogous section header for the design rationale.
-################################################################################
-
-# Full (unfolded) Chebyshev-accelerated CFIE Fredholm matrices `Fs[m] = A(zj[m])`
-# for every contour node at once (mirrors `_cfie_fredholm_full_cheb!`).
 function _cfie_fredholm_full_multi_k_cheb!(Fs::Vector{<:AbstractMatrix{ComplexF64}}, pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, zj::Vector{ComplexF64}, plans0::Vector{ChebHankelPlanH}, plans1::Vector{ChebHankelPlanH}, plansj0::Vector{ChebJPlan}, plansj1::Vector{ChebJPlan}; multithreaded::Bool=true) where {T<:Real}
     Mk = length(zj)
     @assert length(Fs)==Mk && length(plans0)==Mk && length(plans1)==Mk && length(plansj0)==Mk && length(plansj1)==Mk
@@ -273,8 +282,6 @@ function _cfie_fredholm_full_multi_k_cheb!(Fs::Vector{<:AbstractMatrix{ComplexF6
     return Fs
 end
 
-# Symmetry-reduced Chebyshev-accelerated CFIE Fredholm matrices, all contour
-# nodes at once (mirrors `_cfie_fredholm_reduced_cheb!`/`_cfie_kernel_entry_cheb`).
 function _cfie_fredholm_reduced_multi_k_cheb!(Fs::Vector{<:AbstractMatrix{ComplexF64}}, pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, orbits::SymmetryOrbitMap{T}, zj::Vector{ComplexF64}, plans0::Vector{ChebHankelPlanH}, plans1::Vector{ChebHankelPlanH}, plansj0::Vector{ChebJPlan}, plansj1::Vector{ChebJPlan}; multithreaded::Bool=true) where {T<:Real}
     Mk = length(zj)
     @assert length(Fs)==Mk && length(plans0)==Mk && length(plans1)==Mk && length(plansj0)==Mk && length(plansj1)==Mk
