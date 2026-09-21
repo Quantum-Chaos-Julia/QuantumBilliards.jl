@@ -358,36 +358,19 @@ like [`boundary_coords(::AbsBilliard, ::Vector{AbsSampler}, ::Vector{Int64})`](@
 * `bp`: A [`BoundaryPoints`](@ref) instance with the `xy`, `normal`, `s` and `ds` fields populated.
 """
 function boundary_coords(billiard::Bi, fourier_sampler::FourierNodes, M) where {Bi<:AbsBilliard}
-    curves = get_boundary_curves_with_ignored(billiard)
-    T = typeof(curves[1].length)
-    n_curves = length(curves)
-
-    ts,dts = sample_points(fourier_sampler, M)
-    xy_all = Vector{Vector{SVector{2,T}}}(undef, n_curves)
-    normal_all = Vector{Vector{SVector{2,T}}}(undef, n_curves)
-    s_all = Vector{Vector{T}}(undef, n_curves)
-    ds_all = Vector{Vector{T}}(undef, n_curves)
-    #w_n_all = Vector{Vector{T}}(undef, M)
+    curves = get_boundary_curves_with_ignored(billiard); T = typeof(curves[1].length); n_curves = length(curves)
+    ts, dts = sample_points(fourier_sampler, M)
+    xy_all = Vector{Vector{SVector{2,T}}}(undef, n_curves); normal_all = Vector{Vector{SVector{2,T}}}(undef, n_curves)
+    s_all = Vector{Vector{T}}(undef, n_curves); ds_all = Vector{Vector{T}}(undef, n_curves)
     L0 = zero(T)
     for i in eachindex(curves)
-        crv = curves[i]
-        L = crv.length
-        t = ts[i]
-        dt = dts[i]
-        ds = L*dt #this needs modification!!!
-        xy = curve(crv,t)
-        normal = domain_gradient_vector(crv, xy)
-        normal .= normal./norm(normal)
-        #rn = dot.(xy, normal)
-        xy_all[i] = xy
-        normal_all[i] = normal
-        s_all[i] = arc_length(crv,t) .+ L0 #arc_lengt(crv, xy)
-        ds_all[i] = ds  
-        #w_n_all[i] = (ds.*rn)./(2.0*k.^2)
+        crv = curves[i]; L = crv.length; t = ts[i]; dt = dts[i]
+        xy = curve(crv, t); ds = norm.(tangent(crv, t)) .* dt
+        normal = domain_gradient_vector(crv, xy); normal .= normal ./ norm(normal)
+        xy_all[i] = xy; normal_all[i] = normal; s_all[i] = arc_length(crv, t) .+ L0; ds_all[i] = ds
         L0 += L
     end
-
-    return BoundaryPoints(vcat(xy_all...); normal = vcat(normal_all...), s=vcat(s_all...), ds = vcat(ds_all...))
+    return BoundaryPoints(vcat(xy_all...); normal = vcat(normal_all...), s = vcat(s_all...), ds = vcat(ds_all...))
 end
 
 """
