@@ -255,6 +255,80 @@ function _composite_global_to_local(offs::Vector{Int})
     return g2c, g2l
 end
 
+"""
+    _combine_composite_orbits(::Type{T}, local_orbits::Vector{SymmetryOrbitMap{T}}) where {T<:Real} → orbits::SymmetryOrbitMap{T}
+
+Combine exact component-local symmetry orbit maps into one global composite-boundary orbit map.
+Each CompositeBIMSolver boundary block is folded independently with the
+existing exact symmetry-index machinery. The resulting component-local full
+and reduced indices are shifted into the concatenated composite indexing and
+assembled into one ordinary SymmetryOrbitMap.
+
+## Arguments
+* `T`: Real scalar type of the boundary discretization.
+* `local_orbits::Vector{SymmetryOrbitMap{T}}`: Exact orbit map of each CompositeBIMSolver boundary block.
+
+## Returns
+* `orbits::SymmetryOrbitMap{T}`: Exact global orbit map for the concatenated composite boundary.
+"""
+function _combine_composite_orbits(::Type{T}, local_orbits::Vector{SymmetryOrbitMap{T}}) where {T<:Real}
+    isempty(local_orbits) && throw(ArgumentError("Cannot combine an empty collection of symmetry orbit maps"))
+    ng = orbit_size(local_orbits[1])
+    all(o -> orbit_size(o)==ng,local_orbits) || throw(ArgumentError("All CompositeBIMSolver boundary blocks must have the same symmetry-orbit size"))
+    N = sum(full_size,local_orbits); m = sum(fundamental_size,local_orbits)
+    fundamental_indices = Vector{Int}(undef,m); orbit_of = Vector{Int}(undef,N); phase = Vector{Complex{T}}(undef,N)
+    fund_to_full = Matrix{Int}(undef,ng,m); fund_to_scale = Matrix{Complex{T}}(undef,ng,m)
+    full_off = 0; fund_off = 0
+    @inbounds for o in local_orbits
+        Na = full_size(o); ma = fundamental_size(o)
+        frng = full_off+1:full_off+Na; mrng = fund_off+1:fund_off+ma
+        fundamental_indices[mrng] .= o.fundamental_indices .+ full_off
+        orbit_of[frng] .= o.orbit_of .+ fund_off
+        phase[frng] .= o.phase
+        fund_to_full[:,mrng] .= o.fund_to_full .+ full_off
+        fund_to_scale[:,mrng] .= o.fund_to_scale
+        full_off += Na; fund_off += ma
+    end
+    return SymmetryOrbitMap{T}(fundamental_indices,orbit_of,phase,N,m,fund_to_full,fund_to_scale)
+end
+
+"""
+    _composite_symmetry_orbits(::Type{T}, solver::CompositeBIMSolver, pts::BoundaryPoints{T}) where {T<:Real} → orbits::SymmetryOrbitMap{T}
+
+Construct the exact symmetry orbit map of a CompositeBIMSolver boundary.
+
+The merged boundary is separated into the contiguous blocks created by
+`_merge_composite_points`. Each block is folded using `_fold_boundary`,
+ so every exact integer symmetry permutation is evaluated with that block's 
+own periodic node count rather than the total node count of the concatenated 
+composite boundary. The component-local orbit maps are then combined
+algebraically into one global SymmetryOrbitMap. 
+
+This construction requires each CompositeBIMSolver boundary block to be
+invariant under the selected symmetry. Symmetry-related disconnected
+components represented inside one block require a separate Composite-specific
+component-permutation extension.
+
+No geometric point matching or floating-point tolerances are used.
+
+## Arguments
+* `T`: Real scalar type of the boundary discretization.
+* `solver::CompositeBIMSolver`: Composite solver defining the common symmetry and character.
+* `pts::BoundaryPoints{T}`: Merged boundary discretization produced by `evaluate_points`.
+
+## Returns
+* `orbits::SymmetryOrbitMap{T}`: Exact global symmetry orbit map.
+"""
+function _composite_symmetry_orbits(::Type{T}, solver::CompositeBIMSolver, pts::BoundaryPoints{T}) where {T<:Real}
+    solver.symmetry === nothing && throw(ArgumentError("_composite_symmetry_orbits requires a nontrivial symmetry"))
+    nc = length(solver.component_solvers); offs = _composite_offsets(pts,nc)
+    local_orbits = Vector{SymmetryOrbitMap{T}}(undef,nc)
+    @inbounds for a in 1:nc
+        rng = offs[a]:offs[a+1]-1
+        local_orbits[a] = _fold_boundary(T,@view(pts.xy[rng]),solver.symmetry,solver.character)
+    end
+    return _combine_composite_orbits(T,local_orbits)
+end
 
 # Dispatch a same-component kernel entry to the solver assigned to that
 # connected component. A DLP source component returns D_ij, whereas a CFIE
@@ -462,18 +536,8 @@ with orientation `-1` are interpreted as holes and their orientation is flipped
 after sampling without changing the boundary-node ordering. This preserves the
 canonical indexing required by exact symmetry index maps while giving hole
 boundaries the opposite normal orientation required by the boundary-integral
-formulation.
-
-For multiply connected fundamental domains, the number of component solvers
-must equal the number of connected boundary components. Without symmetry, the
-domain's connected boundary decomposition is used directly. With symmetry, the
-complete physical boundary is grouped by `domain_id` so that all symmetry
-images are present before orbit folding.
-
-The individual component discretizations are finally merged into one
-[`BoundaryPoints`](@ref) object. Component membership is retained internally so
-that [`construct_matrices`](@ref) can recover the block structure of the
-globally coupled Fredholm operator.
+formulation. For multiply connected fundamental domains, the number of component 
+solvers must equal the number of connected boundary components. 
 
 ## Arguments
 * `solver::CompositeBIMSolver`: Composite solver containing one DLP or CFIE solver per connected boundary component.
@@ -485,14 +549,10 @@ globally coupled Fredholm operator.
 """
 function evaluate_points(solver::CompositeBIMSolver, billiard::Bi, k) where {Bi<:AbsBilliard}
     T = _bim_numeric_type(solver); kT = T(k)
-    comp = solver.symmetry === nothing ? get_boundary_curves(billiard) : full_boundary(billiard)
+    comp = solver.symmetry===nothing ? get_boundary_curves(billiard) : full_boundary(billiard)
     isempty(comp) && error("Boundary cannot be empty.")
-    nc = length(solver.component_solvers); domain = billiard.fundamental_domain
-    if domain isa AbsMultiplyConnectedDomain
-        nc == 1 + genus(domain) || throw(ArgumentError("Billiard's fundamental domain has genus $(genus(domain)) (requires $(1+genus(domain)) component solver(s)) but CompositeBIMSolver has $nc component solver(s)"))
-    end
-    groups = solver.symmetry === nothing && domain isa AbsMultiplyConnectedDomain ? boundary_components(billiard) : _group_boundary_by_domain_id(comp)
-    length(groups) == nc || throw(ArgumentError("Billiard boundary has $(length(groups)) connected component(s) (grouped by curve domain_id) but CompositeBIMSolver has $nc component solver(s)"))
+    groups = _group_boundary_by_domain_id(comp); nc = length(solver.component_solvers)
+    length(groups)==nc || throw(ArgumentError("Billiard boundary has $(length(groups)) component group(s) but CompositeBIMSolver has $nc component solver(s)"))
     comp_pts = Vector{BoundaryPoints{T}}(undef,nc)
     @inbounds for a in 1:nc
         grp = groups[a]
@@ -506,7 +566,7 @@ end
 function boundary_matrix_size(solver::CompositeBIMSolver, pts::BoundaryPoints)
     solver.symmetry === nothing && return boundary_matrix_size(pts)
     T = _bim_numeric_type(solver)
-    return fundamental_size(symmetry_index_orbits(T, pts.xy, solver.symmetry))
+    return fundamental_size(_composite_symmetry_orbits(T,solver,pts))
 end
 
 """
@@ -540,20 +600,17 @@ over source symmetry orbits with the prescribed character phases.
 """
 function construct_matrices(solver::CompositeBIMSolver{T}, pts::BoundaryPoints{T}, k; multithreaded::Bool=true) where {T<:Real}
     @timeit_debug "construct_matrices" begin
-        kT = _bim_widen_k(T, k)
-        nc = length(solver.component_solvers)
-        N = length(pts)
-        @debug "Composite BIM matrix construction started" N kT nc symmetry=solver.symmetry character=solver.character
-        offs = _composite_offsets(pts, nc)
-        comp_pts = [_composite_component_slice(pts, offs[a]:offs[a+1]-1, a) for a in 1:nc]
-        Gs = Vector{BoundaryGeomCache{T}}(undef, nc)
-        Rmats = Vector{Matrix{T}}(undef, nc)
+        kT = _bim_widen_k(T,k)
+        nc = length(solver.component_solvers); N = length(pts)
+        @debug "Composite BIM matrix construction started" N kT nc symmetry = solver.symmetry character = solver.character
+        offs = _composite_offsets(pts,nc)
+        comp_pts = [_composite_component_slice(pts,offs[a]:offs[a+1]-1,a) for a in 1:nc]
+        Gs = Vector{BoundaryGeomCache{T}}(undef, nc); Rmats = Vector{Matrix{T}}(undef,nc)
         @timeit_debug "boundary_geom_cache" begin
             @inbounds for a in 1:nc
                 graded = _is_nontrivial_dlp_grading(comp_pts[a])
                 Gs[a] = boundary_geom_cache(comp_pts[a], graded)
-                Na = length(comp_pts[a])
-                Ra = zeros(T, Na, Na)
+                Na = length(comp_pts[a]); Ra = zeros(T, Na, Na)
                 kress_R!(Ra)
                 Rmats[a] = Ra
             end
@@ -567,15 +624,14 @@ function construct_matrices(solver::CompositeBIMSolver{T}, pts::BoundaryPoints{T
             return A
         else
             @timeit_debug "symmetry_orbits" begin
-                orbits = _fold_boundary(T, pts.xy, solver.symmetry, solver.character)
+                orbits = _composite_symmetry_orbits(T, solver, pts)
             end
-            m = fundamental_size(orbits)
-            g2c, g2l = _composite_global_to_local(offs)
+            m = fundamental_size(orbits); g2c, g2l = _composite_global_to_local(offs)
             A = Matrix{Complex{T}}(undef, m, m)
             @timeit_debug "reduced_fredholm_assembly" begin
                 _composite_fredholm_reduced!(A, solver, comp_pts, Gs, Rmats, offs, g2c, g2l, orbits, kT; multithreaded)
             end
-            @debug "Symmetry-reduced composite Fredholm matrix assembled" fundamental_size=m
+            @debug "Symmetry-reduced composite Fredholm matrix assembled" fundamental_size = m
             return A
         end
     end
