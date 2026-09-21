@@ -81,23 +81,19 @@ selects 1, 2 or 4 quadrants, as documented on [`RealPlaneWaves`](@ref).
     return Int[1, 1, -1, -1], Int[1, -1, 1, -1]
 end
 
-@inline function parity_pattern(symmetries::Vector{BG}, 
-                                sym_qnumbers::Vector{T}) where {T<:Real, BG<:BilliardGeometry.AbsReflection}
+@inline function parity_pattern(symmetries::Vector{BG}, sym_qnumbers::Vector{T}) where {T<:Real, BG<:BilliardGeometry.AbsReflection}
     # Check which symmetries are present
     has_x = any(s -> s isa BilliardGeometry.XAxisReflection, symmetries)
     has_y = any(s -> s isa BilliardGeometry.YAxisReflection, symmetries)
     has_xy = any(s -> s isa BilliardGeometry.XYAxisReflection, symmetries)
-    
     if has_xy
         # XY-axis reflection: single quadrant
         # Find the XY quantum number (should be the product sym_x * sym_y)
         xy_idx = findfirst(s -> s isa BilliardGeometry.XYAxisReflection, symmetries)
         x_idx = findfirst(s -> s isa BilliardGeometry.YAxisReflection, symmetries)
         y_idx = findfirst(s -> s isa BilliardGeometry.XAxisReflection, symmetries)
-        
         x_par = Int(sym_qnumbers[x_idx])
         y_par = Int(sym_qnumbers[y_idx])
-        
         return Int[x_par], Int[y_par]
     elseif has_x && !has_y
         # Only X-axis reflection: 2 quadrants with fixed y-parity
@@ -154,30 +150,20 @@ Construct a [`RealPlaneWaves`](@ref) basis of dimension `dim` for the given
 ## Returns
 *  `basis` : A [`RealPlaneWaves`](@ref) basis with the given symmetries and quantum numbers.
 """
-function RealPlaneWaves(dim::Int, 
-                       symmetries::Union{Vector{BG}, Nothing}, 
-                       sym_qnumbers::Union{Vector{T}, Nothing}; 
-                       angle_arc=π, angle_shift=0.0, 
-                       sampler=LinearNodes()) where {T<:Real, BG<:BilliardGeometry.AbsReflection}
+function RealPlaneWaves(dim::Int, symmetries::Union{Vector{BG}, Nothing}, sym_qnumbers::Union{Vector{T}, Nothing}; angle_arc=Float64(π), angle_shift=0.0, sampler=LinearNodes()) where {T<:Real, BG<:BilliardGeometry.AbsReflection}
     # Validate that symmetries and sym_qnumbers have matching lengths
     if !isnothing(symmetries) && !isnothing(sym_qnumbers)
         @assert length(symmetries) == length(sym_qnumbers) "symmetries and sym_qnumbers must have the same length"
     end
-    
     # Get parity pattern from symmetries and quantum numbers
     par_x, par_y = parity_pattern(symmetries, sym_qnumbers)
     pl = length(par_x)
     eff_dim = dim * pl
-    
     # Sample angles from the sampler
     t, dt = sample_points(sampler, dim)
-    
-    # Preallocate and fill arrays more efficiently
     angles = Vector{eltype(t)}(undef, eff_dim)
     parity_x = Vector{Int}(undef, eff_dim)
     parity_y = Vector{Int}(undef, eff_dim)
-    
-    # Fill arrays using vectorized operations
     @inbounds for i in 1:dim
         angle = t[i] * angle_arc + angle_shift
         base_idx = (i-1) * pl
@@ -188,12 +174,8 @@ function RealPlaneWaves(dim::Int,
             parity_y[idx] = par_y[j]
         end
     end
-    
     Sa = typeof(sampler)
-    
-    return RealPlaneWaves{eltype(angles), Sa}(eff_dim, symmetries, sym_qnumbers, 
-                                              angle_arc, angle_shift, angles, 
-                                              parity_x, parity_y, sampler)
+    return RealPlaneWaves{eltype(angles),Sa}(eff_dim, symmetries, sym_qnumbers, angle_arc, angle_shift, angles, parity_x, parity_y, sampler)
 end
 
 """
@@ -348,13 +330,9 @@ Construct a [`RealPlaneWaves`](@ref) basis of dimension `dim` for the given
 ## Returns
 *  `basis` : A [`RealPlaneWaves`](@ref) basis with the given symmetries and default (`+1`) quantum numbers.
 """
-function RealPlaneWaves(dim::Int, 
-                       symmetries::Union{Vector{BG}, Nothing}; 
-                       angle_arc=π, angle_shift=0.0, 
-                       sampler=LinearNodes()) where {BG<:BilliardGeometry.AbsReflection}
+function RealPlaneWaves(dim::Int, symmetries::Union{Vector{BG}, Nothing}; angle_arc=Float64(π), angle_shift=0.0, sampler=LinearNodes()) where {BG<:BilliardGeometry.AbsReflection}
     sym_qnumbers = infer_quantum_numbers(symmetries)
-    return RealPlaneWaves(dim, symmetries, sym_qnumbers; 
-                         angle_arc=angle_arc, angle_shift=angle_shift, sampler=sampler)
+    return RealPlaneWaves(dim, symmetries, sym_qnumbers; angle_arc=angle_arc, angle_shift=angle_shift, sampler=sampler)
 end
 
 """
@@ -373,10 +351,7 @@ symmetries, quantum numbers, and sampling parameters.
 *  `basis_new` : A new [`RealPlaneWaves`](@ref) basis of dimension `dim` with the same symmetries, quantum numbers, angular range/offset, and sampler as `basis`.
 """
 @inline function resize_basis(basis::RealPlaneWaves, billiard::AbsBilliard, dim::Int, k)
-    return RealPlaneWaves(dim, basis.symmetries, basis.sym_qnumbers; 
-                         angle_arc=basis.angle_arc, 
-                         angle_shift=basis.angle_shift, 
-                         sampler=basis.sampler)
+    return RealPlaneWaves(dim, basis.symmetries, basis.sym_qnumbers; angle_arc=basis.angle_arc, angle_shift=basis.angle_shift, sampler=basis.sampler)
 end
 
 # Helper functions for cos/sin pattern
@@ -385,7 +360,6 @@ end
 @inline _sin(arg) = sin(arg)
 @inline _rpw_fun(par::Int) = par == 1 ? _cos : _sin
 @inline _drpw_fun(par::Int) = par == 1 ? (x -> -sin(x)) : _cos
-
 
 """
     basis_fun(basis::RealPlaneWaves, i::Int, k::T, pts::AbstractArray) where {T<:Real} → out::Vector{T}
