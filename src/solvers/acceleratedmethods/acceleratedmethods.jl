@@ -12,8 +12,8 @@ determined by that kernel; the accelerated solver only adds a root-finding
 strategy on top of `construct_matrices`/`solve`.
 
 ## Arguments
-* `solver`: The [`AcceleratedBIMSolver`](@ref) whose wrapped kernel determines the boundary discretization.
-* `billiard`: The billiard whose boundary is discretized.
+* `solver::AcceleratedBIMSolver`: The [`AcceleratedBIMSolver`](@ref) whose wrapped kernel determines the boundary discretization.
+* `billiard::AbsBilliard`: The billiard whose boundary is discretized.
 * `k`: The wavenumber used to determine the number of boundary sampling points.
 
 ## Returns
@@ -39,9 +39,9 @@ solved with [`solve`](@ref) to obtain candidate wavenumbers `ks` and tensions `t
 within the window `dk` of `k`. The candidate closest to `k` is returned.
 
 ## Arguments
-* `solver`: The [`AcceleratedBasisSolver`](@ref) used to solve the eigenvalue problem.
-* `basis`: The basis used to approximate the eigenstates.
-* `billiard`: The billiard whose boundary is discretized.
+* `solver::AcceleratedBasisSolver`: The [`AcceleratedBasisSolver`](@ref) used to solve the eigenvalue problem.
+* `basis::AbsBasis`: The basis used to approximate the eigenstates.
+* `billiard::AbsBilliard`: The billiard whose boundary is discretized.
 * `k`: The target wavenumber around which the search is performed.
 * `dk`: Half-width of the wavenumber window around `k`.
 
@@ -77,9 +77,9 @@ generated with [`evaluate_points`](@ref), and the accelerated eigenvalue problem
 solved with [`solve`](@ref).
 
 ## Arguments
-* `solver`: The [`AcceleratedBasisSolver`](@ref) used to solve the eigenvalue problem.
-* `basis`: The basis used to approximate the eigenstates.
-* `billiard`: The billiard whose boundary is discretized.
+* `solver::AcceleratedBasisSolver`: The [`AcceleratedBasisSolver`](@ref) used to solve the eigenvalue problem.
+* `basis::AbsBasis`: The basis used to approximate the eigenstates.
+* `billiard::AbsBilliard`: The billiard whose boundary is discretized.
 * `k`: The wavenumber around which the sweep is performed.
 * `dk`: Half-width of the wavenumber window around `k`.
 
@@ -87,8 +87,8 @@ solved with [`solve`](@ref).
 * `multithreaded::Bool = true`: Whether the matrix construction is multithreaded.
 
 ## Returns
-* `ks`: Vector of candidate wavenumbers found within the window.
-* `ts`: Vector of tensions associated with `ks`.
+* `ks::Vector`: Vector of candidate wavenumbers found within the window.
+* `ts::Vector`: Vector of tensions associated with `ks`.
 """
 function solve_spectrum(solver::AcceleratedBasisSolver,basis::AbsBasis, billiard::AbsBilliard, k, dk; multithreaded = true)
     L = CompositeCurve(get_boundary_curves(billiard)).length
