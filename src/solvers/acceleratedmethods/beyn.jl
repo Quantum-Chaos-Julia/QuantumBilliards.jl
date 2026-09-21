@@ -52,7 +52,7 @@
 
 Contour-integral nonlinear eigensolver based on Beyn's method.
 
-The solver computes eigenvalues of `A(k)u = 0` from contour moments on circular
+The solver computes solutions of `A(k)u = 0` from contour moments on circular
 contours. Matrix construction can use the Chebyshev-accelerated backend.
 Multi-window spectrum calculations additionally support a global imaginary-`k`
 screening strategy which residual-checks roots in decreasing `abs(imag(k))`
@@ -65,13 +65,13 @@ order and terminates after a prescribed sequence of residual-good roots.
 * `r::Int`: Initial random probing rank.
 * `Rmax::T`: Maximum contour radius in spectrum sweeps.
 * `svd_tol::T`: Numerical-rank threshold for the zeroth contour moment.
-* `res_tol::T`: Nonlinear residual threshold.
+* `res_tol::T`: Nonlinear residual threshold as a state - keep check.
 * `auto_discard_spurious::Bool`: Discard roots failing residual validation.
 * `use_chebyshev::Bool`: Use Chebyshev-accelerated matrix construction.
 * `cheb_config::ChebyshevConfig{T}`: Chebyshev interpolation configuration.
-* `imag_k_check::Bool`: Enable global imaginary-`k` screening.
-* `imag_k_pad::Int`: Consecutive good roots required before stopping.
-* `imag_k_group_size::Int`: Maximum residual-check batch size.
+* `imag_k_check::Bool`: Enable global imaginary-`k` screening. In production should be true.
+* `imag_k_pad::Int`: Consecutive good roots required before stopping if imaginary-`k` screening is enabled.
+* `imag_k_group_size::Int`: Maximum residual-check batch size for imaginary-`k` screening. 
 * `eigenvectors::Bool`: Whether `compute_spectrum` retains the layer densities returned by the Beyn solve.
 """
 struct BeynSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
@@ -97,44 +97,40 @@ end
 Construct a Beyn nonlinear eigensolver.
 
 Single-contour calls through `solve` and `solve_vectors` perform exhaustive
-nonlinear-residual validation. Multi-window `compute_spectrum` calculations use
-global imaginary-`k` screening by default.
+nonlinear-residual validation. Multi-window `compute_spectrum` calculations uses
+imaginary-`k` screening by default to verify the spectrum integrity.
 
 ## Arguments
 * `kernel::K`: Boundary-integral solver defining the nonlinear matrix `A(k)`.
 
 ## Keyword Arguments
 * `m::Int=10`: Target number of states per Weyl window.
-* `nq::Int=48`: Number of contour quadrature nodes.
-* `r::Int=48`: Initial random probing rank.
-* `Rmax::Real=1.0`: Maximum contour radius in spectrum sweeps.
-* `svd_tol::Real=1e-12`: Numerical-rank threshold for the zeroth contour moment.
-* `res_tol::Real=1e-9`: Nonlinear residual threshold.
+* `nq::Int=40`: Number of contour quadrature nodes.
+* `r::Int=200`: Initial random probing rank.
+* `Rmax::Real=0.5`: Maximum contour radius in spectrum sweeps.
+* `svd_tol::Real=1e-11`: Numerical-rank threshold for the zeroth contour moment.
+* `res_tol::Real=1e-8`: Nonlinear residual threshold.
 * `auto_discard_spurious::Bool=true`: Discard roots failing residual validation.
 * `use_chebyshev::Bool=true`: Use Chebyshev-accelerated matrix construction.
-* `n_panels_h::Int=15000`: Hankel Chebyshev configuration parameter.
-* `M_h::Int=5`: Hankel Chebyshev interpolation parameter.
-* `n_panels_j::Int=10000`: Bessel Chebyshev configuration parameter.
-* `M_j::Int=5`: Bessel Chebyshev interpolation parameter.
-* `cheb_config::Union{Nothing,ChebyshevConfig}=nothing`: Explicit Chebyshev configuration.
-* `imag_k_check::Bool=true`: Enable global imaginary-`k` screening in `compute_spectrum`.
-* `imag_k_pad::Int=20`: Consecutive residual-good roots required before stopping.
-* `imag_k_group_size::Int=20`: Maximum residual-check batch size.
+* `n_panels_h::Int=10000`: Hankel Chebyshev initial panel count.
+* `M_h::Int=5`: Hankel Chebyshev polynomial initial degree.
+* `n_panels_j::Int=5000`: Bessel Chebyshev initial panel count.
+* `M_j::Int=5`: Bessel Chebyshev polynomial initial degree.
+* `cheb_config::Union{Nothing,ChebyshevConfig}=nothing`: Explicit Chebyshev configuration. If nothing will construct it from the provided initial panel counts and polynomial degrees.
+* `imag_k_check::Bool=true`: Enable imaginary-`k` screening in `compute_spectrum`. Should always be used in production runs to verify spectrum integrity.
+* `imag_k_pad::Int=20`: Consecutive residual-good roots required before stopping. Only applies when `imag_k_check` is enabled.
+* `imag_k_group_size::Int=20`: Maximum residual-check batch size. Only applies when `imag_k_check` is enabled.
 * `eigenvectors::Bool`: Whether `compute_spectrum` retains the layer densities returned by the Beyn solve.
 
 ## Returns
 * `BeynSolver{T,K}`: Configured Beyn solver.
 """
-function BeynSolver(kernel::K; m::Int=100, nq::Int=40, r::Int=200, Rmax::Real=0.5, svd_tol::Real=1e-11, res_tol::Real=1e-8, auto_discard_spurious::Bool=true, use_chebyshev::Bool=true, n_panels_h::Int=15000, M_h::Int=5, n_panels_j::Int=10000, M_j::Int=5, cheb_config::Union{Nothing,ChebyshevConfig}=nothing, imag_k_check::Bool=true, imag_k_pad::Int=20, imag_k_group_size::Int=20, eigenvectors::Bool=true) where {K<:SweepBIMSolver}
+function BeynSolver(kernel::K; m::Int=100, nq::Int=40, r::Int=200, Rmax::Real=0.5, svd_tol::Real=1e-11, res_tol::Real=1e-8, auto_discard_spurious::Bool=true, use_chebyshev::Bool=true, n_panels_h::Int=10000, M_h::Int=5, n_panels_j::Int=5000, M_j::Int=5, cheb_config::Union{Nothing,ChebyshevConfig}=nothing, imag_k_check::Bool=true, imag_k_pad::Int=20, imag_k_group_size::Int=20, eigenvectors::Bool=true) where {K<:SweepBIMSolver}
     T = _bim_numeric_type(kernel); cfg = cheb_config === nothing ? ChebyshevConfig(T; n_panels_h, M_h, n_panels_j, M_j) : cheb_config
     return BeynSolver{T,K}(kernel, m, nq, r, T(Rmax), T(svd_tol), T(res_tol), auto_discard_spurious, use_chebyshev, cfg, imag_k_check, imag_k_pad, imag_k_group_size, eigenvectors)
 end
 
 _bim_numeric_type(::BeynSolver{T}) where {T} = T
-
-################################################################################
-############################### WEYL WINDOWS ###################################
-################################################################################
 
 @inline function weyl_window_width(billiard::Bi, k::T, m::Int; fundamental::Bool=true) where {T<:Real,Bi<:AbsBilliard}
     A = fundamental ? fundamental_area(billiard) : area(billiard)
@@ -177,10 +173,6 @@ function beyn_disks_from_windows(intervals::Vector{Tuple{T,T}}) where {T<:Real}
     end
     return k0, R
 end
-
-################################################################################
-############################### BEYN MOMENTS ###################################
-################################################################################
 
 function beyn_buffer_matrices(::Type{T}, N::Int, r::Int, rng) where {T<:Real}
     V = randn(rng, Complex{T}, N, r); X = similar(V); A0 = zeros(Complex{T}, N, r); A1 = zeros(Complex{T}, N, r)
@@ -273,16 +265,12 @@ function construct_matrices(solver::BeynSolver, pts::BoundaryPoints, k0, R; mult
     end
 end
 
-################################################################################
-############################ PROJECTED SOLVE ###################################
-################################################################################
-
 """
     _beyn_projected_solve(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, rng=MersenneTwister(0))
 
 Perform the projected stage of Beyn's method without nonlinear-residual
 validation. The contour has center `k0` and radius `dk/2`. The reduced Beyn
-matrix is diagonalized, boundary-density vectors are reconstructed, and roots
+matrix is diagonalized, layer density vectors are reconstructed, and roots
 outside the contour are discarded.
 
 ## Arguments
@@ -297,7 +285,7 @@ outside the contour are discarded.
 
 ## Returns
 * `ks::Vector{Complex{T}}`: Complex roots inside the contour.
-* `X::Matrix{Complex{T}}`: Corresponding boundary-density vectors as columns.
+* `X::Matrix{Complex{T}}`: Corresponding layer density vectors as columns.
 """
 function _beyn_projected_solve(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, rng=MersenneTwister(0))
     T = _bim_numeric_type(solver); k0c = Complex{T}(k0); Rc = T(dk)/2; 
@@ -319,10 +307,7 @@ function _beyn_projected_solve(solver::BeynSolver, pts::BoundaryPoints, k0, dk; 
     return ks[idx], X[:, idx]
 end
 
-################################################################################
-############################ RESIDUAL CHECKING #################################
-################################################################################
-
+# Compute the residual of a candidate root and its corresponding layer density vector.
 @inline function _beyn_residual(solver::BeynSolver, pts, k, x, y; multithreaded::Bool=true)
     @blas_1 A = construct_matrices(solver.kernel, pts, k; multithreaded)
     @blas_multi_then_1 MAX_BLAS_THREADS mul!(y, A, x)
@@ -349,7 +334,7 @@ explicitly residual-checked. This is the reference path used by `solve` and
 ## Returns
 * `ks::Vector{Complex{T}}`: Accepted complex roots.
 * `residuals::Vector{T}`: Corresponding nonlinear residuals.
-* `X::Matrix{Complex{T}}`: Corresponding boundary-density vectors.
+* `X::Matrix{Complex{T}}`: Corresponding layer density vectors.
 """
 function _beyn_solve_core(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, rng=MersenneTwister(0))
     T = _bim_numeric_type(solver); ks, X = _beyn_projected_solve(solver, pts, k0, dk; multithreaded, rng); N = size(X, 1)
@@ -363,17 +348,13 @@ function _beyn_solve_core(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multi
     return ks[idx], residuals[idx], isempty(idx) ? Matrix{Complex{T}}(undef, N, 0) : X[:, idx]
 end
 
-################################################################################
-############################ IMAGINARY-k CHECK #################################
-################################################################################
-
 """
     _beyn_imag_k_check(solver::BeynSolver, ks_all, X_all, all_pts; pad::Int=solver.imag_k_pad, group_size::Int=solver.imag_k_group_size, multithreaded::Bool=true)
 
-Apply global imaginary-`k` screening to projected roots from multiple Beyn
+Apply imaginary-`k` screening to projected roots from multiple Beyn
 windows.
 
-Candidates are globally sorted by decreasing `abs(imag(k))`. Residual
+Candidates are sorted by decreasing `abs(imag(k))`. Residual
 validation therefore starts with roots furthest from the real axis. A failed
 residual resets the good-root streak and is discarded when
 `solver.auto_discard_spurious=true`. Once `pad` consecutive roots satisfy the
@@ -386,7 +367,7 @@ multi-`k` Chebyshev backend when available.
 ## Arguments
 * `solver::BeynSolver`: Beyn solver and filtering configuration.
 * `ks_all`: Complex projected roots for each window.
-* `X_all`: Boundary-density matrices corresponding to `ks_all`.
+* `X_all`: layer density matrices corresponding to `ks_all`.
 * `all_pts`: Boundary discretization associated with each window.
 
 ## Keyword Arguments
@@ -459,7 +440,7 @@ end
 """
     solve(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true)
 
-Solve one circular Beyn contour with exhaustive residual validation.
+Solve one circular Beyn contour with residual validation.
 
 ## Arguments
 * `solver::BeynSolver`: Beyn solver.
@@ -482,8 +463,8 @@ end
 """
     solve_vectors(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true)
 
-Solve one circular Beyn contour with exhaustive residual validation and return
-the corresponding boundary-density vectors.
+Solve one circular Beyn contour with residual validation and return
+the corresponding layer density vectors.
 
 ## Arguments
 * `solver::BeynSolver`: Beyn solver.
@@ -497,12 +478,30 @@ the corresponding boundary-density vectors.
 ## Returns
 * `ks::Vector{Complex{T}}`: Accepted complex eigenvalues.
 * `residuals::Vector{T}`: Corresponding nonlinear residuals.
-* `X::Matrix{Complex{T}}`: Corresponding boundary-density vectors.
+* `X::Matrix{Complex{T}}`: Corresponding layer density vectors.
 """
 function solve_vectors(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true)
     return _beyn_solve_core(solver, pts, k0, dk; multithreaded)
 end
 
+"""
+    solve_wavenumber(solver::BeynSolver, billiard::Bi, k, dk; multithreaded::Bool=true) where {Bi<:AbsBilliard}
+
+Solve for the eigenvalue closest to the given wavenumber `k` within a circular Beyn contour.
+
+## Arguments
+* `solver::BeynSolver`: Beyn solver.
+* `billiard::AbsBilliard`: Billiard instance.
+* `k`: Target wavenumber.
+* `dk`: Full contour diameter.
+
+## Keyword Arguments
+* `multithreaded::Bool=true`: Enable multithreaded matrix construction.
+
+## Returns
+* `k::Complex{T}`: Eigenvalue closest to the target wavenumber.
+* `residual::T`: Corresponding nonlinear residual.
+"""
 function solve_wavenumber(solver::BeynSolver, billiard::Bi, k, dk; multithreaded::Bool=true) where {Bi<:AbsBilliard}
     pts = evaluate_points(solver, billiard, k); ks, residuals = solve(solver, pts, k, dk; multithreaded)
     isempty(ks) && error("BeynSolver found no eigenvalue candidates in window")
