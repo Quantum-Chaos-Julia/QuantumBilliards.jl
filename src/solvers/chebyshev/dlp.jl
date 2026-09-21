@@ -1,26 +1,55 @@
 ################################################################################
-# Chebyshev-accelerated DLP Fredholm matrix assembly.
+# CHEBYSHEV-ACCELERATED DLP FREDHOLM ASSEMBLY
 #
-# New code (not a verbatim port of QuantumBilliards-develop's
-# chebyshev_dlp.jl/chebyshev_dlp_kress.jl): main's `DoubleLayerPotentialSolver`
-# already unifies every `-develop` DLP grading variant behind a single
-# `_dlp_fredholm_full!`/`_dlp_fredholm_reduced!`/`_dlp_kernel_entry`
-# assembly (solvers/sweepmethods/dlp.jl) and a single
-# `_dlp_kernel_entry_with_derivatives` (solvers/acceleratedmethods/ebim.jl),
-# so the Chebyshev acceleration is written as drop-in replacements for those
-# exact functions (same Kress-split kernel algebra, same call sites), rather
-# than as separate per-grading files. Every arithmetic expression below is
-# copied unchanged from its direct-evaluation counterpart; only the
-# `_bim_hankelh1`/`_bim_besselj` calls are replaced with Chebyshev plan
-# evaluations (`eval_h`/`eval_j` from bessels.jl in this directory).
+# This file implements the Chebyshev-accelerated evaluation path for the
+# double-layer-potential Fredholm operator
 #
-# `plan1`/`planj1` (value-only) and `plan0`/`plan1`/`planj0`/`planj1`
-# (with-derivatives) are built once per `construct_matrices` call by
-# `tune_dlp_cheb_plans` (optimalpanelization.jl) and reused across the full
-# O(N²) pairwise loop.
+#                            A(k) = I - D(k).
+#
+# The boundary discretization, Kress quadrature scheme, symmetry reduction,
+# diagonal limits, and Fredholm algebra are identical to the direct DLP
+# implementation in dlp.jl. The only approximation introduced here is in the
+# repeated evaluation of the radial Bessel and Hankel functions appearing in
+# the Kress-split off-diagonal kernel.
+#
+# For source and target boundary nodes i and j, let
+#
+#                         r_ij = |x_i-x_j|.
+#
+# The Kress splitting used by the DLP discretization writes an off-diagonal
+# kernel entry as
+#
+#                    D_ij = R_ij L1_ij + w_j L2_ij,
+#
+# where
+#
+#              L1_ij = -(k/2π) inner_ij J₁(k r_ij)/r_ij,
+#
+#              L2_ij =  (ik/2) inner_ij H₁⁽¹⁾(k r_ij)/r_ij
+#                        - L1_ij logterm_ij.
+#
+# Direct assembly evaluates J₁ and H₁⁽¹⁾ through the special-function library
+# for every boundary pair. Since the geometry supplies O(N²) pairwise
+# distances while the radial special functions depend on a pair only through
+# r_ij, this file replaces those repeated evaluations by the piecewise-
+# Chebyshev plans defined in bessels.jl:
+#
+#                         H₁⁽¹⁾(kr) → plan1,
+#                         J₁(kr)    → planj1.
+#
+# Each radial interval is divided into panels and the corresponding special
+# function is represented locally by a Chebyshev polynomial. Evaluation then
+# requires only a constant-time panel lookup followed by Clenshaw evaluation.
+# The near-zero Hankel treatment and direct fallbacks are handled entirely by
+# the plan-evaluation functions in bessels.jl.
+#
+# `_dlp_fredholm_full_cheb!` assembles the complete full-boundary matrix using
+# the Chebyshev evaluations above. `_dlp_kernel_entry_cheb` provides the same
+# discrete kernel entry individually, and `_dlp_fredholm_reduced_cheb!` uses
+# it to construct a symmetry-reduced matrix by folding the complete physical
+# boundary over source symmetry orbits.
 ################################################################################
 
-# Full (unfolded) Chebyshev-accelerated Fredholm matrix F(k) = I - D(k), value only.
 function _dlp_fredholm_full_cheb!(F::AbstractMatrix{ComplexF64}, pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, k::ComplexF64, plan1::ChebHankelPlanH, planj1::ChebJPlan; multithreaded::Bool=true) where {T<:Real}
     invtwopi = inv(2*pi)
     αL1 = -k*invtwopi
@@ -52,7 +81,6 @@ function _dlp_fredholm_full_cheb!(F::AbstractMatrix{ComplexF64}, pts::BoundaryPo
     return F
 end
 
-# Single Kress-corrected DLP kernel entry D[i,j] at full-boundary indices, Chebyshev-evaluated (mirrors `_dlp_kernel_entry`).
 @inline function _dlp_kernel_entry_cheb(pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, k::ComplexF64, plan1::ChebHankelPlanH, planj1::ChebJPlan, i::Int, j::Int) where {T<:Real}
     i==j && return Complex{Float64}(pts.ws[i]*G.kappa[i], 0.0)
     invtwopi = inv(2*pi)
@@ -69,7 +97,6 @@ end
     return Rmat[i,j]*l1+pts.ws[j]*l2
 end
 
-# Symmetry-reduced Chebyshev-accelerated Fredholm matrix, value only (mirrors `_dlp_fredholm_reduced!`).
 function _dlp_fredholm_reduced_cheb!(F::AbstractMatrix{ComplexF64}, pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, orbits::SymmetryOrbitMap{T}, k::ComplexF64, plan1::ChebHankelPlanH, planj1::ChebJPlan; multithreaded::Bool=true) where {T<:Real}
     m = fundamental_size(orbits)
     N = length(orbits)
@@ -95,10 +122,6 @@ function _dlp_fredholm_reduced_cheb!(F::AbstractMatrix{ComplexF64}, pts::Boundar
     return F
 end
 
-# `D(k)` kernel entry plus its first two `k`-derivatives, Chebyshev-evaluated
-# (mirrors `_dlp_kernel_entry_with_derivatives` in ebim.jl; `plan0`/`plan1`
-# share panelization, as do `planj0`/`planj1`, since they are tuned together
-# by `tune_dlp_cheb_plans`/`tune_cfie_cheb_plans`).
 @inline function _dlp_kernel_entry_with_derivatives_cheb(pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, k::ComplexF64, plan0::ChebHankelPlanH, plan1::ChebHankelPlanH, planj0::ChebJPlan, planj1::ChebJPlan, i::Int, j::Int) where {T<:Real}
     if i==j
         return Complex{Float64}(pts.ws[i]*G.kappa[i], 0.0), zero(ComplexF64), zero(ComplexF64)
@@ -127,20 +150,6 @@ end
     return val, dval, ddval
 end
 
-################################################################################
-# Single-pass, all-wavenumbers-at-once Fredholm assembly (Beyn's contour
-# nodes). Mirrors `-develop`'s `_all_k_nosymm_DLP_chebyshev!` pattern: every
-# boundary pair `(i,j)` is visited exactly once, the pairwise geometry
-# (`r`/`invr`/`lt`/`inner`) is read once, and `H₁^(1)`/`J₁` are evaluated for
-# every contour node's wavenumber in that single visit via
-# `h1_j1_multi_ks_at_r!` (bessels.jl), instead of the value-only single-`k`
-# functions above being called once per contour node (which would re-stream
-# the full O(N²) geometry cache `nq` times). Thread-local `h1vals`/`j1vals`
-# buffers (one per thread, see `_cheb_nthreads_buf` in core.jl) avoid reallocating per pair.
-################################################################################
-
-# Full (unfolded) Chebyshev-accelerated Fredholm matrices `Fs[m] = A(zj[m])`
-# for every contour node at once (mirrors `_dlp_fredholm_full_cheb!`).
 function _dlp_fredholm_full_multi_k_cheb!(Fs::Vector{<:AbstractMatrix{ComplexF64}}, pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, zj::Vector{ComplexF64}, plans1::Vector{ChebHankelPlanH}, plansj1::Vector{ChebJPlan}; multithreaded::Bool=true) where {T<:Real}
     Mk = length(zj)
     @assert length(Fs)==Mk && length(plans1)==Mk && length(plansj1)==Mk
@@ -190,8 +199,6 @@ function _dlp_fredholm_full_multi_k_cheb!(Fs::Vector{<:AbstractMatrix{ComplexF64
     return Fs
 end
 
-# Symmetry-reduced Chebyshev-accelerated Fredholm matrices, all contour nodes
-# at once (mirrors `_dlp_fredholm_reduced_cheb!`/`_dlp_kernel_entry_cheb`).
 function _dlp_fredholm_reduced_multi_k_cheb!(Fs::Vector{<:AbstractMatrix{ComplexF64}}, pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, orbits::SymmetryOrbitMap{T}, zj::Vector{ComplexF64}, plans1::Vector{ChebHankelPlanH}, plansj1::Vector{ChebJPlan}; multithreaded::Bool=true) where {T<:Real}
     Mk = length(zj)
     @assert length(Fs)==Mk && length(plans1)==Mk && length(plansj1)==Mk
