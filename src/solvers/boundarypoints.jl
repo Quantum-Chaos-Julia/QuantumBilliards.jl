@@ -1,47 +1,53 @@
 """
-    BoundaryPoints{T} <: Any
+    BoundaryPoints{T<:Real}
 
-`BoundaryPoints` is a concrete type that collects the boundary discretization data
-(sampled points, normals, arc-length coordinates and quadrature weights) used by
-the solvers to construct the boundary matrices.
+Container for sampled boundary geometry, quadrature data, and solver-specific
+boundary discretization data.
 
-## Description
-Instances are produced either by [`boundary_coords`](@ref), which samples the full
-boundary (including curves marked with `QuantumSolverIgnore`) to compute `xy`,
-`normal`, `s` and `ds`, or by a solver's `evaluate_points` method, which samples
-only the physical boundary and computes solver-specific quadrature weights such as
-`w_vs` (see [`VerginiSaracenoSolver`](@ref)) or `w_dm` (see
-[`DecompositionMethodSolver`](@ref)). Fields that are not populated by a given
-constructor call default to empty vectors. The inner constructor validates that
-all non-empty vector fields have the same length as `xy`.
+`BoundaryPoints` is shared by basis and boundary-integral solvers. The common
+geometric fields store boundary positions, normals, arc-length coordinates,
+and quadrature elements, while additional fields provide the parametrization
+and weights required by particular numerical methods. Fields not required by
+a given discretization are left empty or set to neutral scalar values.
+
+All populated node-wise vector fields are required to have the same length as
+`xy`.
 
 ## Attributes
-* `xy`: Boundary points in Cartesian coordinates.
-* `normal`: Outward unit normal vectors at each boundary point.
-* `kappa`: Curvature of the boundary at each point (reserved, currently unused).
-* `s`: Arc-length coordinate of each boundary point, measured continuously along the full composite boundary.
-* `ds`: Arc-length quadrature element at each boundary point.
-* `rdotn`: Dot product of the position vector with the normal, `r ⋅ n` (reserved, currently unused).
-* `w_vs`: Quadrature weights for the Vergini–Saraceno method, see [`VerginiSaracenoSolver`](@ref).
-* `w_dm`: Quadrature weights for the decomposition method, see [`DecompositionMethodSolver`](@ref).
-* `xy_int`: Interior points (reserved, currently unused).
-
-Fields added for boundary-integral/Kress-type discretizations (populated only
-by [`SweepBIMSolver`](@ref)/[`AcceleratedBIMSolver`](@ref) `evaluate_points`
-methods): `w`, `w_n`, `curvature`, `shift_x`, `shift_y`, `tangent`,
-`tangent_2`, `ts`, `tphys`, `ws`, `ws_der`, `compid`, `is_periodic`, `xL`,
-`xR`, `tL`, `tR`. These default to empty vectors/neutral scalars and are
-otherwise unused by the basis solvers (`kappa`/`rdotn`/`w_vs`/`w_dm` are
-unaffected).
+* `xy::Vector{SVector{2,T}}`: Boundary points in Cartesian coordinates.
+* `normal::Vector{SVector{2,T}}`: Outward unit normals at the boundary points.
+* `kappa::Vector{T}`: Curvature data used by basis-method discretizations.
+* `s::Vector{T}`: Arc-length coordinates along the boundary.
+* `ds::Vector{T}`: Physical arc-length quadrature elements.
+* `rdotn::Vector{T}`: Values of the geometric factor `r ⋅ n`.
+* `w_vs::Vector{T}`: Vergini-Saraceno quadrature weights.
+* `w_dm::Vector{T}`: Decomposition-method quadrature weights.
+* `xy_int::Vector{SVector{2,T}}`: Associated interior sampling points.
+* `w::Vector{T}`: Boundary-integral quadrature weights.
+* `w_n::Vector{T}`: Additional boundary-integral normal weights.
+* `curvature::Vector{T}`: Curvature data used by boundary-integral discretizations.
+* `shift_x::T`: Horizontal parametrization or symmetry shift.
+* `shift_y::T`: Vertical parametrization or symmetry shift.
+* `tangent::Vector{SVector{2,T}}`: First derivatives of the boundary parametrization.
+* `tangent_2::Vector{SVector{2,T}}`: Second derivatives of the boundary parametrization.
+* `ts::Vector{T}`: Computational parameter values.
+* `tphys::Vector{T}`: Corresponding physical boundary parameter values.
+* `ws::Vector{T}`: Quadrature weights in the computational parametrization.
+* `ws_der::Vector{T}`: Derivatives associated with the grading transformation.
+* `compid::Int`: Connected boundary-component index.
+* `is_periodic::Bool`: Whether the represented component is periodically parametrized.
+* `xL::SVector{2,T}`: Left endpoint for a nonperiodic component.
+* `xR::SVector{2,T}`: Right endpoint for a nonperiodic component.
+* `tL::SVector{2,T}`: Endpoint tangent associated with `xL`.
+* `tR::SVector{2,T}`: Endpoint tangent associated with `xR`.
 
 ## API
-The following functions can be evaluated for this type:
-- [`boundary_coords`](@ref)
-- [`boundary_matrix_size`](@ref)
-- [`boundary_s`](@ref)
-- [`component_offsets`](@ref)
-- `Base.length`
-- `Base.isempty`
+* [`boundary_coords`](@ref)
+* [`boundary_matrix_size`](@ref)
+* [`boundary_s`](@ref)
+* [`component_offsets`](@ref)
+* `Base.length`
+* `Base.isempty`
 """
 struct BoundaryPoints{T<:Real}
     xy::Vector{SVector{2,T}}
@@ -72,109 +78,97 @@ struct BoundaryPoints{T<:Real}
     tR::SVector{2,T}
 
     # Inner constructor with validation
-    function BoundaryPoints{T}(xy, normal, kappa, s, ds, rdotn, w_vs, w_dm, xy_int,
-                                w, w_n, curvature, shift_x, shift_y, tangent, tangent_2,
-                                ts, tphys, ws, ws_der, compid, is_periodic, xL, xR, tL, tR) where T<:Real
+    function BoundaryPoints{T}(xy, normal, kappa, s, ds, rdotn, w_vs, w_dm, xy_int, w, w_n, curvature, shift_x, shift_y, tangent, tangent_2, ts, tphys, ws, ws_der, compid, is_periodic, xL, xR, tL, tR) where T<:Real
         n = length(xy)
         # Validate that non-empty vectors have consistent lengths
-        for (name, vec) in [(:normal, normal), (:s, s), (:ds, ds), (:rdotn, rdotn),
-                             (:w_vs, w_vs), (:w_dm, w_dm), (:w, w), (:w_n, w_n),
-                             (:curvature, curvature), (:tangent, tangent), (:tangent_2, tangent_2),
-                             (:ts, ts), (:tphys, tphys), (:ws, ws), (:ws_der, ws_der)]
+        for (name, vec) in [(:normal, normal), (:s, s), (:ds, ds), (:rdotn, rdotn), (:w_vs, w_vs), (:w_dm, w_dm), (:w, w), (:w_n, w_n), (:curvature, curvature), (:tangent, tangent), (:tangent_2, tangent_2), (:ts, ts), (:tphys, tphys), (:ws, ws), (:ws_der, ws_der)]
             if !isempty(vec) && length(vec) != n
                 error("Length of $name ($(length(vec))) must match xy ($n)")
             end
         end
-        new{T}(xy, normal, kappa, s, ds, rdotn, w_vs, w_dm, xy_int,
-               w, w_n, curvature, shift_x, shift_y, tangent, tangent_2,
-               ts, tphys, ws, ws_der, compid, is_periodic, xL, xR, tL, tR)
+        new{T}(xy, normal, kappa, s, ds, rdotn, w_vs, w_dm, xy_int, w, w_n, curvature, shift_x, shift_y, tangent, tangent_2, ts, tphys, ws, ws_der, compid, is_periodic, xL, xR, tL, tR)
     end
 end
 
-# 2. Convenience constructor to infer T from xy
 """
-    BoundaryPoints(xy::Vector{SVector{2,T}}; kwargs...) where T<:Real → bp::BoundaryPoints{T}
+    BoundaryPoints(xy::Vector{SVector{2,T}}; kwargs...) where {T<:Real} → bp::BoundaryPoints{T}
 
-Constructs a [`BoundaryPoints`](@ref) instance from the boundary points `xy`,
-inferring the element type `T` from `xy` and defaulting all other fields to empty
-vectors/neutral scalars when not supplied as keyword arguments.
+Construct a boundary discretization from Cartesian boundary points, inferring
+the scalar type `T` from `xy`.
+
+All additional geometric, quadrature, parametrization, and solver-specific data
+are supplied through keyword arguments. Unspecified vector fields are empty and
+unspecified scalar fields use their neutral defaults.
 
 ## Arguments
-* `xy`: Vector of boundary points in Cartesian coordinates.
+* `xy::Vector{SVector{2,T}}`: Boundary points in Cartesian coordinates.
 
-## Keyword arguments
-* `normal::Vector{SVector{2,T}} = SVector{2,T}[]`: Outward unit normal vectors at each boundary point.
-* `kappa::Vector{T} = T[]`: Curvature of the boundary at each point (reserved, currently unused).
-* `s::Vector{T} = T[]`: Arc-length coordinate of each boundary point.
-* `ds::Vector{T} = T[]`: Arc-length quadrature element at each boundary point.
-* `rdotn::Vector{T} = T[]`: Dot product of the position vector with the normal, `r ⋅ n`.
-* `w_vs::Vector{T} = T[]`: Quadrature weights for the Vergini–Saraceno method.
-* `w_dm::Vector{T} = T[]`: Quadrature weights for the decomposition method.
-* `xy_int::Vector{SVector{2,T}} = SVector{2,T}[]`: Interior points.
-* `w::Vector{T} = T[]`: Solver-specific boundary weights (BIM solvers).
-* `w_n::Vector{T} = T[]`: Additional solver-specific normal weights (BIM solvers).
-* `curvature::Vector{T} = T[]`: Curvature values at the boundary points (BIM solvers).
-* `shift_x::T = zero(T)`, `shift_y::T = zero(T)`: Symmetry-transformation shifts.
-* `tangent::Vector{SVector{2,T}} = SVector{2,T}[]`: First derivative of the boundary parametrization at the nodes.
-* `tangent_2::Vector{SVector{2,T}} = SVector{2,T}[]`: Second derivative of the boundary parametrization at the nodes.
-* `ts::Vector{T} = T[]`: Computational (uniform/graded) parameter values.
-* `tphys::Vector{T} = T[]`: Physical/global boundary parameter values.
-* `ws::Vector{T} = T[]`: Quadrature weights in the computational parameter.
-* `ws_der::Vector{T} = T[]`: Derivatives of the computational quadrature weights (grading Jacobian).
-* `compid::Int = 1`: Boundary-component index for multiply connected geometries.
-* `is_periodic::Bool = true`: Whether the discretized boundary component is periodic.
-* `xL,xR::SVector{2,T}`, `tL,tR::SVector{2,T}`: Endpoints/tangents of a non-periodic boundary component.
+## Keyword Arguments
+* `normal::Vector{SVector{2,T}} = SVector{2,T}[]`: Outward unit normals.
+* `kappa::Vector{T} = T[]`: Curvature data used by basis methods.
+* `s::Vector{T} = T[]`: Arc-length coordinates.
+* `ds::Vector{T} = T[]`: Physical arc-length quadrature elements.
+* `rdotn::Vector{T} = T[]`: Values of `r ⋅ n`.
+* `w_vs::Vector{T} = T[]`: Vergini-Saraceno quadrature weights.
+* `w_dm::Vector{T} = T[]`: Decomposition-method quadrature weights.
+* `xy_int::Vector{SVector{2,T}} = SVector{2,T}[]`: Associated interior sampling points.
+* `w::Vector{T} = T[]`: Boundary-integral quadrature weights.
+* `w_n::Vector{T} = T[]`: Additional boundary-integral normal weights.
+* `curvature::Vector{T} = T[]`: Curvature data used by boundary-integral discretizations.
+* `shift_x::T = zero(T)`: Horizontal parametrization or symmetry shift.
+* `shift_y::T = zero(T)`: Vertical parametrization or symmetry shift.
+* `tangent::Vector{SVector{2,T}} = SVector{2,T}[]`: First parametrization derivatives.
+* `tangent_2::Vector{SVector{2,T}} = SVector{2,T}[]`: Second parametrization derivatives.
+* `ts::Vector{T} = T[]`: Computational parameter values.
+* `tphys::Vector{T} = T[]`: Physical boundary parameter values.
+* `ws::Vector{T} = T[]`: Computational quadrature weights.
+* `ws_der::Vector{T} = T[]`: Derivatives associated with the grading transformation.
+* `compid::Int = 1`: Connected boundary-component index.
+* `is_periodic::Bool = true`: Whether the component is periodically parametrized.
+* `xL::SVector{2,T} = zero`: Left endpoint of a nonperiodic component.
+* `xR::SVector{2,T} = zero`: Right endpoint of a nonperiodic component.
+* `tL::SVector{2,T} = zero`: Endpoint tangent associated with `xL`.
+* `tR::SVector{2,T} = zero`: Endpoint tangent associated with `xR`.
 
 ## Returns
-* `bp`: A [`BoundaryPoints{T}`](@ref) instance holding the supplied boundary data.
+* `bp::BoundaryPoints{T}`: Boundary discretization containing the supplied data.
 """
-function BoundaryPoints(xy::Vector{SVector{2,T}}; 
-                        normal=SVector{2,T}[], 
-                        kappa=T[],
-                        s=T[], 
-                        ds=T[], 
-                        rdotn=T[], 
-                        w_vs=T[], 
-                        w_dm=T[], 
-                        xy_int=SVector{2,T}[],
-                        w=T[],
-                        w_n=T[],
-                        curvature=T[],
-                        shift_x=zero(T),
-                        shift_y=zero(T),
-                        tangent=SVector{2,T}[],
-                        tangent_2=SVector{2,T}[],
-                        ts=T[],
-                        tphys=T[],
-                        ws=T[],
-                        ws_der=T[],
-                        compid=1,
-                        is_periodic=true,
-                        xL=SVector{2,T}(zero(T),zero(T)),
-                        xR=SVector{2,T}(zero(T),zero(T)),
-                        tL=SVector{2,T}(zero(T),zero(T)),
-                        tR=SVector{2,T}(zero(T),zero(T))) where T<:Real
-    return BoundaryPoints{T}(xy, normal, kappa, s, ds, rdotn, w_vs, w_dm, xy_int,
-                              w, w_n, curvature, shift_x, shift_y, tangent, tangent_2,
-                              ts, tphys, ws, ws_der, compid, is_periodic, xL, xR, tL, tR)
+function BoundaryPoints(xy::Vector{SVector{2,T}}; normal=SVector{2,T}[], kappa=T[], s=T[], ds=T[], rdotn=T[], w_vs=T[], w_dm=T[], xy_int=SVector{2,T}[], w=T[], w_n=T[], curvature=T[], shift_x=zero(T), shift_y=zero(T), tangent=SVector{2,T}[], tangent_2=SVector{2,T}[], ts=T[], tphys=T[], ws=T[], ws_der=T[], compid=1, is_periodic=true, xL=SVector{2,T}(zero(T),zero(T)), xR=SVector{2,T}(zero(T),zero(T)), tL=SVector{2,T}(zero(T),zero(T)), tR=SVector{2,T}(zero(T),zero(T))) where T<:Real
+    return BoundaryPoints{T}(xy, normal, kappa, s, ds, rdotn, w_vs, w_dm, xy_int, w, w_n, curvature, shift_x, shift_y, tangent, tangent_2, ts, tphys, ws, ws_der, compid, is_periodic, xL, xR, tL, tR)
 end
 
 """
-    BoundaryPoints(xy::Vector{SVector{2,T}}, tangent::Vector{SVector{2,T}}, tangent_2::Vector{SVector{2,T}}, ts::Vector{T}, tphys::Vector{T}, ws::Vector{T}, ws_der::Vector{T}, s::Vector{T}, ds::Vector{T}, compid::Int, is_periodic::Bool, xL::SVector{2,T}, xR::SVector{2,T}, tL::SVector{2,T}, tR::SVector{2,T}) where T<:Real → bp::BoundaryPoints{T}
+    BoundaryPoints(xy::Vector{SVector{2,T}}, tangent::Vector{SVector{2,T}}, tangent_2::Vector{SVector{2,T}}, ts::Vector{T}, tphys::Vector{T}, ws::Vector{T}, ws_der::Vector{T}, s::Vector{T}, ds::Vector{T}, compid::Int, is_periodic::Bool, xL::SVector{2,T}, xR::SVector{2,T}, tL::SVector{2,T}, tR::SVector{2,T}) where {T<:Real} → bp::BoundaryPoints{T}
 
-Constructs a parametrized boundary discretization from sampled points, first
-and second parametrization derivatives, computational nodes and quadrature
-weights, as used by boundary-integral (Kress-type) `evaluate_points` methods.
+Construct a parametrized boundary discretization for boundary-integral
+quadrature.
 
-The outward unit normals are computed directly from `tangent` via
-`n = (t_y, -t_x)/|t|`.
+The outward unit normal at each node is computed from the parametrization
+tangent `t = (t_x,t_y)` as
+
+    n = (t_y,-t_x)/|t|.
+
+## Arguments
+* `xy::Vector{SVector{2,T}}`: Boundary points in Cartesian coordinates.
+* `tangent::Vector{SVector{2,T}}`: First parametrization derivatives.
+* `tangent_2::Vector{SVector{2,T}}`: Second parametrization derivatives.
+* `ts::Vector{T}`: Computational parameter values.
+* `tphys::Vector{T}`: Corresponding physical boundary parameter values.
+* `ws::Vector{T}`: Computational quadrature weights.
+* `ws_der::Vector{T}`: Derivatives associated with the grading transformation.
+* `s::Vector{T}`: Arc-length coordinates.
+* `ds::Vector{T}`: Physical arc-length quadrature elements.
+* `compid::Int`: Connected boundary-component index.
+* `is_periodic::Bool`: Whether the component is periodically parametrized.
+* `xL::SVector{2,T}`: Left endpoint of a nonperiodic component.
+* `xR::SVector{2,T}`: Right endpoint of a nonperiodic component.
+* `tL::SVector{2,T}`: Endpoint tangent associated with `xL`.
+* `tR::SVector{2,T}`: Endpoint tangent associated with `xR`.
 
 ## Returns
-* `bp`: A [`BoundaryPoints{T}`](@ref) instance with both physical and parametric boundary data populated.
+* `bp::BoundaryPoints{T}`: Parametrized boundary discretization with computed outward normals.
 """
-function BoundaryPoints(xy::Vector{SVector{2,T}}, tangent::Vector{SVector{2,T}}, tangent_2::Vector{SVector{2,T}},
-                        ts::Vector{T}, tphys::Vector{T}, ws::Vector{T}, ws_der::Vector{T}, s::Vector{T}, ds::Vector{T},
-                        compid::Int, is_periodic::Bool, xL::SVector{2,T}, xR::SVector{2,T}, tL::SVector{2,T}, tR::SVector{2,T}) where T<:Real
+function BoundaryPoints(xy::Vector{SVector{2,T}}, tangent::Vector{SVector{2,T}}, tangent_2::Vector{SVector{2,T}}, ts::Vector{T}, tphys::Vector{T}, ws::Vector{T}, ws_der::Vector{T}, s::Vector{T}, ds::Vector{T}, compid::Int, is_periodic::Bool, xL::SVector{2,T}, xR::SVector{2,T}, tL::SVector{2,T}, tR::SVector{2,T}) where T<:Real
     n = length(xy)
     normal = Vector{SVector{2,T}}(undef, n)
     @inbounds for i in eachindex(tangent)
@@ -182,12 +176,9 @@ function BoundaryPoints(xy::Vector{SVector{2,T}}, tangent::Vector{SVector{2,T}},
         sp = hypot(tx, ty)
         normal[i] = SVector{2,T}(ty/sp, -tx/sp)
     end
-    return BoundaryPoints(xy; normal=normal, s=s, ds=ds, tangent=tangent, tangent_2=tangent_2,
-                          ts=ts, tphys=tphys, ws=ws, ws_der=ws_der, compid=compid, is_periodic=is_periodic,
-                          xL=xL, xR=xR, tL=tL, tR=tR)
+    return BoundaryPoints(xy; normal=normal, s=s, ds=ds, tangent=tangent, tangent_2=tangent_2, ts=ts, tphys=tphys, ws=ws, ws_der=ws_der, compid=compid, is_periodic=is_periodic, xL=xL, xR=xR, tL=tL, tR=tR)
 end
 
-# 3. Add useful methods
 """
     length(bp::BoundaryPoints) → n::Int
 
@@ -292,53 +283,32 @@ end
 """
     boundary_coords(billiard::Bi, samplers::Vector{AbsSampler}, Ns::Vector{Int64}) where {Bi<:AbsBilliard} → bp::BoundaryPoints
 
-Samples the full boundary of `billiard` (including curves marked with
-`QuantumSolverIgnore`) and returns the sampled points, outward normals and
-arc-length coordinates as a [`BoundaryPoints`](@ref) instance.
-
-## Description
-Each boundary curve, as returned by [`get_boundary_curves_with_ignored`](@ref), is
-sampled independently with its own sampler and number of points using
-`sample_points`. The per-curve arc-length coordinates are offset by the cumulative
-length of the preceding curves, so that `s` runs continuously over the whole
-composite boundary.
+Sample the full boundary of `billiard` using independently specified samplers
+and point counts for each boundary curve. Curves marked with `QuantumSolverIgnore` are included. 
 
 ## Arguments
-* `billiard`: The billiard whose boundary is sampled.
-* `samplers`: Vector of samplers, one per boundary curve (including ignored curves).
-* `Ns`: Vector with the number of sample points to generate for each boundary curve.
+* `billiard::Bi`: Billiard whose full boundary is sampled.
+* `samplers::Vector{AbsSampler}`: Sampler assigned to each boundary curve.
+* `Ns::Vector{Int64}`: Number of points assigned to each boundary curve.
 
 ## Returns
-* `bp`: A [`BoundaryPoints`](@ref) instance with the `xy`, `normal`, `s` and `ds` fields populated.
+* `bp::BoundaryPoints`: Boundary discretization containing positions, outward normals, arc-length coordinates, and physical quadrature elements.
 """
 function boundary_coords(billiard::Bi, samplers::Vector{AbsSampler}, Ns::Vector{Int64}) where {Bi<:AbsBilliard}
-    curves = get_boundary_curves_with_ignored(billiard)
-    T = typeof(curves[1].length)
-    M = length(Ns)
-    xy_all = Vector{Vector{SVector{2,T}}}(undef, M)
-    normal_all = Vector{Vector{SVector{2,T}}}(undef, M)
-    s_all = Vector{Vector{T}}(undef, M)
-    ds_all = Vector{Vector{T}}(undef, M)
+    curves = get_boundary_curves_with_ignored(billiard); T = typeof(curves[1].length); M = length(curves)
+    length(samplers) == M || throw(ArgumentError("Expected $M samplers, received $(length(samplers))"))
+    length(Ns) == M || throw(ArgumentError("Expected $M point counts, received $(length(Ns))"))
+    xy_all = Vector{Vector{SVector{2,T}}}(undef, M); normal_all = Vector{Vector{SVector{2,T}}}(undef, M)
+    s_all = Vector{Vector{T}}(undef, M); ds_all = Vector{Vector{T}}(undef, M)
     L0 = zero(T)
     for i in eachindex(curves)
-        crv = curves[i]
-        L = crv.length
-        sampler = samplers[i]
-        t, dt = sample_points(sampler, Ns[i])
-        ds = L*dt #this needs modification!!!
-        xy = curve(crv,t)
-        normal = domain_gradient_vector(crv, xy)
-        normal .= normal./norm(normal)
-        #rn = dot.(xy, normal)
-        xy_all[i] = xy
-        normal_all[i] = normal
-        s_all[i] = arc_length(crv,t) .+ L0 #arc_lengt(crv, xy)
-        ds_all[i] = ds  
-        #w_n_all[i] = (ds.*rn)./(2.0*k.^2)
-        L0 += L
+        crv = curves[i]; t, dt = sample_points(samplers[i], Ns[i])
+        xy = curve(crv, t); ds = norm.(tangent(crv, t)) .* dt
+        normal = domain_gradient_vector(crv, xy); normal .= normal ./ norm(normal)
+        xy_all[i] = xy; normal_all[i] = normal; s_all[i] = arc_length(crv, t) .+ L0; ds_all[i] = ds
+        L0 += crv.length
     end
-
-    return BoundaryPoints(vcat(xy_all...); normal = vcat(normal_all...), s=vcat(s_all...), ds = vcat(ds_all...) )
+    return BoundaryPoints(vcat(xy_all...); normal = vcat(normal_all...), s = vcat(s_all...), ds = vcat(ds_all...))
 end
 
 """
@@ -467,13 +437,7 @@ end
 
 Generates `N` points sampled uniformly (by rejection) from the interior of
 `billiard`, for use e.g. by [`ParticularSolutionsMethod`](@ref)'s
-[`evaluate_points`](@ref).
-
-## Description
-Candidate points are drawn uniformly from the padded bounding box of
-`billiard`'s boundary curves (see [`boundary_limits`](@ref)) and accepted only
-if [`is_inside`](@ref) confirms they lie within the billiard, until `N`
-interior points have been collected.
+[`evaluate_points`](@ref) methods.
 
 ## Arguments
 * `billiard`: The billiard whose interior is sampled.
@@ -510,17 +474,6 @@ end
 Estimates the minimum nonzero and maximum pairwise interaction radii between
 the boundary points `pts`, used to tune the radial interpolation interval of
 Chebyshev-accelerated Hankel/Bessel evaluation.
-
-## Description
-When `symmetry === nothing`, every pairwise distance between the boundary
-points `pts.xy` is considered directly. When a discrete `symmetry` is
-supplied, `pts` is assumed to already be the discretization of the *complete*
-physical boundary (see [`full_boundary`](@ref)) and only the interactions
-between each fundamental-domain representative and every node in its full
-symmetry orbit ([`symmetry_index_orbits`](@ref)) are considered — this is the
-exact set of source-image distances the symmetry-reduced Fredholm assembly
-(e.g. [`DoubleLayerPotentialSolver`](@ref)'s `_dlp_fredholm_reduced!`) actually
-evaluates.
 
 ## Arguments
 * `pts`: The boundary discretization whose pairwise interaction radii are estimated.
