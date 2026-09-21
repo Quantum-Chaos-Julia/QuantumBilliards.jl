@@ -1,46 +1,76 @@
+################################################################################
+# COMBINED-FIELD INTEGRAL EQUATION BOUNDARY INTEGRAL METHOD (CFIE)
+#
+# This file implements the combined-field boundary integral method for
+# Dirichlet quantum billiards using a linear combination of the interior
+# Helmholtz double- and single-layer boundary operators.
+#
+# For the two-dimensional Helmholtz equation
+#
+#                         (Δ + k²)ψ = 0
+#
+# in a billiard Ω with Dirichlet boundary condition ψ|∂Ω = 0, the formulation
+# combines the double-layer operator D(k) with the single-layer operator S(k).
+# With the normalization and coupling convention used here:
+#
+#                         A(k) μ = 0,
+#
+# where
+#
+#                   A(k) = I - (D(k) + i k S(k)).
+#
+# Numerically, the CFIE tension is the smallest singular value
+#
+#                         t(k) = σmin(A(k)),
+#
+# which develops minima approaching zero at the Dirichlet eigenvalues.
+#
+# BOUNDARY DISCRETIZATION
+# All boundary discretizations use the Kress quadrature scheme for both the
+# double- and single-layer Helmholtz kernels. Smooth closed boundary components
+# use the original periodic parametrization sampled on a midpoint grid.
+# CornerGrading applies a single-corner Kress grading map to a closed curve
+# whose parametric corner is known at the periodic endpoint, while
+# GlobalCornerGrading detects true geometric corners and applies a global
+# Kress grading map around them. Thus the grading strategy changes the boundary
+# parametrization, while the underlying Kress quadrature scheme is used in all
+# cases.
+################################################################################
+
 """
     CombinedFieldIntegralEquationSolver{T,G,Sy,Ch} <: CFIE
 
-`CombinedFieldIntegralEquationSolver` is a concrete [`SweepBIMSolver`](@ref)
-implementing the (optionally Kress-corrected) combined-field boundary integral
-method for computing quantum billiard spectra from the coupled Helmholtz
-double-layer/single-layer Fredholm operator.
+Boundary-integral eigensolver based on the Helmholtz combined-field integral
+equation.
 
-## Description
-The assembled Fredholm operator is
+`CombinedFieldIntegralEquationSolver` discretizes the Fredholm operator
 
     A(k) = I - (D(k) + i k S(k)),
 
-where `D(k)` is the Nyström discretization of the Helmholtz double-layer
-operator and `S(k)` of the single-layer operator. The combined-field
-coupling removes the spurious interior-nullspace problem that a pure
-double-layer formulation ([`DoubleLayerPotentialSolver`](@ref)) can suffer on
-some geometries. The tension at a fixed wavenumber `k` is a function of the
-smallest singular value / nullspace residual of `A(k)` (see
-[`construct_matrices`](@ref), [`solve`](@ref)). The boundary discretization
-strategy is controlled by `grading`, see [`BoundaryGrading`](@ref)
-(`CFIE` additionally supports [`CornerGrading`](@ref), a single-curve
-parametric-corner variant that [`DoubleLayerPotentialSolver`](@ref) does not
-need); an optional discrete `symmetry` folds the discretization onto a
-fundamental domain via a [`BilliardGeometry.SymmetryOrbitMap`](@ref).
+where `D(k)` and `S(k)` are the Helmholtz double- and single-layer boundary
+operators in the normalization used by this implementation. Dirichlet
+eigenvalues correspond to wavenumbers for which `A(k)` becomes singular.
+
+All boundary discretizations use the Kress quadrature scheme for both kernel
+contributions. [`SmoothPeriodicGrading`](@ref) uses the original periodic
+boundary parametrization, [`CornerGrading`](@ref) applies a single-corner
+Kress grading map to a closed curve with a known parametric corner, and
+[`GlobalCornerGrading`](@ref) applies a global Kress grading map around
+detected geometric corners. An optional discrete symmetry reduces the
+resulting full-boundary Fredholm operator to a selected symmetry sector.
 
 ## Attributes
-* `pts_scaling_factor`: Vector of scaling factors, one per fundamental boundary curve, used to determine the number of boundary sampling points.
-* `min_pts`: Minimum number of boundary sampling points per component.
-* `grading`: [`BoundaryGrading`](@ref) strategy used to discretize the boundary.
-* `symmetry`: Optional `AbsSymmetry` used to fold the discretization onto a fundamental domain.
-* `character`: Tuple of one-dimensional irrep character(s) requested for `symmetry` (trivial representation, `()`, by default), passed as the trailing `character` argument(s) of [`BilliardGeometry.symmetry_index_orbits`](@ref) via [`_fold_boundary`](@ref).
-* `eps`: Relative tolerance used to determine the tension from the smallest singular value / nullspace residual.
+* `pts_scaling_factor::Vector{T}`: Boundary-point scaling factors used to determine the discretization size.
+* `min_pts::Int64`: Minimum number of boundary sampling points.
+* `grading::G`: [`BoundaryGrading`](@ref) strategy controlling the periodic boundary parametrization used by the Kress quadrature scheme.
+* `symmetry::Sy`: Optional discrete symmetry used to reduce the full-boundary Fredholm operator.
+* `character::Ch`: Character tuple selecting the representation of `symmetry`.
+* `eps::T`: Relative numerical tolerance associated with the solver.
 
 ## API
-The following functions can be evaluated for this type:
-- [`evaluate_points`](@ref)
-- [`boundary_matrix_size`](@ref)
-- [`construct_matrices`](@ref)
-- [`solve`](@ref)
-- [`solve_vect`](@ref)
-- [`solve_wavenumber`](@ref)
-- [`k_sweep`](@ref)
+[`evaluate_points`](@ref), [`boundary_matrix_size`](@ref),
+[`construct_matrices`](@ref), [`solve`](@ref), [`solve_vect`](@ref),
+[`solve_wavenumber`](@ref), and [`k_sweep`](@ref).
 """
 struct CombinedFieldIntegralEquationSolver{T<:Real,G<:BoundaryGrading,Sy<:Union{AbsSymmetry,Nothing},Ch<:Tuple} <: CFIE
     pts_scaling_factor::Vector{T}
@@ -52,41 +82,54 @@ struct CombinedFieldIntegralEquationSolver{T<:Real,G<:BoundaryGrading,Sy<:Union{
 end
 
 """
-    CombinedFieldIntegralEquationSolver(pts_scaling_factor::Union{T,Vector{T}}; min_pts::Int = 200, grading::BoundaryGrading = SmoothPeriodicGrading(), symmetry::Union{Nothing,AbsSymmetry} = nothing, character::Tuple = (), eps::T = T(1e-15)) where {T<:Real} → solver::CombinedFieldIntegralEquationSolver{T}
+    CombinedFieldIntegralEquationSolver(pts_scaling_factor::Union{T,Vector{T}}; min_pts::Int=200, grading::BoundaryGrading=SmoothPeriodicGrading(), symmetry::Union{Nothing,AbsSymmetry}=nothing, character::Tuple=(), eps::T=T(1e-15)) where {T<:Real}
 
-Constructs a [`CombinedFieldIntegralEquationSolver`](@ref).
+Construct a combined-field boundary-integral solver.
+All boundary discretizations use the Kress quadrature scheme for the
+double- and single-layer kernels. `grading` controls the periodic boundary
+parametrization on which this quadrature is applied.
 
 ## Arguments
-* `pts_scaling_factor`: Scaling factor, or vector thereof (one per fundamental boundary curve), used to determine the number of boundary sampling points.
+* `pts_scaling_factor::Union{T,Vector{T}}`: Boundary-point scaling factor or collection of scaling factors used to determine the discretization size.
 
-## Keyword arguments
-* `min_pts::Int = 200`: Minimum number of boundary sampling points per component.
-* `grading::BoundaryGrading = SmoothPeriodicGrading()`: Boundary discretization/grading strategy, see [`BoundaryGrading`](@ref).
-* `symmetry::Union{Nothing,AbsSymmetry} = nothing`: Optional discrete symmetry used to fold the discretization onto a fundamental domain.
-* `character::Tuple = ()`: One-dimensional irrep character(s) requested for `symmetry` (trivial representation by default); unvalidated against `symmetry`, see the `(pts_scaling_factor, billiard, sector::SymmetrySector)` constructor overload below for a validated alternative.
-* `eps::T = T(1e-15)`: Relative tolerance used to determine the tension.
+## Keyword Arguments
+* `min_pts::Int = 200`: Minimum number of boundary sampling points.
+* `grading::BoundaryGrading = SmoothPeriodicGrading()`: Boundary parametrization strategy used with the Kress quadrature scheme.
+* `symmetry::Union{Nothing,AbsSymmetry} = nothing`: Optional discrete symmetry used to reduce the full-boundary Fredholm operator.
+* `character::Tuple = ()`: Character tuple selecting the requested representation of `symmetry`.
+* `eps::T = T(1e-15)`: Relative numerical tolerance associated with the solver.
 
 ## Returns
-* `solver`: A [`CombinedFieldIntegralEquationSolver{T}`](@ref) instance.
+* `solver::CombinedFieldIntegralEquationSolver{T}`: Configured CFIE solver.
 """
-function CombinedFieldIntegralEquationSolver(pts_scaling_factor::Union{T,Vector{T}}; min_pts::Int=200,
-                                              grading::BoundaryGrading=SmoothPeriodicGrading(),
-                                              symmetry::Union{Nothing,AbsSymmetry}=nothing,
-                                              character::Tuple=(),
-                                              eps::T=T(1e-15)) where {T<:Real}
+function CombinedFieldIntegralEquationSolver(pts_scaling_factor::Union{T,Vector{T}}; min_pts::Int=200, grading::BoundaryGrading=SmoothPeriodicGrading(),symmetry::Union{Nothing,AbsSymmetry}=nothing, character::Tuple=(), eps::T=T(1e-15)) where {T<:Real}
     bs = pts_scaling_factor isa T ? [pts_scaling_factor] : pts_scaling_factor
     return CombinedFieldIntegralEquationSolver{T,typeof(grading),typeof(symmetry),typeof(character)}(bs, min_pts, grading, symmetry, character, eps)
 end
 
 """
-    CombinedFieldIntegralEquationSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::BilliardGeometry.AbsBilliard, sector::SymmetrySector; kwargs...) where {T<:Real} → solver::CombinedFieldIntegralEquationSolver{T}
+    CombinedFieldIntegralEquationSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::BilliardGeometry.AbsBilliard, sector::SymmetrySector; kwargs...) where {T<:Real}
 
-Constructs a [`CombinedFieldIntegralEquationSolver`](@ref) whose
-`symmetry`/`character` are resolved from a validated [`SymmetrySector`](@ref)
-built against `billiard` ([`_resolve_bim_symmetry`](@ref)), mirroring
-[`DoubleLayerPotentialSolver`](@ref)`(pts_scaling_factor, billiard, sector)`.
-See that constructor's docstring for the one irreducible restriction (a lone
-`XYAxisReflection` character).
+Construct a combined-field boundary-integral solver in a validated symmetry
+sector of `billiard`.
+
+The symmetry generator and character are resolved from `sector` using the
+symmetry registry of `billiard`. This provides a validated alternative to
+specifying the `symmetry` and `character` keywords directly. The resulting
+solver discretizes the complete physical boundary with the Kress quadrature
+scheme and folds the full-boundary Fredholm operator onto the requested
+symmetry sector.
+
+## Arguments
+* `pts_scaling_factor::Union{T,Vector{T}}`: Boundary-point scaling factor or collection of scaling factors used to determine the discretization size.
+* `billiard::BilliardGeometry.AbsBilliard`: Billiard defining the available discrete symmetries.
+* `sector::SymmetrySector`: Validated symmetry sector used for the Fredholm reduction.
+
+## Keyword Arguments
+* `kwargs...`: Additional keyword arguments forwarded to [`CombinedFieldIntegralEquationSolver`](@ref).
+
+## Returns
+* `solver::CombinedFieldIntegralEquationSolver{T}`: Configured CFIE solver in the requested symmetry sector.
 """
 function CombinedFieldIntegralEquationSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::BilliardGeometry.AbsBilliard, sector::SymmetrySector; kwargs...) where {T<:Real}
     generator, character = _resolve_bim_symmetry(billiard, sector)
@@ -95,16 +138,29 @@ end
 
 _bim_numeric_type(::CombinedFieldIntegralEquationSolver{T}) where {T} = T
 
-################################################################################
-################### PRIVATE HELPERS: BOUNDARY EVALUATION #####################
-################################################################################
-
-# Ungraded periodic Nyström discretization of a smooth (single-curve or
-# smooth-composite) boundary component, sampled at Kress midpoint nodes
-# σ_j = 2π(j-1/2)/N. Used directly by SmoothPeriodicGrading, and as the
-# fallback for GlobalCornerGrading when no true corners are detected.
-# Shares `_dlp_composite_arclength` (dlp.jl) since this is a purely geometric
-# operation independent of the Fredholm kernel.
+# Construct the ungraded periodic boundary discretization used by the Kress
+# quadrature scheme. The global periodic parameter is sampled at midpoint nodes
+#
+#                           σ_j = 2π(j-1/2)/N,
+#
+# with constant parameter weight h=2π/N. Since no grading map is applied,
+# tphys=σ, dtphys/dσ=1, and `ws_der` is identically one. Physical arclength
+# weights are computed from the actual parametrization,
+#
+#                           ds_j = |γ'(σ_j)| h,
+#
+# so no constant-speed parametrization is assumed. First and second parameter
+# derivatives are retained because they enter the geometry cache and the
+# diagonal limits of both Kress-split CFIE kernels. Physical arc length along
+# a composite component is obtained with `_dlp_composite_arclength`, which is
+# purely geometric and is shared with the DLP implementation.
+#
+# The node count is rounded to a symmetry-compatible multiple whenever symmetry
+# reduction is requested. This discretization is selected directly by
+# SmoothPeriodicGrading and is also the fallback for GlobalCornerGrading when
+# no true geometric corners are detected. The absence of grading does not
+# disable Kress quadrature: the resulting points are used by the same Kress
+# quadrature scheme during CFIE Fredholm matrix assembly.
 function _cfie_evaluate_points(solver::CombinedFieldIntegralEquationSolver, ::SmoothPeriodicGrading, comp::Vector, k::T) where {T<:Real}
     twopi = 2*T(pi)
     _, _, Ltot = component_lengths(comp)
@@ -134,9 +190,28 @@ function _cfie_evaluate_points(solver::CombinedFieldIntegralEquationSolver, ::Sm
     return BoundaryPoints(xy, tangent_1st, tangent_2nd, ts, tphys, ws, ws_der, s, ds, 1, true, z, z, z, z)
 end
 
-# CornerGrading: single closed curve (comp of length 1) whose own [0,1)
-# parametrization has a known corner at t=0, Kress-graded via a fixed
-# single-corner map (no corner detection needed, unlike GlobalCornerGrading).
+# Construct the single-corner graded boundary discretization used by the Kress
+# quadrature scheme. CornerGrading requires the complete boundary component to
+# be represented by one closed curve whose own parameter u∈[0,1) has its known
+# corner at the periodic endpoint u=0≡1. Unlike GlobalCornerGrading, no
+# geometric corner detection is performed.
+#
+# A uniform midpoint variable σ∈[0,2π) is mapped through the single-corner
+# Kress grading map. Since the curve itself is parametrized by u∈[0,1), the
+# mapped physical parameter is
+#
+#                           u = t(σ)/(2π).
+#
+# If `jac=dt/dσ` and `jac2=d²t/dσ²`, the derivatives of the physical curve
+# with respect to the quadrature variable σ are obtained by the chain rule,
+#
+#                   dγ/dσ = γ_u jac/(2π),
+#       d²γ/dσ² = γ_uu (jac/(2π))² + γ_u jac2/(2π).
+#
+# These transformed derivatives are stored because the Kress kernel splitting
+# and diagonal limits must be expressed in the active quadrature parameter.
+# Physical arclength weights are then ds_j=|dγ/dσ|h with h=2π/N, while `ws`
+# stores the uniform σ-space weights and `jac` stores the grading Jacobian.
 function _cfie_evaluate_points(solver::CombinedFieldIntegralEquationSolver, grading::CornerGrading, comp::Vector, k::T) where {T<:Real}
     length(comp) == 1 || error("CornerGrading requires the boundary to be represented by a single closed curve with its own parametric corner; use GlobalCornerGrading for composite/piecewise-smooth boundaries.")
     crv = comp[1]
@@ -171,9 +246,28 @@ function _cfie_evaluate_points(solver::CombinedFieldIntegralEquationSolver, grad
     return BoundaryPoints(xy, tangent_1st, tangent_2nd, σ, tphys, ws, jac, s, ds, 1, true, z, z, z, z)
 end
 
-# Globally Kress-graded Nyström discretization of a piecewise-smooth boundary
-# component with true corners at the (already detected) global periodic
-# parameter locations `corners`.
+# Construct the globally graded boundary discretization used by the Kress
+# quadrature scheme for a piecewise-smooth component with known true corners.
+# The uniform midpoint variable σ is mapped to the physical global periodic
+#
+#                           t = t(σ)
+#
+# by `multi_kress_graded_nodes_data`. The map fixes the supplied corner
+# locations and makes dt/dσ small near them, clustering quadrature nodes around
+# the geometric singularities while retaining a globally periodic
+# discretization.
+#
+# Geometry is evaluated first with respect to the physical parameter t and
+# transformed to σ using
+#
+#                   dγ/dσ = γ_t dt/dσ,
+#        d²γ/dσ² = γ_tt (dt/dσ)² + γ_t d²t/dσ².
+#
+# The physical arclength weights are consequently ds_j = |dγ/dσ| h,
+# with h=2π/N. `ws` stores the uniform σ-space quadrature weights and `ws_der`
+# stores dt/dσ. The grading changes only the periodic parametrization; both
+# the double- and single-layer contributions are subsequently discretized with
+# the same Kress quadrature scheme as in the smooth case.
 function _cfie_evaluate_points_graded(solver::CombinedFieldIntegralEquationSolver, grading::GlobalCornerGrading, comp::Vector, k::T, corners::Vector{T}) where {T<:Real}
     twopi = 2*T(pi)
     _, _, Ltot = component_lengths(comp)
@@ -204,8 +298,7 @@ function _cfie_evaluate_points_graded(solver::CombinedFieldIntegralEquationSolve
     return BoundaryPoints(xy, tangent_1st, tangent_2nd, σ, tphys, ws, ws_der, s, ds, 1, true, z, z, z, z)
 end
 
-# GlobalCornerGrading: detect true corners and grade globally around them;
-# falls back to the ungraded smooth discretization when none are detected.
+# top-level _evaluate_points function for CFIE, see comments above
 function _cfie_evaluate_points(solver::CombinedFieldIntegralEquationSolver, grading::GlobalCornerGrading, comp::Vector, k::T) where {T<:Real}
     corners = BilliardGeometry._component_corner_locations(T, comp)
     isempty(corners) && return _cfie_evaluate_points(solver, SmoothPeriodicGrading(), comp, k)
@@ -216,11 +309,37 @@ end
 ################## PRIVATE HELPERS: FREDHOLM MATRIX ASSEMBLY ##################
 ################################################################################
 
-# Full (unfolded) Kress-corrected Nyström CFIE Fredholm matrix
-# A(k) = I - (D(k) + ikS(k)). The D(k) piece is identical to the DLP kernel
-# (see `_dlp_fredholm_full!` in dlp.jl); the additional S(k) single-layer
-# term uses the H(0,·)/H(1,·) Hankel pair with its own Kress logarithmic
-# splitting (diagonal self-term includes the Euler-gamma correction).
+# Assemble the full, unfolded CFIE Fredholm matrix
+#
+#                       A(k) = I - (D(k) + ikS(k))
+#
+# using the Kress quadrature scheme for both boundary operators. The
+# double-layer contribution uses the same logarithmic splitting as the DLP
+# implementation. For i≠j,
+#
+#                  D_ij = R_ij L1_ij + ws_j L2_ij,
+#
+# with
+#
+#        L1_ij = -(k/2π) inner_ij J₁(k r_ij)/r_ij,
+#        L2_ij =  (ik/2) inner_ij H₁⁽¹⁾(k r_ij)/r_ij
+#                  - L1_ij logterm_ij.
+#
+# The single-layer contribution is split analogously,
+#
+#                  S_ij = R_ij M1_ij + ws_j M2_ij,
+#
+# where
+#
+#        M1_ij = -(1/2π) J₀(k r_ij) speed_j,
+#        M2_ij =  (i/2) H₀⁽¹⁾(k r_ij) speed_j
+#                  - M1_ij logterm_ij.
+#
+# `BoundaryGeomCache` supplies the pairwise distances, geometric inner
+# products, source speeds, curvature, and logarithmic factors in the active
+# periodic parametrization. On the diagonal, both D and S are replaced by
+# their analytic self-limits; the single-layer limit contains the logarithmic
+# k- and speed-dependent term together with the Euler-Mascheroni contribution.
 function _cfie_fredholm_full!(F::AbstractMatrix{Complex{T}}, pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, k::Union{T,Complex{T}}; multithreaded::Bool=true) where {T<:Real}
     invtwopi = inv(2*T(pi))
     αL1 = -k*invtwopi
@@ -274,9 +393,13 @@ function _cfie_fredholm_full!(F::AbstractMatrix{Complex{T}}, pts::BoundaryPoints
     return F
 end
 
-# Single Kress-corrected D(k)+ikS(k) kernel entry at full-boundary indices
-# (i,j), used by the symmetry-reduced assembly below (mirrors
-# `_dlp_kernel_entry` in dlp.jl but also carries the S(k) term).
+# Evaluate one discrete combined-field kernel entry
+#
+#                         (D + ikS)_ij
+#
+# under the Kress quadrature scheme. This is the entry-level counterpart of
+# `_cfie_fredholm_full!` and is used by the symmetry-reduced assembly, where
+# arbitrary source images must be accumulated individually.
 @inline function _cfie_kernel_entry(pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, k::Union{T,Complex{T}}, i::Int, j::Int) where {T<:Real}
     invtwopi = inv(2*T(pi))
     ik = im*k
@@ -313,9 +436,18 @@ end
     return dval + ik*sval
 end
 
-# Symmetry-reduced Kress-corrected CFIE Fredholm matrix, folding the complete
-# discrete full-boundary kernel over each source symmetry orbit:
-# Fred[a,b] = δ_{ab} - Σ_{j: orbit_of[j]=b} phase[j]*(D+ikS)[fund[a],j].
+# Assemble the symmetry-reduced CFIE Fredholm matrix from the complete physical
+# boundary discretization. The Kress quadrature scheme is defined on the full
+# periodic boundary for both D and S, after which symmetry reduction is
+# performed algebraically by folding source indices belonging to the same
+# symmetry orbit.
+#
+# For fundamental target index fund[a] and source orbit b,
+#
+#       A_ab = δ_ab - Σ_{j: orbit_of[j]=b} phase[j] (D+ikS)_{fund[a],j},
+#
+# where `phase[j]` is the irrep character factor associated with the symmetry
+# image containing source node j. 
 function _cfie_fredholm_reduced!(F::AbstractMatrix{Complex{T}}, pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, orbits::SymmetryOrbitMap{T}, k::Union{T,Complex{T}}; multithreaded::Bool=true) where {T<:Real}
     m = fundamental_size(orbits)
     N = length(orbits)
@@ -342,20 +474,29 @@ function _cfie_fredholm_reduced!(F::AbstractMatrix{Complex{T}}, pts::BoundaryPoi
 end
 
 """
-    evaluate_points(solver::CombinedFieldIntegralEquationSolver, billiard::Bi, k) where {Bi<:AbsBilliard} → pts::BoundaryPoints
+    evaluate_points(solver::CombinedFieldIntegralEquationSolver, billiard::Bi, k) where {Bi<:AbsBilliard}
 
-Samples the boundary of `billiard` according to `solver.grading`, producing the
-boundary discretization needed to assemble the combined-field Fredholm matrix
-in [`construct_matrices`](@ref).
+Construct the boundary discretization used by the CFIE Fredholm operator.
 
-## Description
-When `solver.symmetry === nothing`, only the fundamental domain's own
-physical boundary ([`get_boundary_curves`](@ref)) is discretized — this
-already is the complete physical boundary in that case. When a `symmetry` is
-set, the *complete* physical boundary ([`full_boundary`](@ref)) is
-discretized instead, since [`symmetry_index_orbits`](@ref) folds a full
-periodic boundary sampling onto the fundamental domain by exact index
-permutation and therefore needs every symmetry image present in `pts`.
+All discretizations are intended for the Kress quadrature scheme used for both
+the double- and single-layer kernels during Fredholm matrix assembly.
+[`SmoothPeriodicGrading`](@ref) samples the original periodic boundary
+parametrization, [`CornerGrading`](@ref) applies a single-corner Kress grading
+map to a closed curve with a known parametric corner, and
+[`GlobalCornerGrading`](@ref) applies a global Kress grading map around
+detected geometric corners.
+
+The complete physical boundary is always discretized. When a symmetry sector
+is present, the resulting full-boundary Fredholm operator is subsequently
+folded over symmetry orbits during matrix assembly.
+
+## Arguments
+* `solver::CombinedFieldIntegralEquationSolver`: CFIE solver defining the boundary discretization.
+* `billiard::Bi`: Billiard whose complete physical boundary is discretized.
+* `k`: Wavenumber used to determine the boundary resolution.
+
+## Returns
+* `pts::BoundaryPoints`: Boundary discretization containing the geometry and quadrature data required by the Kress quadrature scheme.
 """
 function evaluate_points(solver::CombinedFieldIntegralEquationSolver, billiard::Bi, k) where {Bi<:AbsBilliard}
     T = _bim_numeric_type(solver)
@@ -364,25 +505,37 @@ function evaluate_points(solver::CombinedFieldIntegralEquationSolver, billiard::
     return _cfie_evaluate_points(solver, solver.grading, comp, T(k))
 end
 
-"""
-    boundary_matrix_size(solver::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints) → N::Int
-
-Returns the dimension of the assembled Fredholm matrix, accounting for any
-symmetry-orbit folding onto a fundamental domain.
-"""
+# Returns the dimension of the assembled Fredholm matrix, accounting for any symmetry-orbit folding onto a fundamental domain.
 function boundary_matrix_size(solver::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints)
     solver.symmetry === nothing && return boundary_matrix_size(pts)
     T = _bim_numeric_type(solver)
-    # Orbit membership/fundamental_size depends only on the symmetry group's
-    # permutation structure, never on the requested irrep character, so the
-    # trivial-representation call here is intentional (Step 16.1 audit).
     return fundamental_size(symmetry_index_orbits(T, pts.xy, solver.symmetry))
 end
 
 """
-    construct_matrices(solver::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints, k; multithreaded::Bool = true) → A::Matrix{Complex}
+    construct_matrices(solver::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints, k; multithreaded::Bool=true)
 
-Assembles the combined-field Fredholm matrix `A(k) = I - (D(k) + i k S(k))`.
+Assemble the CFIE Fredholm matrix `A(k) = I - (D(k) + i k S(k))` using the
+Kress quadrature scheme.
+
+The Helmholtz double- and single-layer kernels are analytically split into
+periodic logarithmic parts and smooth remainders and discretized with the same
+Kress quadrature scheme. The construction applies to smooth, single-corner
+graded, and globally corner-graded boundary parametrizations.
+
+If `solver.symmetry` is present, the complete full-boundary Fredholm operator
+is folded over source symmetry orbits with the prescribed character phases.
+
+## Arguments
+* `solver::CombinedFieldIntegralEquationSolver`: CFIE solver defining the discretization and symmetry sector.
+* `pts::BoundaryPoints`: Complete physical-boundary discretization.
+* `k`: Real or complex wavenumber at which the Fredholm operator is evaluated.
+
+## Keyword Arguments
+* `multithreaded::Bool = true`: Enable multithreaded Fredholm matrix assembly.
+
+## Returns
+* `A::Matrix{Complex{T}}`: Full or symmetry-reduced Fredholm matrix `A(k) = I - (D(k) + i k S(k))`.
 """
 function construct_matrices(solver::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints, k; multithreaded::Bool=true)
     @timeit_debug "construct_matrices" begin
@@ -422,11 +575,33 @@ function construct_matrices(solver::CombinedFieldIntegralEquationSolver, pts::Bo
 end
 
 """
-    solve(solver::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints, k; multithreaded::Bool = true, use_krylov::Bool = true) → t::Real
+    solve(solver::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints, k; multithreaded::Bool=true, use_krylov::Bool=true)
 
-Computes the combined-field tension at wavenumber `k`, defined from the
-smallest singular value / Krylov nullspace residual of `A(k)` (see
-[`construct_matrices`](@ref)).
+Compute the CFIE tension at wavenumber `k`.
+
+The Fredholm matrix
+
+    A(k) = I - (D(k) + i k S(k))
+
+is assembled with [`construct_matrices`](@ref) using the Kress quadrature
+scheme. The tension is defined as its smallest singular value,
+
+    t(k) = σmin(A(k)).
+
+With `use_krylov = true`, the smallest singular value is computed iteratively
+with KrylovKit. Otherwise, all singular values are computed with a dense SVD.
+
+## Arguments
+* `solver::CombinedFieldIntegralEquationSolver`: CFIE solver defining the boundary discretization and symmetry sector.
+* `pts::BoundaryPoints`: Boundary discretization containing the geometry and quadrature data required by the Kress quadrature scheme.
+* `k`: Wavenumber at which the tension is evaluated.
+
+## Keyword Arguments
+* `multithreaded::Bool = true`: Enable multithreaded Fredholm matrix assembly.
+* `use_krylov::Bool = true`: Compute only the smallest singular value iteratively instead of using a full dense SVD.
+
+## Returns
+* `t::Real`: Smallest singular value `σmin(A(k))` of the Kress-discretized CFIE Fredholm operator.
 """
 function solve(solver::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints, k; multithreaded::Bool=true, use_krylov::Bool=true)
     T = _bim_numeric_type(solver)
@@ -441,10 +616,36 @@ function solve(solver::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints,
 end
 
 """
-    solve_vect(solver::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints, k; multithreaded::Bool = true) → (t::Real, x::Vector)
+    solve_vect(solver::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints, k; multithreaded::Bool=true)
 
-Computes the combined-field tension and the associated boundary density
-eigenvector at wavenumber `k`.
+Compute the CFIE tension and corresponding layer density at wavenumber `k`.
+
+The Fredholm matrix
+
+    A(k) = I - (D(k) + i k S(k))
+
+is assembled with [`construct_matrices`](@ref) using the Kress quadrature
+scheme. Its smallest singular triplet is then computed with KrylovKit. The
+returned vector is the right singular vector associated with the smallest
+singular value and represents the discrete combined-field layer density on
+the assembled boundary degrees of freedom.
+
+At a Dirichlet eigenvalue this vector approximates a null vector of the
+Kress-discretized Fredholm operator,
+
+    A(k)x ≈ 0.
+
+## Arguments
+* `solver::CombinedFieldIntegralEquationSolver`: CFIE solver defining the boundary discretization and symmetry sector.
+* `pts::BoundaryPoints`: Boundary discretization containing the geometry and quadrature data required by the Kress quadrature scheme.
+* `k`: Wavenumber at which the layer density is evaluated.
+
+## Keyword Arguments
+* `multithreaded::Bool = true`: Enable multithreaded Fredholm matrix assembly.
+
+## Returns
+* `t::Real`: Smallest singular value `σmin(A(k))` of the Kress-discretized CFIE Fredholm operator.
+* `x::Vector{Complex{T}}`: Right singular vector representing the discrete combined-field layer density associated with `t`.
 """
 function solve_vect(solver::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints, k; multithreaded::Bool=true)
     T = _bim_numeric_type(solver)
@@ -452,9 +653,3 @@ function solve_vect(solver::CombinedFieldIntegralEquationSolver, pts::BoundaryPo
     @blas_1 vals, _, rvecs, _ = KrylovKit.svdsolve(A, 1, :SR)
     return vals[1], Vector{Complex{T}}(rvecs[1])
 end
-
-# `symmetrize_layer_density`/`solve_state`/`_bim_normal_derivative` (the
-# boundary-normal-derivative and BIMEigenstate support shared by every
-# SweepBIMSolver) live in sweepmethods.jl, not here: none of that logic is
-# specific to the combined-field kernel (see sweepmethods.jl's docstrings for
-# why the same weighted-transpose reciprocity applies generically).
