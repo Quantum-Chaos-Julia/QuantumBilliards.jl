@@ -146,9 +146,11 @@ _composite_component_points(cs::CombinedFieldIntegralEquationSolver, group::Vect
 # downstream full-boundary operations such as boundary phase-space representations.
 #
 # The merged tangent determines the outward normal through the common
-# orientation convention n=(t_y,-t_x)/|t|. Hole components have already been
-# reversed before reaching this routine, so the same formula produces the
-# correct physical outward normal on both outer and inner boundaries.
+# orientation convention n=(t_y,-t_x)/|t|. Hole components have already 
+# had their oriented tangent data flipped without
+# changing their node ordering, so the same formula produces the physical
+# outward normal on both outer and inner boundaries while preserving the
+# canonical indexing required by symmetry reduction.
 #
 # The component number of every point is stored privately in `w_dm`, which is
 # otherwise unused by BIM discretizations. This bookkeeping allows later matrix
@@ -421,14 +423,46 @@ function _composite_fredholm_reduced!(A::AbstractMatrix{Complex{T}}, solver::Com
 end
 
 """
+    _flip_component_orientation(pts::BoundaryPoints{T}) where {T<:Real} → pts_flipped::BoundaryPoints{T}
+
+Flips the orientation of one boundary component without changing its node ordering.
+
+## Description
+For multiply connected geometries, the outer boundary and hole boundaries must
+carry opposite orientations. The boundary nodes and their parameter ordering
+are preserved exactly so that symmetry index maps remain unchanged.
+
+The first parametrization derivative changes sign under orientation reversal,
+while the second derivative retains its sign. All scalar parameter, grading,
+arc-length, and quadrature data remain in their original ordering.
+
+The returned [`BoundaryPoints`](@ref) object reconstructs its normal and
+curvature data from the flipped tangent orientation.
+
+## Arguments
+* `pts::BoundaryPoints{T}`: Boundary component whose orientation is flipped.
+
+## Returns
+* `pts_flipped::BoundaryPoints{T}`: New boundary discretization with opposite orientation and unchanged node indexing.
+"""
+function _flip_component_orientation(pts::BoundaryPoints{T}) where {T<:Real}
+    tangent = -pts.tangent
+    tL = -pts.tL; tR = -pts.tR
+    return BoundaryPoints(pts.xy,tangent,pts.tangent_2,pts.ts,pts.tphys,pts.ws,pts.ws_der,pts.s,pts.ds,pts.compid,pts.is_periodic,pts.xL,pts.xR,tL,tR)
+end
+
+"""
     evaluate_points(solver::CompositeBIMSolver, billiard::Bi, k) where {Bi<:AbsBilliard}
 
 Construct the complete composite boundary discretization of `billiard`.
 
 The physical boundary is separated into connected components and each
 component is sampled with its assigned DLP or CFIE component solver. Components
-with orientation `-1` are interpreted as holes and reversed before sampling so
-that their normals point outward from the physical billiard domain.
+with orientation `-1` are interpreted as holes and their orientation is flipped
+after sampling without changing the boundary-node ordering. This preserves the
+canonical indexing required by exact symmetry index maps while giving hole
+boundaries the opposite normal orientation required by the boundary-integral
+formulation.
 
 For multiply connected fundamental domains, the number of component solvers
 must equal the number of connected boundary components. Without symmetry, the
@@ -450,22 +484,20 @@ globally coupled Fredholm operator.
 * `pts::BoundaryPoints`: Merged complete physical-boundary discretization containing all component geometry, quadrature data, and internal component bookkeeping.
 """
 function evaluate_points(solver::CompositeBIMSolver, billiard::Bi, k) where {Bi<:AbsBilliard}
-    T = _bim_numeric_type(solver)
-    kT = T(k)
+    T = _bim_numeric_type(solver); kT = T(k)
     comp = solver.symmetry === nothing ? get_boundary_curves(billiard) : full_boundary(billiard)
     isempty(comp) && error("Boundary cannot be empty.")
-    nc = length(solver.component_solvers)
-    domain = billiard.fundamental_domain
+    nc = length(solver.component_solvers); domain = billiard.fundamental_domain
     if domain isa AbsMultiplyConnectedDomain
         nc == 1 + genus(domain) || throw(ArgumentError("Billiard's fundamental domain has genus $(genus(domain)) (requires $(1+genus(domain)) component solver(s)) but CompositeBIMSolver has $nc component solver(s)"))
     end
     groups = solver.symmetry === nothing && domain isa AbsMultiplyConnectedDomain ? boundary_components(billiard) : _group_boundary_by_domain_id(comp)
     length(groups) == nc || throw(ArgumentError("Billiard boundary has $(length(groups)) connected component(s) (grouped by curve domain_id) but CompositeBIMSolver has $nc component solver(s)"))
-    comp_pts = Vector{BoundaryPoints{T}}(undef, nc)
+    comp_pts = Vector{BoundaryPoints{T}}(undef,nc)
     @inbounds for a in 1:nc
         grp = groups[a]
-        group = _group_is_hole(grp) ? [BilliardGeometry._reverse_curve(c) for c in reverse(grp)] : grp
-        comp_pts[a] = _composite_component_points(solver.component_solvers[a], group, kT)
+        p = _composite_component_points(solver.component_solvers[a],grp,kT)
+        comp_pts[a] = _group_is_hole(grp) ? _flip_component_orientation(p) : p
     end
     return _merge_composite_points(comp_pts)
 end
