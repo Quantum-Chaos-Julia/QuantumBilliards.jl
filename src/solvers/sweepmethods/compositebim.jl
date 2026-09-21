@@ -549,8 +549,7 @@ solvers must equal the number of connected boundary components.
 """
 function evaluate_points(solver::CompositeBIMSolver, billiard::Bi, k) where {Bi<:AbsBilliard}
     T = _bim_numeric_type(solver); kT = T(k)
-    base = get_boundary_curves(billiard)
-    comp = solver.symmetry===nothing ? base : full_boundary(billiard)
+    base = get_boundary_curves(billiard); comp = full_boundary(billiard)
     isempty(comp) && error("Boundary cannot be empty.")
     groups = _group_boundary_by_domain_id(comp); base_groups = _group_boundary_by_domain_id(base)
     nc = length(solver.component_solvers)
@@ -559,7 +558,7 @@ function evaluate_points(solver::CompositeBIMSolver, billiard::Bi, k) where {Bi<
     comp_pts = Vector{BoundaryPoints{T}}(undef,nc)
     @inbounds for a in 1:nc
         grp = groups[a]; id = first(grp).domain_id
-        haskey(base_by_id,id) || throw(ArgumentError("Expanded Composite boundary contains domain_id=$id which is absent from the fundamental boundary"))
+        haskey(base_by_id,id) || throw(ArgumentError("Composite boundary contains domain_id=$id which is absent from the fundamental boundary"))
         p = _composite_component_points(solver.component_solvers[a],grp,kT)
         comp_pts[a] = _group_is_hole(base_by_id[id]) ? _flip_component_orientation(p) : p
     end
@@ -568,7 +567,7 @@ end
 
 # Returns the dimension of the assembled composite Fredholm matrix, accounting for any symmetry-orbit folding onto a fundamental domain.
 function boundary_matrix_size(solver::CompositeBIMSolver, pts::BoundaryPoints)
-    solver.symmetry === nothing && return boundary_matrix_size(pts)
+    solver.symmetry===nothing && return boundary_matrix_size(pts)
     T = _bim_numeric_type(solver)
     return fundamental_size(_composite_symmetry_orbits(T,solver,pts))
 end
