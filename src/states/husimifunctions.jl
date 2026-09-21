@@ -332,6 +332,10 @@ end
 
 Compute the Poincare-Husimi function of a BIM eigenstate.
 
+If the physical boundary normal derivative `state.u` is available, it is used
+directly. Otherwise it is reconstructed at `state.k` with [`solve_state`](@ref)
+using the boundary discretization stored in `state.pts`.
+
 ## Arguments
 * `state::BIMEigenstate`: BIM eigenstate.
 
@@ -346,8 +350,13 @@ Compute the Poincare-Husimi function of a BIM eigenstate.
 * `ps::Vector{T}`: Full signed momentum grid.
 """
 function husimi_function(state::BIMEigenstate{K,T,S,Bi}; c::Real=10.0, w::Real=7.0, full_p::Bool=false) where {K,T<:Real,S<:SweepBIMSolver,Bi}
-    L = T(sum(crv.length for crv in full_boundary(state.billiard)))
-    return husimi_function(T(real(state.k)),state.pts.s,state.pts.ds,state.u,L;c=c,w=w,full_p=full_p)
+    k=T(real(state.k))
+    u=state.u
+    if u===nothing
+        _,_,u,_=solve_state(state.solver,state.pts,k,state.billiard)
+    end
+    L=T(sum(crv.length for crv in full_boundary(state.billiard)))
+    return husimi_function(k,state.pts.s,state.pts.ds,u,L;c=c,w=w,full_p=full_p)
 end
 
 """
