@@ -1,3 +1,48 @@
+################################################################################
+# DECOMPOSITION METHOD (DM)
+#
+# For a basis {ϕₙ(k)} satisfying the Helmholtz equation inside the billiard,
+# let B contain the basis functions evaluated on the boundary and let Bn contain
+# their outward normal derivatives,
+#
+#                         Bᵢₙ = ϕₙ(xᵢ),
+#
+#                       (Bn)ᵢₙ = ∂ₙϕₙ(xᵢ).
+#
+# The method constructs the quadratic-form matrices (only possible for Dirichlet BSs)
+#
+#                         F = Bᵀ W B,
+#
+#                        G = Bnᵀ Wn Bn,
+#
+# where W contains the physical boundary quadrature weights dsᵢ and Wn contains
+# the Rellich type weights
+#
+#                 wᵢ = dsᵢ ((xᵢ-c₀)·nᵢ)/(2k²).
+#
+# Here c₀ is the chosen origin and nᵢ is the outward unit normal. The
+# generalized eigenproblem
+#
+#                          F x = λ G x
+#
+# has the Rayleigh quotient
+#
+#                             xᵀ F x
+#                         λ = -------.
+#                             xᵀ G x
+#
+# The largest generalized eigenvalue therefore gives the minimum inverse
+# quotient
+#
+#                             xᵀ G x       1
+#                    t(k) = min ------- = ----.
+#                            x  xᵀ F x    λmax
+#
+# Near a Dirichlet eigenvalue, a linear combination of basis functions can
+# approach zero on the boundary while retaining a finite normal derivative,
+# producing a sharp minimum of t(k). The spectrum is obtained by sweeping or
+# minimizing this tension as a function of k.
+################################################################################
 
 """
     DecompositionMethodSolver{T} <: SweepBasisSolver
