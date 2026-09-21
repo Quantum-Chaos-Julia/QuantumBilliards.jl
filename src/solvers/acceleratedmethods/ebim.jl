@@ -1,49 +1,97 @@
+################################################################################
+# EXPANDED BOUNDARY INTEGRAL METHOD (EBIM)
+#
+# This file implements a local second-order eigensolver for boundary-integral
+# nonlinear eigenvalue problems
+#
+#                              A(k)v = 0,
+#
+# where A(k) is the Fredholm matrix produced by a DLP, CFIE, or composite BIM
+# discretization. Around an expansion center k₀, EBIM uses the local Taylor
+# expansion
+#
+#   A(k₀ + ε) = A₀ + ε A₁ + (ε²/2) A₂ + O(ε³),
+#
+# with
+#
+#   A₀ = A(k₀),    A₁ = A'(k₀),    A₂ = A''(k₀).
+#
+# The leading-order eigenvalue displacements from k₀ are obtained from the
+# generalized eigenproblem
+#
+#                         A₀v = λ A₁v,
+#
+# for which
+#
+#                              ε₁ = -λ.
+#
+# Thus each generalized eigenvalue λ gives a first-order approximation
+#
+#                              k ≈ k₀ - λ
+#
+# to an eigenvalue of the original nonlinear problem near k₀.
+#
+# For a corresponding left generalized eigenvector u, the quadratic term in
+# the Taylor expansion gives the second-order correction
+#
+#                 ε₂ = -(ε₁²/2) (uᴴ A₂ v)/(uᴴ A₁ v),
+#
+# and hence
+#
+#                         kEBIM = k₀ + ε₁ + ε₂.
+#
+# EBIM can therefore recover several eigenvalues surrounding a single
+# expansion center. It is a local spectral method: the useful range around k₀
+# is controlled by the accuracy of the truncated Taylor expansion rather than
+# by a contour or an explicitly prescribed search interval.
+#
+# NUMERICAL SOLUTION
+# ------------------
+# The generalized problem is evaluated through
+#
+#                         A₀⁻¹ A₁ v = μv,
+#
+# where μ = 1/λ. Eigenvalues with largest |μ| correspond to the smallest |λ|
+# and therefore to eigenvalues of the nonlinear problem closest to k₀.
+#
+# A₀ is factorized once, and KrylovKit computes the required left and right
+# eigenvectors without explicitly forming A₀⁻¹A₁. The requested number of
+# local levels determines how many of these dominant eigenpairs are retained
+# and corrected to second order.
+################################################################################
+
 """
     ExpandedBIMSolver{T,K} <: AcceleratedBIMSolver
 
-`ExpandedBIMSolver` is a concrete [`AcceleratedBIMSolver`](@ref) implementing
-the expanded boundary integral method (EBIM): a single locally-corrected root
-of the nonlinear eigenproblem `A(k)v = 0` obtained from a second-order local
-Taylor expansion of `A(k)`.
+Local second-order eigensolver for boundary-integral nonlinear eigenvalue
+problems.
 
-## Description
-`ExpandedBIMSolver` wraps an inner `kernel::SweepBIMSolver` (a
-[`DoubleLayerPotentialSolver`](@ref), [`CombinedFieldIntegralEquationSolver`](@ref)
-or [`CompositeBIMSolver`](@ref)) supplying the Fredholm operator and its first
-two `k`-derivatives,
+`ExpandedBIMSolver` wraps a [`SweepBIMSolver`](@ref) and computes eigenvalues
+near an expansion center `k₀` from the Fredholm matrix `A(k₀)` and its first
+two wavenumber derivatives. A single expansion can produce multiple nearby
+eigenvalues.
 
-    A(k+ε) = A(k) + ε A'(k) + (1/2) ε² A''(k) + O(ε³).
+The first-order eigenvalue displacements are obtained from a generalized
+eigenproblem involving `A(k₀)` and `A'(k₀)`, after which `A''(k₀)` supplies a
+second-order correction. The matrix derivatives are assembled analytically
+from the underlying DLP, CFIE, or composite BIM kernel.
 
-The generalized eigenproblem `A(k)v = λ A'(k)v` gives the first-order root
-correction `ε₁ = -λ`; with the corresponding left generalized eigenvector `u`,
-the second-order correction is `ε₂ = -(1/2) ε₁² [u'A''(k)v]/[u'A'(k)v]`, giving
-the corrected wavenumber `k_corr = k + ε₁ + ε₂` (see [`construct_matrices`](@ref),
-[`solve`](@ref)). Unlike [`BeynSolver`](@ref), EBIM produces a single locally
-refined root per call rather than every root in a window.
+Unlike the contour-based [`BeynSolver`](@ref), EBIM is a local spectral method:
+it finds eigenvalues around an expansion center rather than all eigenvalues
+enclosed by a contour.
 
 ## Attributes
-* `kernel`: The wrapped [`SweepBIMSolver`](@ref) supplying `A(k)`, `A'(k)`, `A''(k)`.
-* `use_chebyshev`: Whether Chebyshev-accelerated kernel evaluation is used.
-* `cheb_config`: [`ChebyshevConfig`](@ref) bundling the Chebyshev panel/degree/auto-tuning parameters.
+* `kernel::K`: Wrapped [`SweepBIMSolver`](@ref) defining the boundary-integral operator.
+* `use_chebyshev::Bool`: Whether supported special-function evaluations use Chebyshev acceleration.
+* `cheb_config::ChebyshevConfig{T}`: Configuration of the Chebyshev interpolation and tuning procedure.
+* `tol::T`: Convergence tolerance used by the Krylov eigensolver.
+* `maxiter::Int`: Maximum number of Krylov iterations.
+* `krylovdim::Int`: Minimum Krylov subspace dimension used for the local generalized eigensolve.
 
 ## API
-The following functions can be evaluated for this type:
-- [`evaluate_points`](@ref)
-- [`construct_matrices`](@ref)
-- [`solve`](@ref)
-- [`solve_wavenumber`](@ref)
-- [`solve_spectrum`](@ref)
-- [`compute_spectrum`](@ref)
-
-!!! note "Chebyshev acceleration"
-    When `use_chebyshev=true`, `construct_matrices`/`solve` tune (or, with
-    `cheb_config.param_strategy===:manual`, directly use) `H₀^(1)`/`H₁^(1)`/`J₀`/`J₁`
-    Chebyshev plans for the requested wavenumber (see `solvers/chebyshev/` in
-    this package). Only [`DoubleLayerPotentialSolver`](@ref)/
-    [`CombinedFieldIntegralEquationSolver`](@ref) kernels with `T===Float64`
-    are currently supported; a [`CompositeBIMSolver`](@ref) kernel or a
-    non-`Float64` numeric type raises an error (construct with
-    `use_chebyshev=false` instead).
+The principal operations are [`evaluate_points`](@ref),
+[`construct_matrices`](@ref), [`solve`](@ref), [`solve_wavenumber`](@ref),
+[`solve_spectrum`](@ref), and [`compute_spectrum`](@ref).
 """
 struct ExpandedBIMSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
     kernel::K
@@ -55,24 +103,32 @@ struct ExpandedBIMSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
 end
 
 """
-    ExpandedBIMSolver(kernel::K; use_chebyshev::Bool = true, n_panels_h::Int = 15000, M_h::Int = 5, n_panels_j::Int = 10000, M_j::Int = 5, cheb_config::Union{Nothing,ChebyshevConfig} = nothing) where {K<:SweepBIMSolver} → solver::ExpandedBIMSolver
+    ExpandedBIMSolver(kernel::K; use_chebyshev::Bool=true, n_panels_h::Int=15000, M_h::Int=5, n_panels_j::Int=10000, M_j::Int=5, cheb_config::Union{Nothing,ChebyshevConfig}=nothing, tol::Real=1e-12, maxiter::Int=5000, krylovdim::Int=40) where {K<:SweepBIMSolver}
 
-Constructs an [`ExpandedBIMSolver`](@ref) wrapping the boundary-integral
-`kernel`.
+Construct an [`ExpandedBIMSolver`](@ref) for the supplied boundary-integral
+kernel.
+
+When `cheb_config` is not supplied, a [`ChebyshevConfig`](@ref) is constructed
+from the specified Hankel and Bessel-J panel counts and polynomial degrees.
+The Krylov parameters control the iterative eigensolve used to obtain the
+local EBIM corrections.
 
 ## Arguments
-* `kernel`: The [`SweepBIMSolver`](@ref) supplying the Fredholm operator `A(k)` and its `k`-derivatives.
+* `kernel::K`: [`SweepBIMSolver`](@ref) defining the Fredholm operator to expand.
 
-## Keyword arguments
-* `use_chebyshev::Bool = true`: Whether to use Chebyshev-accelerated kernel evaluation.
-* `n_panels_h::Int = 15000`: Hankel-function Chebyshev panel count (ignored if `cheb_config` is given).
-* `M_h::Int = 5`: Hankel-function Chebyshev polynomial degree (ignored if `cheb_config` is given).
-* `n_panels_j::Int = 10000`: Bessel-J-function Chebyshev panel count (ignored if `cheb_config` is given).
-* `M_j::Int = 5`: Bessel-J-function Chebyshev polynomial degree (ignored if `cheb_config` is given).
-* `cheb_config::Union{Nothing,ChebyshevConfig} = nothing`: A pre-built [`ChebyshevConfig`](@ref); when `nothing`, one is constructed from `n_panels_h`/`M_h`/`n_panels_j`/`M_j` with every other `ChebyshevConfig` field left at its default.
+## Keyword Arguments
+* `use_chebyshev::Bool = true`: Use Chebyshev-accelerated special-function evaluation when supported.
+* `n_panels_h::Int = 15000`: Initial Hankel-function Chebyshev panel count, ignored when `cheb_config` is supplied.
+* `M_h::Int = 5`: Hankel-function Chebyshev polynomial degree, ignored when `cheb_config` is supplied.
+* `n_panels_j::Int = 10000`: Initial Bessel-J-function Chebyshev panel count, ignored when `cheb_config` is supplied.
+* `M_j::Int = 5`: Bessel-J-function Chebyshev polynomial degree, ignored when `cheb_config` is supplied.
+* `cheb_config::Union{Nothing,ChebyshevConfig} = nothing`: Optional preconstructed Chebyshev configuration.
+* `tol::Real = 1e-12`: Convergence tolerance passed to the Krylov eigensolver.
+* `maxiter::Int = 5000`: Maximum number of Krylov iterations.
+* `krylovdim::Int = 40`: Minimum Krylov subspace dimension used by the eigensolver.
 
 ## Returns
-* `solver`: An [`ExpandedBIMSolver`](@ref) instance.
+* `solver::ExpandedBIMSolver`: Configured EBIM solver.
 """
 function ExpandedBIMSolver(kernel::K; use_chebyshev::Bool = true, n_panels_h::Int = 15000, M_h::Int = 5, n_panels_j::Int = 10000, M_j::Int = 5, cheb_config::Union{Nothing,ChebyshevConfig} = nothing, tol::Real = 1e-12, maxiter::Int = 5000, krylovdim::Int = 40) where {K<:SweepBIMSolver}
     T = _bim_numeric_type(kernel)
@@ -86,18 +142,16 @@ _bim_numeric_type(::ExpandedBIMSolver{T}) where {T} = T
 ###################### DERIVATIVE-OF-HANKEL-KERNEL HELPERS ###################
 ################################################################################
 
-# Wavenumber-derivatives of a "linear-in-k prefactor" order-1 kernel term
-# value(k) = α(k)*invr*Z1(kr), with α(k) = c*k linear in k (as every DLP/CFIE
-# double-layer prefactor αL1=-k/(2π), αL2=ik/2 is) and Z the Bessel-J or
-# Hankel-H1 family (Zν satisfies Z1'(z)=Z0(z)-Z1(z)/z). Using α(k)=c*k and
-# dα/dk=α/k, the chain rule collapses to
+# Evaluate a kernel term proportional to k*Z₁(kr)/r together with its first
+# two wavenumber derivatives. `α` contains the complete linear-in-k prefactor,
+# while `z0` and `z1` are the already evaluated Z₀(kr) and Z₁(kr). Using
+# Z₁'(z)=Z₀(z)-Z₁(z)/z gives
 #
-#   dvalue/dk  = α*Z0(kr),
-#   d²value/dk² = (α/k)*Z0(kr) - α*r*Z1(kr),
+#   value = α*r⁻¹*Z₁(kr),
+#   ∂ₖvalue = α*Z₀(kr),
+#   ∂ₖ²value = (α/k)*Z₀(kr)-α*r*Z₁(kr).
 #
-# with no leftover invr/r factors (they cancel exactly against the r
-# introduced by d/dk[Z1(kr)]=r*Z1'(kr)). `z0`/`z1` are the already-evaluated
-# `Z0(kr)`/`Z1(kr)`.
+# The radial factors introduced by differentiation cancel the explicit r⁻¹.
 @inline function _ebim_lin1_deriv(α, r::T, invr::T, z0, z1, k) where {T<:Real}
     val = α*invr*z1
     dval = α*z0
@@ -105,12 +159,13 @@ _bim_numeric_type(::ExpandedBIMSolver{T}) where {T} = T
     return val, dval, ddval
 end
 
-# Wavenumber-derivatives of a "k-independent prefactor" order-0 kernel term
-# value(k) = β*Z0(kr), with β constant in k (as the CFIE single-layer
-# prefactors αM1=-1/(2π), αM2=i/2 are) and Z0'(z)=-Z1(z), Z1'(z)=Z0(z)-Z1(z)/z:
+# Evaluate a kernel term proportional to Z₀(kr) with a k-independent
+# prefactor together with its first two wavenumber derivatives. Using
+# Z₀'(z)=-Z₁(z) and Z₁'(z)=Z₀(z)-Z₁(z)/z gives
 #
-#   dvalue/dk   = -β*r*Z1(kr),
-#   d²value/dk² = -β*r²*Z0(kr)+(β*r/k)*Z1(kr).
+#   value = β*Z₀(kr),
+#   ∂ₖvalue = -β*r*Z₁(kr),
+#   ∂ₖ²value = -β*r²*Z₀(kr)+(β*r/k)*Z₁(kr).
 @inline function _ebim_const0_deriv(β, r::T, k, z0, z1) where {T<:Real}
     val = β*z0
     dval = -β*r*z1
@@ -122,8 +177,11 @@ end
 ######################## DLP KERNEL WITH DERIVATIVES ##########################
 ################################################################################
 
-# `D(k)` kernel entry (as `_dlp_kernel_entry` in dlp.jl) plus its first two
-# `k`-derivatives, at full-boundary indices `(i,j)`.
+# Evaluate one Kress DLP kernel entry and its first two wavenumber
+# derivatives. The returned values correspond to the discretized double-layer
+# kernel D(k), not the complete Fredholm operator A(k)=I-D(k). The diagonal
+# geometric self-term is independent of k and therefore has zero first and
+# second derivatives.
 @inline function _dlp_kernel_entry_with_derivatives(pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, k::Union{T,Complex{T}}, i::Int, j::Int) where {T<:Real}
     if i==j
         return Complex{T}(pts.ws[i]*G.kappa[i], zero(T)), zero(Complex{T}), zero(Complex{T})
@@ -154,11 +212,11 @@ end
 ######################## CFIE KERNEL WITH DERIVATIVES #########################
 ################################################################################
 
-# `(D(k)+ikS(k))` kernel entry (as `_cfie_kernel_entry` in cfie.jl) plus its
-# first two `k`-derivatives, at full-boundary indices `(i,j)`. The diagonal
-# self-term's `S(k)` piece carries a `log(k²/4·speed²)` singular-kernel
-# correction whose `k`-derivatives are `d/dk[log(k²/4·s²)]=2/k`; every
-# off-diagonal `D`/`S` piece reuses `_ebim_lin1_deriv`/`_ebim_const0_deriv`.
+# Evaluate one Kress CFIE kernel entry D(k)+ikS(k) and its first two
+# wavenumber derivatives. Both the explicit ik factor and the k-dependence of
+# the single- and double-layer kernels are differentiated analytically. On the
+# diagonal, the derivatives of the logarithmic Kress self-term are included
+# explicitly.
 @inline function _cfie_kernel_entry_with_derivatives(pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, k::Union{T,Complex{T}}, i::Int, j::Int) where {T<:Real}
     invtwopi = inv(2*T(pi))
     ik = im*k
@@ -219,12 +277,12 @@ end
 ####################### COMPOSITE KERNEL WITH DERIVATIVES #####################
 ################################################################################
 
+# For a clean interface, we define a generic function that dispatches to the appropriate kernel entry with derivatives based on the solver type.
 @inline _composite_component_kernel_entry_with_derivatives(::DoubleLayerPotentialSolver, pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, k::Union{T,Complex{T}}, i::Int, j::Int) where {T<:Real} = _dlp_kernel_entry_with_derivatives(pts, Rmat, G, k, i, j)
 @inline _composite_component_kernel_entry_with_derivatives(::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, k::Union{T,Complex{T}}, i::Int, j::Int) where {T<:Real} = _cfie_kernel_entry_with_derivatives(pts, Rmat, G, k, i, j)
 
-# Smooth cross-component double-layer kernel entry (as
-# `_composite_cross_kernel_entry` in compositebim.jl) plus its first two
-# `k`-derivatives, for a `DoubleLayerPotentialSolver` source component.
+# Evaluate a smooth DLP interaction between two distinct boundary components of a multiply connected domain, together with its first two wavenumber
+# derivatives. The target `(xi,yi)` lies on one component and `pb.xy[j]` on another, so the kernel is nonsingular and requires no Kress quadrature scheme.
 @inline function _composite_cross_kernel_entry_with_derivatives(::DoubleLayerPotentialSolver, pb::BoundaryPoints{T}, xi::T, yi::T, k::Union{T,Complex{T}}, j::Int) where {T<:Real}
     xj, yj = pb.xy[j]
     dx = xi-xj
@@ -240,8 +298,8 @@ end
     return pb.ws[j]*a, pb.ws[j]*da, pb.ws[j]*dda
 end
 
-# Same as above, combined-field cross-component kernel entry plus derivatives
-# for a `CombinedFieldIntegralEquationSolver` source component.
+# Evaluate a smooth CFIE interaction between two distinct boundary components of a multiply connected domain, together with its first two wavenumber
+# derivatives. The target `(xi,yi)` lies on one component and `pb.xy[j]` on another, so the kernel is nonsingular and requires no Kress quadrature scheme.
 @inline function _composite_cross_kernel_entry_with_derivatives(::CombinedFieldIntegralEquationSolver, pb::BoundaryPoints{T}, xi::T, yi::T, k::Union{T,Complex{T}}, j::Int) where {T<:Real}
     xj, yj = pb.xy[j]
     dx = xi-xj
@@ -270,9 +328,8 @@ end
 ######################### FREDHOLM ASSEMBLY WITH DERIVATIVES ##################
 ################################################################################
 
-# Full (unfolded) `A(k)=I-D(k)`/`A(k)=I-(D(k)+ikS(k))` Fredholm matrix and its
-# first two `k`-derivatives, dispatched through `entry_fn` (either
-# `_dlp_kernel_entry_with_derivatives` or `_cfie_kernel_entry_with_derivatives`).
+# Assemble the full-boundary Fredholm matrix A(k)=I-K(k) and its first two wavenumber derivatives in place. `entry_fn` evaluates either the DLP kernel
+# D(k) or the CFIE kernel D(k)+ikS(k), together with its first two derivatives.
 function _ebim_fredholm_full_with_derivatives!(entry_fn, A::AbstractMatrix{Complex{T}}, dA::AbstractMatrix{Complex{T}}, ddA::AbstractMatrix{Complex{T}}, pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, k::Union{T,Complex{T}}; multithreaded::Bool=true) where {T<:Real}
     N = length(pts)
     @use_threads multithreading=multithreaded for j in 1:N
@@ -287,10 +344,8 @@ function _ebim_fredholm_full_with_derivatives!(entry_fn, A::AbstractMatrix{Compl
     return A, dA, ddA
 end
 
-# Symmetry-reduced `A(k)` Fredholm matrix and its first two `k`-derivatives,
-# folding the complete discrete full-boundary kernel over each source
-# symmetry orbit (mirrors `_dlp_fredholm_reduced!`/`_cfie_fredholm_reduced!`'s
-# image-list folding), dispatched through `entry_fn`.
+# Assemble the symmetry-reduced Fredholm matrix A(k) and its first two wavenumber derivatives in place. The full-boundary kernel contributions are
+# folded over each source symmetry orbit using the corresponding character phases, exactly as in the ordinary symmetry-reduced DLP and CFIE assembly.
 function _ebim_fredholm_reduced_with_derivatives!(entry_fn, A::AbstractMatrix{Complex{T}}, dA::AbstractMatrix{Complex{T}}, ddA::AbstractMatrix{Complex{T}}, pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, orbits::SymmetryOrbitMap{T}, k::Union{T,Complex{T}}; multithreaded::Bool=true) where {T<:Real}
     m = fundamental_size(orbits)
     N = length(orbits)
@@ -322,11 +377,8 @@ function _ebim_fredholm_reduced_with_derivatives!(entry_fn, A::AbstractMatrix{Co
     return A, dA, ddA
 end
 
-# Full (unfolded) composite `A(k)` Fredholm matrix and its first two
-# `k`-derivatives (mirrors `_composite_fredholm_full!` in compositebim.jl):
-# same-component diagonal blocks reuse the Kress-corrected DLP/CFIE
-# derivative kernels, cross-component blocks use the smooth derivative
-# kernels above.
+# Assemble the full Fredholm matrix and its first two wavenumber derivatives for a multiply connected domain. Same-component blocks use the DLP or CFIE
+# kernel and Kress quadrature scheme of their component solver, while cross-component blocks are smooth and use direct quadrature.
 function _composite_fredholm_full_with_derivatives!(A::AbstractMatrix{Complex{T}}, dA::AbstractMatrix{Complex{T}}, ddA::AbstractMatrix{Complex{T}}, solver::CompositeBIMSolver, comp_pts::Vector{BoundaryPoints{T}}, Gs::Vector{BoundaryGeomCache{T}}, Rmats::Vector{Matrix{T}}, offs::Vector{Int}, k::Union{T,Complex{T}}; multithreaded::Bool=true) where {T<:Real}
     nc = length(comp_pts)
     @inbounds for a in 1:nc
@@ -374,8 +426,8 @@ function _composite_fredholm_full_with_derivatives!(A::AbstractMatrix{Complex{T}
     return A, dA, ddA
 end
 
-# Symmetry-reduced composite `A(k)` Fredholm matrix and its first two
-# `k`-derivatives (mirrors `_composite_fredholm_reduced!`).
+# Assemble the symmetry-reduced Fredholm matrix and its first two wavenumber derivatives for a multiply connected domain. Same-component and smooth
+# cross-component interactions are evaluated with their respective kernels and folded over the source symmetry orbits using the prescribed character phases.
 function _composite_fredholm_reduced_with_derivatives!(A::AbstractMatrix{Complex{T}}, dA::AbstractMatrix{Complex{T}}, ddA::AbstractMatrix{Complex{T}}, solver::CompositeBIMSolver, comp_pts::Vector{BoundaryPoints{T}}, Gs::Vector{BoundaryGeomCache{T}}, Rmats::Vector{Matrix{T}}, offs::Vector{Int}, g2c::Vector{Int}, g2l::Vector{Int}, orbits::SymmetryOrbitMap{T}, k::Union{T,Complex{T}}; multithreaded::Bool=true) where {T<:Real}
     m = fundamental_size(orbits)
     N = length(orbits)
@@ -506,15 +558,8 @@ end
 ############################## PUBLIC API ######################################
 ################################################################################
 
-# Builds (A,dA,ddA) at one complex wavenumber `k` using a Chebyshev-accelerated
-# H₀^(1)/H₁^(1)/J₀/J₁ evaluation instead of direct Bessels.jl/SpecialFunctions.jl
-# calls, dispatched by the wrapped kernel type. Both DLP-with-derivatives and
-# CFIE-with-derivatives kernel entries need all four special-function
-# families (see `_dlp_kernel_entry_with_derivatives`/`_cfie_kernel_entry_with_derivatives`
-# above), so both reuse `tune_cfie_cheb_plans` (solvers/chebyshev/optimalpanelization.jl)
-# rather than needing a separate DLP-only tuner. Reuses the *existing*
-# `_ebim_fredholm_full_with_derivatives!`/`_ebim_fredholm_reduced_with_derivatives!`
-# assembly loops via a closure over the tuned plans, instead of duplicating them.
+# Assemble A(k), A'(k), and A''(k) for a DLP discretization using Chebyshev-interpolated H₀⁽¹⁾, H₁⁽¹⁾, J₀, and J₁. The Fredholm discretization
+# and analytic wavenumber derivatives are identical to the direct EBIM path; only radial special-function evaluation is replaced by Chebyshev interpolation.
 function _ebim_construct_matrices_cheb(cs::DoubleLayerPotentialSolver, pts::BoundaryPoints{T}, k, cfg::ChebyshevConfig; multithreaded::Bool=true) where {T<:Real}
     T===Float64 || error("Chebyshev-accelerated EBIM evaluation currently requires a Float64 kernel; received numeric type $T. Construct the ExpandedBIMSolver with use_chebyshev=false.")
     kc = ComplexF64(_bim_widen_k(T, k))
@@ -543,6 +588,8 @@ function _ebim_construct_matrices_cheb(cs::DoubleLayerPotentialSolver, pts::Boun
     return A, dA, ddA
 end
 
+# Assemble A(k), A'(k), and A''(k) for a CFIE discretization using Chebyshev-interpolated H₀⁽¹⁾, H₁⁽¹⁾, J₀, and J₁. The Fredholm discretization
+# and analytic wavenumber derivatives are identical to the direct EBIM path; only radial special-function evaluation is replaced by Chebyshev interpolation.
 function _ebim_construct_matrices_cheb(cs::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints{T}, k, cfg::ChebyshevConfig; multithreaded::Bool=true) where {T<:Real}
     T===Float64 || error("Chebyshev-accelerated EBIM evaluation currently requires a Float64 kernel; received numeric type $T. Construct the ExpandedBIMSolver with use_chebyshev=false.")
     kc = ComplexF64(_bim_widen_k(T, k))
@@ -573,11 +620,8 @@ end
 
 _ebim_construct_matrices_cheb(cs::CompositeBIMSolver, pts::BoundaryPoints, k, cfg::ChebyshevConfig; multithreaded::Bool=true) = error("Chebyshev-accelerated EBIM evaluation is not yet implemented for CompositeBIMSolver kernels. Construct the ExpandedBIMSolver with use_chebyshev=false.")
 
-# Tunes a `ChebyshevConfig` for one representative wavenumber `k` (the same
-# 4-plan H₀/H₁/J₀/J₁ tuning `_ebim_construct_matrices_cheb` needs regardless of
-# DLP/CFIE kernel type), returning it with `param_strategy=:manual` so that a
-# caller reusing it as `cheb_override` (see `compute_spectrum(::ExpandedBIMSolver,...)`
-# in spectra/spectralutils.jl) skips re-tuning on every subsequent call.
+# Tune the H₀⁽¹⁾, H₁⁽¹⁾, J₀, and J₁ Chebyshev approximations over the radial interval required by the boundary geometry at expansion center `k`. The
+# returned configuration uses `param_strategy=:manual` so it can be reused across subsequent EBIM evaluations without repeating the tuning procedure.
 function _tune_ebim_cheb_config(solver::ExpandedBIMSolver, pts::BoundaryPoints{T}, k) where {T<:Real}
     kc = ComplexF64(_bim_widen_k(T, k))
     graded = _is_nontrivial_dlp_grading(pts)
@@ -588,25 +632,37 @@ function _tune_ebim_cheb_config(solver::ExpandedBIMSolver, pts::BoundaryPoints{T
 end
 
 """
-    construct_matrices(solver::ExpandedBIMSolver, pts::BoundaryPoints, k; multithreaded::Bool = true, cheb_override::Union{Nothing,ChebyshevConfig} = nothing) → (A::Matrix, dA::Matrix, ddA::Matrix)
+    construct_matrices(solver::ExpandedBIMSolver, pts::BoundaryPoints, k; multithreaded::Bool=true, cheb_override::Union{Nothing,ChebyshevConfig}=nothing)
 
-Assembles the Fredholm matrix `A(k)` and its first two `k`-derivatives
-`A'(k)`, `A''(k)`.
+Assemble the Fredholm matrix and its first two wavenumber derivatives at `k`.
 
-When `solver.use_chebyshev`, a Chebyshev-accelerated evaluation of
-`solver.kernel`'s Kress-corrected Fredholm kernel and its Hankel/Bessel-function
-`k`-derivatives is used instead of direct evaluation (see
-[`_dlp_kernel_entry_with_derivatives_cheb`](@ref),
-[`_cfie_kernel_entry_with_derivatives_cheb`](@ref) in `solvers/chebyshev/`);
-the Chebyshev panel/degree parameters are taken from `cheb_override` when
-given (a pre-tuned [`ChebyshevConfig`](@ref), used by
-[`compute_spectrum`](@ref) to avoid re-tuning on every call), otherwise from
-`solver.cheb_config` (auto-tuned fresh for this call unless
-`solver.cheb_config.param_strategy===:manual`).
+The returned matrices are
 
-Otherwise (`solver.use_chebyshev=false`), direct (non-Chebyshev) evaluation is
-used (see [`_dlp_kernel_entry_with_derivatives`](@ref),
-[`_cfie_kernel_entry_with_derivatives`](@ref)).
+    A   = A(k),
+    dA  = A'(k),
+    ddA = A''(k),
+
+and define the second-order local expansion used by EBIM,
+
+    A(k + ε) = A + ε*dA + (ε²/2)*ddA + O(ε³).
+
+If `solver.use_chebyshev` is `true`, supported kernels evaluate their radial
+special functions through Chebyshev interpolation. `cheb_override` may be used
+to supply a pre-tuned configuration for the current evaluation.
+
+## Arguments
+* `solver::ExpandedBIMSolver`: EBIM solver defining the underlying BIM kernel.
+* `pts::BoundaryPoints`: Discretized physical boundary used to assemble the matrices.
+* `k`: Real or complex expansion wavenumber.
+
+## Keyword Arguments
+* `multithreaded::Bool = true`: Enable multithreaded matrix assembly.
+* `cheb_override::Union{Nothing,ChebyshevConfig} = nothing`: Optional Chebyshev configuration overriding `solver.cheb_config` for this call.
+
+## Returns
+* `A::Matrix`: Fredholm matrix `A(k)`.
+* `dA::Matrix`: First wavenumber derivative `A'(k)`.
+* `ddA::Matrix`: Second wavenumber derivative `A''(k)`.
 """
 function construct_matrices(solver::ExpandedBIMSolver, pts::BoundaryPoints, k; multithreaded::Bool=true, cheb_override::Union{Nothing,ChebyshevConfig}=nothing)
     solver.use_chebyshev || return _ebim_construct_matrices(solver.kernel, pts, k; multithreaded)
@@ -614,6 +670,40 @@ function construct_matrices(solver::ExpandedBIMSolver, pts::BoundaryPoints, k; m
     return _ebim_construct_matrices_cheb(solver.kernel, pts, k, cfg; multithreaded)
 end
 
+"""
+    solve(solver::ExpandedBIMSolver, pts::BoundaryPoints, k, nlevels::Int; multithreaded::Bool=true, cheb_override::Union{Nothing,ChebyshevConfig}=nothing)
+
+Compute second-order EBIM eigenvalue estimates around the expansion center `k`.
+
+The method assembles `A(k)`, `A'(k)`, and `A''(k)`, factorizes `A(k)`, and
+computes the dominant eigenpairs of `A(k)⁻¹A'(k)`. These correspond to the
+smallest first-order eigenvalue displacements from `k`. Each retained
+eigenvalue is then corrected to second order using the associated left and
+right eigenvectors.
+
+`nlevels` specifies the minimum number of converged local eigenpairs required.
+Several additional eigenpairs are requested internally to provide a small
+convergence margin.
+
+The returned `ts` contain the magnitudes of the total EBIM corrections and
+therefore measure the displacement of each estimated eigenvalue from the
+expansion center. They are not Fredholm residuals or eigenvalue-error
+estimates.
+
+## Arguments
+* `solver::ExpandedBIMSolver`: EBIM solver.
+* `pts::BoundaryPoints`: Boundary discretization at the expansion center.
+* `k`: Expansion wavenumber.
+* `nlevels::Int`: Number of local eigenvalue estimates to compute.
+
+## Keyword Arguments
+* `multithreaded::Bool = true`: Enable multithreaded matrix assembly.
+* `cheb_override::Union{Nothing,ChebyshevConfig} = nothing`: Optional pre-tuned Chebyshev configuration for this evaluation.
+
+## Returns
+* `ks::Vector{Complex{T}}`: Second-order EBIM eigenvalue estimates around `k`.
+* `ts::Vector{T}`: Magnitudes `|ε₁ + ε₂|` of the corresponding displacements from `k`.
+"""
 function solve(solver::ExpandedBIMSolver, pts::BoundaryPoints, k, nlevels::Int; multithreaded::Bool = true, cheb_override::Union{Nothing,ChebyshevConfig} = nothing)
     T = _bim_numeric_type(solver)
     A, dA, ddA = construct_matrices(solver, pts, k; multithreaded, cheb_override)
@@ -647,31 +737,74 @@ function solve(solver::ExpandedBIMSolver, pts::BoundaryPoints, k, nlevels::Int; 
 end
 
 """
-    solve_wavenumber(solver::ExpandedBIMSolver, billiard::Bi, k, dk; multithreaded::Bool = true) where {Bi<:AbsBilliard} → (k0::Real, t0::Real)
+    solve_wavenumber(solver::ExpandedBIMSolver, billiard::Bi, k, dk; multithreaded::Bool=true, nlevels::Int=5) where {Bi<:AbsBilliard}
 
-Computes the second-order locally-corrected root nearest `k` (`dk` is retained
-for API parity with [`solve_wavenumber(::BeynSolver, ...)`](@ref) but is
-unused by the local expansion, which needs no window).
+Compute local second-order EBIM eigenvalue estimates around the expansion
+center `k`.
+
+The boundary discretization is generated at `k` with [`evaluate_points`](@ref),
+after which the local eigenvalues are obtained from the second-order Fredholm
+expansion.
+
+`dk` is retained for interface compatibility with other accelerated BIM
+solvers but does not define an EBIM search window and is not used by the local
+Taylor expansion.
+
+## Arguments
+* `solver::ExpandedBIMSolver`: EBIM solver.
+* `billiard::Bi`: Billiard geometry.
+* `k`: Expansion wavenumber.
+* `dk`: Unused compatibility argument.
+
+## Keyword Arguments
+* `multithreaded::Bool = true`: Enable multithreaded matrix assembly.
+* `nlevels::Int = 5`: Number of local eigenvalue estimates to compute.
+
+## Returns
+* `ks::Vector{Complex{T}}`: Second-order EBIM eigenvalue estimates around `k`.
+* `ts::Vector{T}`: Magnitudes of the corresponding EBIM displacements from `k`.
 """
-function solve_wavenumber(solver::ExpandedBIMSolver, billiard::Bi, k, dk; multithreaded::Bool=true) where {Bi<:AbsBilliard}
+function solve_wavenumber(solver::ExpandedBIMSolver, billiard::Bi, k, dk; multithreaded::Bool=true, nlevels::Int=5) where {Bi<:AbsBilliard}
     pts = evaluate_points(solver, billiard, k)
-    return solve(solver, pts, k; multithreaded)
+    return solve(solver, pts, k, nlevels; multithreaded)
 end
 
 """
-    solve_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k, dk; multithreaded::Bool = true) where {Bi<:AbsBilliard} → (ks::Vector, ts::Vector)
+    solve_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k, dk; multithreaded::Bool=true, nlevels::Int=5) where {Bi<:AbsBilliard}
 
-Computes the second-order locally-corrected roots for every wavenumber in a
-sweep, one call per target `k` (`k` is a vector of trial wavenumbers, e.g. a
-prior sweep's approximate roots; `dk` is unused, see [`solve_wavenumber`](@ref)).
+Compute local second-order EBIM eigenvalue estimates around a collection of
+expansion centers.
+
+A separate local Fredholm expansion is constructed around every entry of `k`,
+and the resulting local eigenvalue estimates are concatenated into a single
+spectrum. Different expansion centers may produce overlapping estimates of the
+same physical eigenvalue; this function does not remove such duplicates.
+
+`dk` is retained for interface compatibility with other accelerated BIM
+solvers and is not used by the local EBIM expansion.
+
+## Arguments
+* `solver::ExpandedBIMSolver`: EBIM solver.
+* `billiard::Bi`: Billiard geometry.
+* `k`: Collection of expansion wavenumbers.
+* `dk`: Unused compatibility argument.
+
+## Keyword Arguments
+* `multithreaded::Bool = true`: Enable multithreaded matrix assembly.
+* `nlevels::Int = 5`: Number of local eigenvalue estimates to compute.
+
+## Returns
+* `ks::Vector{Complex{T}}`: Concatenated second-order EBIM eigenvalue estimates.
+* `ts::Vector{T}`: Magnitudes of the corresponding displacements from their expansion centers.
 """
-function solve_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k, dk; multithreaded::Bool=true) where {Bi<:AbsBilliard}
+function solve_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k, dk; multithreaded::Bool=true, nlevels::Int=5) where {Bi<:AbsBilliard}
     T = _bim_numeric_type(solver)
-    n = length(k)
-    ks = Vector{Complex{T}}(undef, n)
-    ts = Vector{T}(undef, n)
-    @inbounds for i in 1:n
-        ks[i], ts[i] = solve_wavenumber(solver, billiard, k[i], dk; multithreaded)
+    ks = Complex{T}[]
+    ts = T[]
+    for ki in k
+        ksi, tsi = solve_wavenumber(solver, billiard, ki, dk; multithreaded, nlevels)
+        append!(ks, ksi)
+        append!(ts, tsi)
     end
     return ks, ts
 end
