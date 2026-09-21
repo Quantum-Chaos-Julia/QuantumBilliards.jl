@@ -49,7 +49,7 @@ end
 
 function _wavefunction_grid(k::T, billiard::Bi, b::T; inside_only::Bool = true) where {T<:Real,Bi<:AbsBilliard}
     xlim, ylim = boundary_limits(full_boundary(billiard)); dx = T(2pi) / (b * k)
-    nx = max(2, ceil(Int, (xlim[2] - xlim[1]) / dx) + 1); ny = max(2, ceil(Int, (ylim[2] - ylim[1]) / dx) + 1)
+    nx = max(512, ceil(Int, (xlim[2] - xlim[1]) / dx) + 1); ny = max(512, ceil(Int, (ylim[2] - ylim[1]) / dx) + 1)
     xgrid = collect(range(T(xlim[1]), T(xlim[2]), length = nx)); ygrid = collect(range(T(ylim[1]), T(ylim[2]), length = ny))
     pts = vec([SVector{2,T}(x, y) for x in xgrid, y in ygrid])
     if inside_only
