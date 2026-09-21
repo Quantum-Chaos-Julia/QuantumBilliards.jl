@@ -1,41 +1,81 @@
+################################################################################
+# DOUBLE-LAYER POTENTIAL BOUNDARY INTEGRAL METHOD (DLP)
+#
+# This file implements the direct boundary integral method for Dirichlet
+# quantum billiards using the interior Helmholtz double-layer potential.
+#
+# For the two-dimensional Helmholtz equation
+#
+#                         (Δ + k²)ψ = 0
+#
+# in a billiard Ω with Dirichlet boundary condition ψ|∂Ω = 0, represent the
+# interior wavefunction as a double-layer potential
+#
+#                 ψ(x) = ∫∂Ω ∂n(y)Gk(x,y) μ(y) ds(y),
+#
+# where μ is the layer density and
+#
+#                    Gk(x,y) = (i/4) H₀⁽¹⁾(k|x-y|)
+#
+# is the outgoing free-space Helmholtz Green function. Taking the interior
+# boundary limit gives a homogeneous Fredholm equation of the second kind,
+#
+#                           A(k) μ = 0,
+#
+# with the normalization convention used here written as
+#
+#                           A(k) = I - D(k).
+#
+# The billiard eigenvalues are therefore the wavenumbers for which A(k) becomes
+# singular. Numerically, the DLP tension is the smallest singular value
+#
+#                         t(k) = σmin(A(k)),
+#
+# which develops minima approaching zero at the Dirichlet eigenvalues.
+#
+# BOUNDARY DISCRETIZATION
+# All boundary discretizations use the Kress quadrature scheme for the
+# Helmholtz double-layer kernel. Smooth closed boundary components use the
+# original periodic parametrization sampled on a midpoint grid. For
+# piecewise-smooth boundaries, this periodic parametrization is additionally
+# graded around true geometric corners using the Kress grading map. Thus the
+# grading strategy changes the boundary parametrization, while the underlying
+# Kress quadrature scheme is used in both cases.
+################################################################################
+
 """
     DoubleLayerPotentialSolver{T,G,Sy,Ch} <: DLP
 
-`DoubleLayerPotentialSolver` is a concrete [`SweepBIMSolver`](@ref) implementing
-the (optionally Kress-corrected) direct boundary integral method for computing
-quantum billiard spectra from the Helmholtz double-layer Fredholm operator.
+Boundary-integral eigensolver based on the interior Helmholtz double-layer
+potential.
 
-## Description
-The assembled Fredholm operator is
+`DoubleLayerPotentialSolver` discretizes the Fredholm operator
 
     A(k) = I - D(k),
 
-where `D(k)` denotes the Nyström discretization of the interior Helmholtz
-double-layer operator. The tension at a fixed wavenumber `k` is a function of
-the smallest singular value / nullspace residual of `A(k)` (see
-[`construct_matrices`](@ref), [`solve`](@ref)). The boundary discretization
-strategy (uniform periodic vs. Kress-graded around corners) is controlled by
-`grading`, see [`BoundaryGrading`](@ref); an optional discrete `symmetry`
-folds the discretization onto a fundamental domain via a
-[`BilliardGeometry.SymmetryOrbitMap`](@ref).
+where `D(k)` is the interior Helmholtz double-layer boundary operator in the
+normalization used by this implementation. Dirichlet eigenvalues correspond
+to wavenumbers for which `A(k)` becomes singular.
+
+All boundary discretizations use the Kress quadrature scheme for the
+DLP Helmholtz kernel. [`SmoothPeriodicGrading`](@ref)
+applies it on the original periodic boundary parametrization, while
+[`GlobalCornerGrading`](@ref) additionally applies a global Kress grading map
+around geometric corners. An optional discrete symmetry reduces the resulting
+full-boundary Fredholm operator to a selected symmetry sector.
 
 ## Attributes
-* `pts_scaling_factor`: Vector of scaling factors, one per fundamental boundary curve, used to determine the number of boundary sampling points.
-* `min_pts`: Minimum number of boundary sampling points per component.
-* `grading`: [`BoundaryGrading`](@ref) strategy used to discretize the boundary.
-* `symmetry`: Optional `AbsSymmetry` used to fold the discretization onto a fundamental domain.
-* `character`: Tuple of one-dimensional irrep character(s) requested for `symmetry` (trivial representation, `()`, by default), passed as the trailing `character` argument(s) of [`BilliardGeometry.symmetry_index_orbits`](@ref) via [`_fold_boundary`](@ref).
-* `eps`: Relative tolerance used to determine the tension from the smallest singular value / nullspace residual.
+* `pts_scaling_factor::Vector{T}`: Boundary-point scaling factors used to determine the discretization size.
+* `min_pts::Int64`: Minimum number of boundary points.
+* `grading::G`: [`BoundaryGrading`](@ref) strategy controlling the periodic boundary parametrization used by the Kress quadrature scheme.
+* `symmetry::Sy`: Optional discrete symmetry used to reduce the Fredholm operator.
+* `character::Ch`: Character tuple selecting the representation of `symmetry`.
+* `eps::T`: Relative numerical tolerance associated with the solver.
 
 ## API
-The following functions can be evaluated for this type:
-- [`evaluate_points`](@ref)
-- [`boundary_matrix_size`](@ref)
-- [`construct_matrices`](@ref)
-- [`solve`](@ref)
-- [`solve_vect`](@ref)
-- [`solve_wavenumber`](@ref)
-- [`k_sweep`](@ref)
+[`evaluate_points`](@ref),
+[`boundary_matrix_size`](@ref), [`construct_matrices`](@ref), [`solve`](@ref),
+[`solve_vect`](@ref), [`solve_wavenumber`](@ref), and [`k_sweep`](@ref).
 """
 struct DoubleLayerPotentialSolver{T<:Real,G<:BoundaryGrading,Sy<:Union{AbsSymmetry,Nothing},Ch<:Tuple} <: DLP
     pts_scaling_factor::Vector{T}
@@ -47,48 +87,57 @@ struct DoubleLayerPotentialSolver{T<:Real,G<:BoundaryGrading,Sy<:Union{AbsSymmet
 end
 
 """
-    DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}; min_pts::Int = 200, grading::BoundaryGrading = SmoothPeriodicGrading(), symmetry::Union{Nothing,AbsSymmetry} = nothing, character::Tuple = (), eps::T = T(1e-15)) where {T<:Real} → solver::DoubleLayerPotentialSolver{T}
+    DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}; min_pts::Int=200, grading::BoundaryGrading=SmoothPeriodicGrading(), symmetry::Union{Nothing,AbsSymmetry}=nothing, character::Tuple=(), eps::T=T(1e-15)) where {T<:Real}
 
-Constructs a [`DoubleLayerPotentialSolver`](@ref).
+Construct a double-layer potential boundary-integral solver.
+
+All boundary discretizations use the Kress quadrature scheme. `grading`
+controls the periodic boundary parametrization on which this quadrature is
+applied: [`SmoothPeriodicGrading`](@ref) uses the original parametrization,
+while [`GlobalCornerGrading`](@ref) additionally applies a global Kress grading
+map around geometric corners.
 
 ## Arguments
-* `pts_scaling_factor`: Scaling factor, or vector thereof (one per fundamental boundary curve), used to determine the number of boundary sampling points.
+* `pts_scaling_factor::Union{T,Vector{T}}`: Boundary-point scaling factor or collection of scaling factors used to determine the discretization size.
 
-## Keyword arguments
-* `min_pts::Int = 200`: Minimum number of boundary sampling points per component.
-* `grading::BoundaryGrading = SmoothPeriodicGrading()`: Boundary discretization/grading strategy, see [`BoundaryGrading`](@ref).
-* `symmetry::Union{Nothing,AbsSymmetry} = nothing`: Optional discrete symmetry used to fold the discretization onto a fundamental domain.
-* `character::Tuple = ()`: One-dimensional irrep character(s) requested for `symmetry` (trivial representation by default); unvalidated against `symmetry`, see the `(pts_scaling_factor, billiard, sector::SymmetrySector)` constructor overload below for a validated alternative.
-* `eps::T = T(1e-15)`: Relative tolerance used to determine the tension.
+## Keyword Arguments
+* `min_pts::Int = 200`: Minimum number of boundary sampling points.
+* `grading::BoundaryGrading = SmoothPeriodicGrading()`: Boundary parametrization strategy used with the Kress quadrature scheme.
+* `symmetry::Union{Nothing,AbsSymmetry} = nothing`: Optional discrete symmetry used to reduce the full-boundary Fredholm operator.
+* `character::Tuple = ()`: Character tuple selecting the requested representation of `symmetry`.
+* `eps::T = T(1e-15)`: Relative numerical tolerance associated with the solver.
 
 ## Returns
-* `solver`: A [`DoubleLayerPotentialSolver{T}`](@ref) instance.
+* `solver::DoubleLayerPotentialSolver{T}`: Configured DLP solver.
 """
-function DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}; min_pts::Int=200,
-                                     grading::BoundaryGrading=SmoothPeriodicGrading(),
-                                     symmetry::Union{Nothing,AbsSymmetry}=nothing,
-                                     character::Tuple=(),
-                                     eps::T=T(1e-15)) where {T<:Real}
+function DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}; min_pts::Int=200, grading::BoundaryGrading=SmoothPeriodicGrading(), symmetry::Union{Nothing,AbsSymmetry}=nothing, character::Tuple=(), eps::T=T(1e-15)) where {T<:Real}
     bs = pts_scaling_factor isa T ? [pts_scaling_factor] : pts_scaling_factor
     return DoubleLayerPotentialSolver{T,typeof(grading),typeof(symmetry),typeof(character)}(bs, min_pts, grading, symmetry, character, eps)
 end
 
 """
-    DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::BilliardGeometry.AbsBilliard, sector::SymmetrySector; kwargs...) where {T<:Real} → solver::DoubleLayerPotentialSolver{T}
+    DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::BilliardGeometry.AbsBilliard, sector::SymmetrySector; kwargs...) where {T<:Real}
 
-Constructs a [`DoubleLayerPotentialSolver`](@ref) whose `symmetry`/`character`
-are resolved from a validated [`SymmetrySector`](@ref) built against
-`billiard` ([`_resolve_bim_symmetry`](@ref)), instead of the bare
-`symmetry=`/`character=` keywords above. Mirrors
-[`RealPlaneWaves`](@ref)`(dim, billiard, sector)`'s recommended, validated
-construction pattern (Step 15 of the migration plan). Supports every
-representation `RealPlaneWaves` supports for reflection symmetries, plus
-`NFoldRotation` sectors, which `RealPlaneWaves` does not. The one
-irreducible restriction: a lone `XYAxisReflection` character cannot
-determine a unique representation of a `D2` group on its own — specify the
-individual axis reflections instead (e.g. `symmetry_sector(billiard,
-XAxisReflection=>χx, YAxisReflection=>χy)`); see
-[`_resolve_bim_symmetry`](@ref) for why.
+Construct a double-layer potential solver in a validated symmetry sector of
+`billiard`.
+
+The symmetry generator and character are resolved from `sector` using the
+symmetry registry of `billiard`. This provides a validated alternative to
+specifying the `symmetry` and `character` keywords directly. The resulting
+solver discretizes the complete physical boundary with the Kress quadrature
+scheme and folds the full-boundary Fredholm operator onto the requested
+symmetry sector.
+
+## Arguments
+* `pts_scaling_factor::Union{T,Vector{T}}`: Boundary-point scaling factor or collection of scaling factors used to determine the discretization size.
+* `billiard::BilliardGeometry.AbsBilliard`: Billiard defining the available discrete symmetries.
+* `sector::SymmetrySector`: Validated symmetry sector used for the Fredholm reduction.
+
+## Keyword Arguments
+* `kwargs...`: Additional keyword arguments forwarded to [`DoubleLayerPotentialSolver`](@ref).
+
+## Returns
+* `solver::DoubleLayerPotentialSolver{T}`: Configured DLP solver in the requested symmetry sector.
 """
 function DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::BilliardGeometry.AbsBilliard, sector::SymmetrySector; kwargs...) where {T<:Real}
     generator, character = _resolve_bim_symmetry(billiard, sector)
@@ -97,12 +146,14 @@ end
 
 _bim_numeric_type(::DoubleLayerPotentialSolver{T}) where {T} = T
 
-################################################################################
-################### PRIVATE HELPERS: BOUNDARY EVALUATION #####################
-################################################################################
-
-# Maps a global periodic component parameter t ∈ [0,2π) to arc length along
-# the composite boundary component `comp` (proportional parametrization).
+# Convert the global periodic parameter t ∈ [0,2π) of a composite boundary
+# component into physical arc length measured from the beginning of `comp`.
+# The global parameter distributes [0,2π) proportionally to the physical
+# lengths of the constituent curves. After locating the curve containing `t`,
+# its local parameter is converted to physical arc length with `arc_length`.
+# This quantity is used only as the physical boundary coordinate `s`; the
+# Nyström quadrature weights are constructed separately from the parametrized
+# tangent and the periodic parameter step.
 function _dlp_composite_arclength(comp::Vector, t::T) where {T<:Real}
     _, cum, Ltot = component_lengths(comp)
     twopi = 2*T(pi)
@@ -120,10 +171,21 @@ function _dlp_composite_arclength(comp::Vector, t::T) where {T<:Real}
     return Ltot
  end
 
-# Ungraded periodic Nyström discretization of a smooth (single-curve or
-# smooth-composite) boundary component, sampled at Kress midpoint nodes
-# σ_j = 2π(j-1/2)/N. Used directly by SmoothPeriodicGrading, and as the
-# fallback for GlobalCornerGrading when no true corners are detected.
+# Construct the ungraded periodic boundary discretization used by the Kress
+# quadrature scheme. The global periodic parameter is sampled at midpoint nodes
+#
+#                            σ_j = 2π(j-1/2)/N,
+#
+# with constant parameter weight h=2π/N. Since no grading map is applied,
+# tphys=σ, dtphys/dσ=1, and `ws_der` is identically one. Physical arclength
+# weights are nevertheless computed from the actual parametrization ds_j = |γ'(σ_j)| h,
+# so the discretization does not require a constant-speed boundary
+# parametrization. First and second parameter derivatives are retained because
+# they enter the geometry cache and the diagonal limits of the Kress-split
+# kernel. The node count is rounded to a symmetry-compatible multiple whenever
+# symmetry reduction is requested.
+# This is the discretization selected by SmoothPeriodicGrading and is also the
+# fallback for GlobalCornerGrading when the boundary contains no true corners (stadium).
 function _dlp_evaluate_points(solver::DoubleLayerPotentialSolver, ::SmoothPeriodicGrading, comp::Vector, k::T) where {T<:Real}
     twopi = 2*T(pi)
     _, _, Ltot = component_lengths(comp)
@@ -153,9 +215,29 @@ function _dlp_evaluate_points(solver::DoubleLayerPotentialSolver, ::SmoothPeriod
     return BoundaryPoints(xy, tangent_1st, tangent_2nd, ts, tphys, ws, ws_der, s, ds, 1, true, z, z, z, z)
 end
 
-# Globally Kress-graded Nyström discretization of a piecewise-smooth boundary
-# component with true corners at the (already detected) global periodic
-# parameter locations `corners`.
+# Construct the globally graded boundary discretization used by the Kress
+# quadrature scheme for a piecewise-smooth component with known true corners.
+# The uniform midpoint variable σ is mapped to the physical periodic parameter
+#
+#                           t = t(σ)
+#
+# by `multi_kress_graded_nodes_data`. The map fixes every supplied corner and
+# makes dt/dσ small near it, thereby clustering quadrature nodes around the
+# geometric singularities while retaining a globally periodic discretization.
+# Geometry is first evaluated with respect to the physical parameter t and then
+# transformed to σ by the chain rule,
+#
+#                 dγ/dσ  = γ_t dt/dσ,
+#                 d²γ/dσ² = γ_tt (dt/dσ)² + γ_t d²t/dσ².
+#
+# These transformed derivatives are stored because the Kress kernel splitting
+# and its diagonal limits must be expressed in the actual quadrature parameter
+# σ. The physical arclength weights are correspondingly
+#
+#                       ds_j = |dγ/dσ| h,
+#
+# with h=2π/N. `ws` stores the uniform σ-space quadrature weights and `ws_der`
+# stores dt/dσ.
 function _dlp_evaluate_points_graded(solver::DoubleLayerPotentialSolver, grading::GlobalCornerGrading, comp::Vector, k::T, corners::Vector{T}) where {T<:Real}
     twopi = 2*T(pi)
     _, _, Ltot = component_lengths(comp)
@@ -186,28 +268,44 @@ function _dlp_evaluate_points_graded(solver::DoubleLayerPotentialSolver, grading
     return BoundaryPoints(xy, tangent_1st, tangent_2nd, σ, tphys, ws, ws_der, s, ds, 1, true, z, z, z, z)
 end
 
-# GlobalCornerGrading: detect true corners and grade globally around them;
-# falls back to the ungraded smooth discretization when none are detected.
+# Select the globally graded boundary discretization for GlobalCornerGrading.
+# True geometric corners are detected in the global periodic parametrization of
+# the complete component. If corners are present, the Kress grading map is
+# constructed around those locations; otherwise the method delegates to the
+# ungraded periodic discretization. Both branches subsequently use the same
+# Kress quadrature scheme for the DLP kernel—the only
+# distinction is whether the periodic boundary parametrization is graded.
 function _dlp_evaluate_points(solver::DoubleLayerPotentialSolver, grading::GlobalCornerGrading, comp::Vector, k::T) where {T<:Real}
     corners = BilliardGeometry._component_corner_locations(T, comp)
     isempty(corners) && return _dlp_evaluate_points(solver, SmoothPeriodicGrading(), comp, k)
     return _dlp_evaluate_points_graded(solver, grading, comp, k, corners)
 end
 
-################################################################################
-################## PRIVATE HELPERS: FREDHOLM MATRIX ASSEMBLY ##################
-################################################################################
-
-# `true` when `pts` carries a nontrivial (Kress-graded) reparametrization
-# Jacobian, i.e. `pts.ws_der` deviates from all ones.
+# Determine whether the boundary discretization carries a nontrivial global
+# grading map. `ws_der` stores dt/dσ, so an ungraded periodic parametrization
+# has ws_der≡1, whereas GlobalCornerGrading produces a nonconstant Jacobian.
+# The tolerance avoids treating roundoff-level deviations from unity as an
+# actual reparametrization. This flag is passed to the geometry-cache
+# construction so that the Kress kernel splitting uses the appropriate geometry.
 @inline function _is_nontrivial_dlp_grading(pts::BoundaryPoints{T}) where {T<:Real}
     length(pts.ws_der) == length(pts) || return false
     return maximum(abs.(pts.ws_der .- one(T))) > sqrt(eps(T))
 end
 
-# Full (unfolded) Kress-corrected Nyström Fredholm matrix F(k) = I - D(k).
-# Off-diagonal entries: D[i,j] = Rmat[i,j]*l1 + ws[j]*l2, with
-# l1 = -(k/2π)*inner[i,j]*J1(k r)/r, l2 = (ik/2)*inner[i,j]*H1(k r)/r - l1*logterm[i,j].
+# Assemble the full, unfolded DLP Fredholm matrix A(k)=I-D(k) using the Kress
+# quadrature scheme. The double-layer kernel is written
+# as a periodic logarithmic part plus a smooth remainder. For i≠j the discrete
+# kernel entry has the form
+#
+#                  D_ij = R_ij L1_ij + ws_j L2_ij,
+#
+# where R_ij is the universal Kress product-quadrature matrix and
+#
+#        L1_ij = -(k/2π) inner_ij J₁(k r_ij)/r_ij,
+#        L2_ij =  (ik/2) inner_ij H₁⁽¹⁾(k r_ij)/r_ij - L1_ij logterm_ij.
+#
+# `BoundaryGeomCache` supplies distances, geometric inner products, curvature,
+# and the logarithmic factor logterm_ij
 function _dlp_fredholm_full!(F::AbstractMatrix{Complex{T}}, pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, k::Union{T,Complex{T}}; multithreaded::Bool=true) where {T<:Real}
     invtwopi = inv(2*T(pi))
     αL1 = -k*invtwopi
@@ -237,10 +335,15 @@ function _dlp_fredholm_full!(F::AbstractMatrix{Complex{T}}, pts::BoundaryPoints{
     return F
 end
 
-# Single Kress-corrected DLP kernel entry D[i,j] at full-boundary indices
-# (i,j), used by the symmetry-reduced assembly below (no i/j-pair sharing of
-# the Hankel evaluation is possible there, exactly as in the reference
-# reduced assembly).
+## Evaluate one discrete DLP kernel entry D_ij under the Kress quadrature scheme.
+# This is the entry-level counterpart of `_dlp_fredholm_full!` and is used when
+# symmetry reduction prevents the convenient pairwise full-matrix assembly.
+# For i≠j the same logarithmic splitting is used,
+#
+#                  D_ij = R_ij L1_ij + ws_j L2_ij,
+#
+# with the Bessel/Hankel factors evaluated at r_ij. For i=j the analytic
+# diagonal self-limit is returned directly.
 @inline function _dlp_kernel_entry(pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, k::Union{T,Complex{T}}, i::Int, j::Int) where {T<:Real}
     i == j && return Complex{T}(pts.ws[i]*G.kappa[i], zero(T))
     invtwopi = inv(2*T(pi))
@@ -255,9 +358,16 @@ end
     return Rmat[i,j]*l1 + pts.ws[j]*l2
 end
 
-# Symmetry-reduced Kress-corrected Fredholm matrix, folding the complete
-# discrete full-boundary Kress operator over each source symmetry orbit:
-# Fred[a,b] = δ_{ab} - Σ_{j: orbit_of[j]=b} phase[j]*D[fund[a],j].
+# Assemble the symmetry-reduced Fredholm matrix from the complete physical
+# boundary discretization. The Kress quadrature scheme is first understood on
+# the full periodic boundary; symmetry reduction is then performed algebraically
+# by folding all source indices belonging to the same symmetry orbit.
+# For fundamental target index fund[a] and source orbit b,
+#
+#        A_ab = δ_ab - Σ_{j: orbit_of[j]=b} phase[j] D_{fund[a],j},
+#
+# where `phase[j]` is the irrep character factor associated with the symmetry image
+# containing source node j.
 function _dlp_fredholm_reduced!(F::AbstractMatrix{Complex{T}}, pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, orbits::SymmetryOrbitMap{T}, k::Union{T,Complex{T}}; multithreaded::Bool=true) where {T<:Real}
     m = fundamental_size(orbits)
     N = length(orbits)
@@ -284,20 +394,28 @@ function _dlp_fredholm_reduced!(F::AbstractMatrix{Complex{T}}, pts::BoundaryPoin
 end
 
 """
-    evaluate_points(solver::DoubleLayerPotentialSolver, billiard::Bi, k) where {Bi<:AbsBilliard} → pts::BoundaryPoints
+    evaluate_points(solver::DoubleLayerPotentialSolver, billiard::Bi, k) where {Bi<:AbsBilliard}
 
-Samples the boundary of `billiard` according to `solver.grading`, producing the
-boundary discretization needed to assemble the double-layer Fredholm matrix in
-[`construct_matrices`](@ref).
+Construct the boundary discretization used by the DLP Fredholm operator.
 
-## Description
-When `solver.symmetry === nothing`, only the fundamental domain's own
-physical boundary ([`get_boundary_curves`](@ref)) is discretized — this
-already is the complete physical boundary in that case. When a `symmetry` is
-set, the *complete* physical boundary ([`full_boundary`](@ref)) is
-discretized instead, since [`symmetry_index_orbits`](@ref) folds a full
-periodic boundary sampling onto the fundamental domain by exact index
-permutation and therefore needs every symmetry image present in `pts`.
+All discretizations are intended for the Kress quadrature scheme used during
+Fredholm matrix assembly. [`SmoothPeriodicGrading`](@ref) samples the original
+periodic boundary parametrization, whereas [`GlobalCornerGrading`](@ref)
+reparametrizes the boundary with a global Kress grading map that clusters
+nodes around detected geometric corners. If no corners are detected, the
+latter reduces to the smooth periodic discretization.
+
+When a symmetry sector is present, the complete physical boundary is still
+discretized. The full Kress Nyström operator is subsequently folded over
+symmetry orbits during matrix assembly.
+
+## Arguments
+* `solver::DoubleLayerPotentialSolver`: DLP solver defining the boundary discretization.
+* `billiard::Bi`: Billiard whose physical boundary is discretized.
+* `k`: Wavenumber used to determine the boundary resolution.
+
+## Returns
+* `pts::BoundaryPoints`: Boundary discretization containing the geometry and quadrature data required by the Kress quadrature scheme.
 """
 function evaluate_points(solver::DoubleLayerPotentialSolver, billiard::Bi, k) where {Bi<:AbsBilliard}
     T = _bim_numeric_type(solver)
@@ -315,16 +433,33 @@ symmetry-orbit folding onto a fundamental domain.
 function boundary_matrix_size(solver::DoubleLayerPotentialSolver, pts::BoundaryPoints)
     solver.symmetry === nothing && return boundary_matrix_size(pts)
     T = _bim_numeric_type(solver)
-    # Orbit membership/fundamental_size depends only on the symmetry group's
-    # permutation structure, never on the requested irrep character, so the
-    # trivial-representation call here is intentional (Step 16.1 audit).
     return fundamental_size(symmetry_index_orbits(T, pts.xy, solver.symmetry))
 end
 
 """
-    construct_matrices(solver::DoubleLayerPotentialSolver, pts::BoundaryPoints, k; multithreaded::Bool = true) → A::Matrix{Complex}
+    construct_matrices(solver::DoubleLayerPotentialSolver, pts::BoundaryPoints, k; multithreaded::Bool=true)
 
-Assembles the double-layer Fredholm matrix `A(k) = I - D(k)`.
+Assemble the DLP Fredholm matrix `A(k) = I - D(k)` using the Kress quadrature scheme.
+
+The Helmholtz double-layer kernel is analytically
+split into its logarithmic singular part and a smooth remainder and
+discretized with Kress product quadrature. The same quadrature scheme is used
+for both smooth and globally graded boundary parametrizations.
+
+If `solver.symmetry` is present, the complete full-boundary Kress Nyström
+operator is folded over source symmetry orbits with the prescribed character
+phases.
+
+## Arguments
+* `solver::DoubleLayerPotentialSolver`: DLP solver defining the discretization and symmetry sector.
+* `pts::BoundaryPoints`: Full physical-boundary discretization.
+* `k`: Real or complex wavenumber at which the Fredholm operator is evaluated.
+
+## Keyword Arguments
+* `multithreaded::Bool = true`: Enable multithreaded Fredholm matrix assembly.
+
+## Returns
+* `A::Matrix{Complex{T}}`: Full or symmetry-reduced Fredholm matrix `A(k) = I - D(k)`.
 """
 function construct_matrices(solver::DoubleLayerPotentialSolver, pts::BoundaryPoints, k; multithreaded::Bool=true)
     @timeit_debug "construct_matrices" begin
@@ -364,11 +499,30 @@ function construct_matrices(solver::DoubleLayerPotentialSolver, pts::BoundaryPoi
 end
 
 """
-    solve(solver::DoubleLayerPotentialSolver, pts::BoundaryPoints, k; multithreaded::Bool = true, use_krylov::Bool = true) → t::Real
+    solve(solver::DoubleLayerPotentialSolver, pts::BoundaryPoints, k; multithreaded::Bool=true, use_krylov::Bool=true)
 
-Computes the double-layer tension at wavenumber `k`, defined from the smallest
-singular value / Krylov nullspace residual of `A(k)` (see
-[`construct_matrices`](@ref)).
+Compute the DLP tension at wavenumber `k`.
+
+The Fredholm matrix `A(k) = I - D(k)` is assembled with
+[`construct_matrices`](@ref) using the Kress quadrature scheme. The tension is
+defined as its smallest singular value,
+
+    t(k) = σmin(A(k)).
+
+With `use_krylov = true`, the smallest singular value is computed iteratively
+with KrylovKit. Otherwise, all singular values are computed with a dense SVD.
+
+## Arguments
+* `solver::DoubleLayerPotentialSolver`: DLP solver defining the boundary discretization and symmetry sector.
+* `pts::BoundaryPoints`: Boundary discretization containing the geometry and quadrature data required by the Kress quadrature scheme.
+* `k`: Wavenumber at which the tension is evaluated.
+
+## Keyword Arguments
+* `multithreaded::Bool = true`: Enable multithreaded Fredholm matrix assembly.
+* `use_krylov::Bool = true`: Compute only the smallest singular value iteratively instead of using a full dense SVD.
+
+## Returns
+* `t::Real`: Smallest singular value `σmin(A(k))` of the Kress-discretized Fredholm operator.
 """
 function solve(solver::DoubleLayerPotentialSolver, pts::BoundaryPoints, k; multithreaded::Bool=true, use_krylov::Bool=true)
     T = _bim_numeric_type(solver)
@@ -383,10 +537,33 @@ function solve(solver::DoubleLayerPotentialSolver, pts::BoundaryPoints, k; multi
 end
 
 """
-    solve_vect(solver::DoubleLayerPotentialSolver, pts::BoundaryPoints, k; multithreaded::Bool = true) → (t::Real, x::Vector)
+    solve_vect(solver::DoubleLayerPotentialSolver, pts::BoundaryPoints, k; multithreaded::Bool=true)
 
-Computes the double-layer tension and the associated boundary density
-eigenvector at wavenumber `k`.
+Compute the DLP tension and corresponding layer density at wavenumber `k`.
+
+The Fredholm matrix `A(k) = I - D(k)` is assembled with
+[`construct_matrices`](@ref) using the Kress quadrature scheme. Its smallest
+singular triplet is then computed with KrylovKit. The returned vector is the
+right singular vector associated with the smallest singular value and
+represents the discrete double-layer density on the assembled boundary
+degrees of freedom.
+
+At a Dirichlet eigenvalue this vector approximates a null vector of the
+Kress-discretized Fredholm operator,
+
+    A(k)x ≈ 0.
+
+## Arguments
+* `solver::DoubleLayerPotentialSolver`: DLP solver defining the boundary discretization and symmetry sector.
+* `pts::BoundaryPoints`: Boundary discretization containing the geometry and quadrature data required by the Kress quadrature scheme.
+* `k`: Wavenumber at which the layer density is evaluated.
+
+## Keyword Arguments
+* `multithreaded::Bool = true`: Enable multithreaded Fredholm matrix assembly.
+
+## Returns
+* `t::Real`: Smallest singular value `σmin(A(k))` of the Kress-discretized Fredholm operator.
+* `x::Vector{Complex{T}}`: Right singular vector representing the discrete double-layer density associated with `t`.
 """
 function solve_vect(solver::DoubleLayerPotentialSolver, pts::BoundaryPoints, k; multithreaded::Bool=true)
     T = _bim_numeric_type(solver)
@@ -394,9 +571,3 @@ function solve_vect(solver::DoubleLayerPotentialSolver, pts::BoundaryPoints, k; 
     @blas_1 vals, _, rvecs, _ = KrylovKit.svdsolve(A, 1, :SR)
     return vals[1], Vector{Complex{T}}(rvecs[1])
 end
-
-# `symmetrize_layer_density`/`solve_state`/`_bim_normal_derivative` (the
-# boundary-normal-derivative and BIMEigenstate support shared by every
-# SweepBIMSolver) live in sweepmethods.jl, not here: none of that logic is
-# specific to the double-layer kernel (see sweepmethods.jl's docstrings for
-# why the same weighted-transpose reciprocity applies generically).
