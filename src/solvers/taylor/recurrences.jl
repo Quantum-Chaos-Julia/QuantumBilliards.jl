@@ -586,7 +586,7 @@ cross-component interactions to be selected without rebuilding geometry.
 """
 function _taylor_cache(solver::CompositeBIMSolver, pts)
     nc = length(solver.component_solvers); offs = _composite_offsets(pts,nc)
-    comp_pts = ntuple(a -> _composite_component_slice(pts,offs[a],a),nc)
+    comp_pts = ntuple(a -> _composite_component_slice(pts,offs[a]:offs[a+1]-1,a),nc)
     Gs = ntuple(a -> boundary_geom_cache(comp_pts[a],_is_nontrivial_dlp_grading(comp_pts[a])),nc)
     Rmats = ntuple(nc) do a
         Na = length(comp_pts[a].xy)
