@@ -549,15 +549,19 @@ solvers must equal the number of connected boundary components.
 """
 function evaluate_points(solver::CompositeBIMSolver, billiard::Bi, k) where {Bi<:AbsBilliard}
     T = _bim_numeric_type(solver); kT = T(k)
-    comp = solver.symmetry===nothing ? get_boundary_curves(billiard) : full_boundary(billiard)
+    base = get_boundary_curves(billiard)
+    comp = solver.symmetry===nothing ? base : full_boundary(billiard)
     isempty(comp) && error("Boundary cannot be empty.")
-    groups = _group_boundary_by_domain_id(comp); nc = length(solver.component_solvers)
+    groups = _group_boundary_by_domain_id(comp); base_groups = _group_boundary_by_domain_id(base)
+    nc = length(solver.component_solvers)
     length(groups)==nc || throw(ArgumentError("Billiard boundary has $(length(groups)) component group(s) but CompositeBIMSolver has $nc component solver(s)"))
+    base_by_id = Dict(first(g).domain_id=>g for g in base_groups)
     comp_pts = Vector{BoundaryPoints{T}}(undef,nc)
     @inbounds for a in 1:nc
-        grp = groups[a]
+        grp = groups[a]; id = first(grp).domain_id
+        haskey(base_by_id,id) || throw(ArgumentError("Expanded Composite boundary contains domain_id=$id which is absent from the fundamental boundary"))
         p = _composite_component_points(solver.component_solvers[a],grp,kT)
-        comp_pts[a] = _group_is_hole(grp) ? _flip_component_orientation(p) : p
+        comp_pts[a] = _group_is_hole(base_by_id[id]) ? _flip_component_orientation(p) : p
     end
     return _merge_composite_points(comp_pts)
 end
