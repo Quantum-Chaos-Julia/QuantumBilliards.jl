@@ -1,3 +1,38 @@
+################################################################################
+# VERGINI-SARACENO SCALING METHOD
+#
+# This file implements the Vergini-Saraceno scaling method for computing many
+# quantum-billiard eigenvalues near a single scaling wavenumber k₀ from one
+# generalized eigenvalue problem.
+#
+# For a basis {ϕₙ(k)} satisfying the Helmholtz equation in the billiard, define
+# the boundary matrices
+#
+#                         F = Bᵀ W B,
+#
+#                  Fₖ = Bᵀ W Bₖ + Bₖᵀ W B,
+#
+# where B contains the basis functions evaluated on the boundary, Bₖ their
+# wavenumber derivatives, and W contains the Vergini-Saraceno boundary weights
+#
+#                         wᵢ = dsᵢ/(rᵢ·nᵢ).
+#
+# The local spectrum around k₀ is obtained from the generalized eigenproblem
+#
+#                         F x = μ Fₖ x.
+#
+# Each generalized eigenvalue μ gives the scaling estimate
+#
+#                  kVS = k₀ - 2/μ + 2/(k₀ μ²),
+#
+# with the associated tension estimate
+#
+#                         t = 2(2/μ)².
+#
+# A single generalized diagonalization therefore produces multiple eigenvalue
+# estimates around k₀. Candidates are subsequently restricted to the requested
+# window |kVS-k₀|<Δk.
+################################################################################
 
 """
     VerginiSaracenoSolver{T} <: AcceleratedBasisSolver
