@@ -1,3 +1,38 @@
+################################################################################
+# PARTICULAR SOLUTIONS METHOD (PSM)
+#
+# This file implements the particular solutions method for computing quantum
+# billiard eigenvalues by searching for Helmholtz solutions that are small on
+# the boundary while remaining nontrivial in the interior.
+#
+# For a basis {ϕₙ(k)} satisfying the Helmholtz equation inside the billiard,
+# define the boundary and interior collocation matrices
+#
+#                                 Bᵢₙ = ϕₙ(xᵢ),
+#
+#                             (Bint)ⱼₙ = ϕₙ(yⱼ),
+#
+# where {xᵢ} are boundary points and {yⱼ} are interior points. For a coefficient
+# vector c, the corresponding trial solution has boundary and interior samples
+#
+#                               Bc,    Bint c.
+#
+# The PSM tension at fixed wavenumber k is the minimum relative boundary norm
+#
+#                                        ||Bc||₂
+#                           t(k) = min  --------,
+#                                   c  ||Bint c||₂
+#
+# and is therefore the smallest generalized singular value of the matrix pair
+#
+#                              GSVD(B, Bint).
+#
+# Near a Dirichlet eigenvalue, a nontrivial Helmholtz solution can become small
+# on the boundary while retaining finite interior norm, producing a sharp
+# minimum of t(k). The spectrum is obtained by sweeping or minimizing this
+# tension as a function of k.
+################################################################################
+
 """
     ParticularSolutionsMethod{T} <: SweepBasisSolver
 
