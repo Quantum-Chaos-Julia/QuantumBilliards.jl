@@ -1,30 +1,58 @@
 ################################################################################
-############################ SYMMETRY SECTOR ###################################
-################################################################################
-# `SymmetrySector` is Layer 2 of the symmetry-framework split (Step 15 of the
-# migration plan): the one-dimensional irreducible-representation (parity /
-# rotation-sector) choice a *specific solve* targets, kept separate from a
-# billiard's fixed geometric symmetry group (`BilliardGeometry.AbsSymmetry`,
-# `billiard.symmetries::BilliardGeometry.SymmetryRegistry`). A `SymmetrySector`
-# is always built *against* a concrete billiard, so a solve can never silently
-# request a representation for a symmetry the billiard doesn't actually have.
+# SYMMETRY SECTORS AND BIM SYMMETRY RESOLUTION
+#
+# This file defines the representation sector selected for a quantum-billiard
+# solve and translates that choice into the symmetry representation used by
+# boundary-integral solvers.
+#
+# A billiard stores its geometric symmetry generators independently of any
+# particular eigenstate calculation. `SymmetrySector` specifies a
+# one-dimensional irreducible-representation character for selected registered
+# generators:
+#
+#                       χ(g) = ±1
+#
+# for reflections, and
+#
+#                  χ_s(g^m) = exp(2πi s m/N)
+#
+# for sector s of an N-fold cyclic rotation. Sectors are constructed against a
+# concrete billiard so that every requested generator is validated against its
+# registered geometric symmetries.
+#
+# BIM solvers require this representation information in the lower-level form
+#
+#                    (symmetry, character).
+#
+# Reflection sectors are resolved through `CompositeReflection`, which builds
+# the corresponding reflection-group closure and character tuple. Rotation
+# sectors are resolved by recovering the common cyclic sector from the
+# characters of the registered rotation elements. Mixed reflection/rotation
+# sectors are rejected because the BIM symmetry reduction currently supports
+# reflection and cyclic sectors separately, but not general dihedral
+# representations.
+#
+# Since symmetry IDs are local to a billiard's symmetry registry, a
+# `SymmetrySector` may only be resolved against the exact billiard instance
+# from which it was constructed.
 ################################################################################
 
 """
-SymmetrySector{Bi<:BilliardGeometry.AbsBilliard}
+    SymmetrySector{Bi<:BilliardGeometry.AbsBilliard}
 
-`SymmetrySector` represents the irreducible-representation character chosen,
-per registered symmetry generator (`sym_id`), for a specific eigenstate
-solve — the Layer-2 counterpart of a billiard's fixed geometric symmetry
-group (`billiard.symmetries::BilliardGeometry.SymmetryRegistry`).
+Representation sector for a specific quantum-billiard solve.
+
+A `SymmetrySector` associates selected symmetry generators registered by the
+billiard with the one-dimensional irreducible-representation characters used
+for the solve. The geometric symmetry group remains a property of the billiard;
+the sector specifies which representation of that group is selected.
 
 ## Attributes
-* `billiard::Bi`: The billiard this sector's `sym_id`s were resolved against.
-* `characters::Dict{Int,ComplexF64}`: `sym_id => chosen irrep character`, for every generator this sector constrains.
+* `billiard::Bi`: Billiard against which the symmetry generators were resolved.
+* `characters::Dict{Int,ComplexF64}`: Map from registered symmetry IDs to their selected irreducible-representation characters.
 
 ## API
-The following functions can be evaluated for this type:
-- [`symmetry_sector`](@ref)
+* [`symmetry_sector`](@ref)
 """
 struct SymmetrySector{Bi<:BilliardGeometry.AbsBilliard}
     billiard::Bi
@@ -46,26 +74,25 @@ end
 """
     symmetry_sector(billiard::BilliardGeometry.AbsBilliard, choices::Pair...) → sector::SymmetrySector
 
-Builds a [`SymmetrySector`](@ref) for `billiard`, resolving each
-`GeneratorType => value` pair (e.g. `BilliardGeometry.XAxisReflection => -1`,
-`BilliardGeometry.NFoldRotation => 2`) against `billiard.symmetries`.
+Construct a [`SymmetrySector`](@ref) for `billiard` from representation choices
+of the form `GeneratorType => value`.
 
-## Description
-Every registered generator in `billiard.symmetries` whose type matches
-`GeneratorType` is assigned the requested character (validated as a genuine
-one-dimensional irrep value for that generator type — `±1` for a reflection,
-an integer rotation sector in `0:N-1` for an `N`-fold rotation, converted to
-`exp(2πi*sector*m/N)` for each registered rotation image `m`). Requesting a
-generator type the billiard has no registered symmetry for raises an
-`ArgumentError` at construction time, instead of silently producing a
-mismatched or empty representation later.
+Every registered symmetry whose type matches `GeneratorType` is assigned the
+corresponding one-dimensional irreducible-representation character. Reflection
+values must be `±1`. For an `N`-fold rotation, an integer sector `s ∈ 0:N-1`
+assigns
+
+    χ_s(g^m) = exp(2πi s m/N)
+
+to each registered rotation element `g^m`. Requesting a generator type not
+registered by the billiard raises an `ArgumentError`.
 
 ## Arguments
-* `billiard`: The billiard the requested symmetry sector is resolved against.
-* `choices`: `GeneratorType => value` pairs selecting the representation for each active generator type.
+* `billiard::BilliardGeometry.AbsBilliard`: Billiard whose registered symmetries define the available generators.
+* `choices::Pair...`: `GeneratorType => value` pairs selecting the representation sector.
 
 ## Returns
-* `sector`: A [`SymmetrySector`](@ref) usable by [`RealPlaneWaves`](@ref)`(dim, billiard, sector)`.
+* `sector::SymmetrySector`: Representation sector associated with `billiard`.
 """
 function symmetry_sector(billiard::BilliardGeometry.AbsBilliard, choices::Pair...)
     characters = Dict{Int,ComplexF64}()
@@ -79,31 +106,10 @@ function symmetry_sector(billiard::BilliardGeometry.AbsBilliard, choices::Pair..
     return SymmetrySector(billiard, characters)
 end
 
-################################################################################
-##################### BIM SOLVER RESOLUTION (Step 16) #########################
-################################################################################
-# Resolves a SymmetrySector (Layer 2: per-solve representation choice) into
-# the `(symmetry::AbsSymmetry, character::Tuple)` pair a BIM solver
-# (DoubleLayerPotentialSolver/CombinedFieldIntegralEquationSolver) actually
-# stores, using each matched sym_id's own registered generator
-# (`BilliardGeometry.symmetry_of`) rather than assuming a fixed generator
-# count or shape. Reflection generators are always folded via a freshly
-# built `CompositeReflection`, reusing BilliardGeometry.jl's existing
-# group-closure algorithm (a lone generator or several independent axes are
-# both handled uniformly, with automatic consistency validation for
-# over-specified requests); NFoldRotation generators recover a single
-# integer sector, cross-checked across every matched sym_id using that
-# entry's own `m` (never assuming `m=1`).
-################################################################################
-
-# Guards against a SymmetrySector built against one billiard being reused
-# against another. sym_id is assigned purely by per-billiard registration
-# order (BilliardGeometry.SymmetryRegistry), not globally, so two distinct
-# billiard instances of the same symmetric family (e.g. two D2-symmetric
-# billiards) can and do assign colliding sym_ids — BilliardGeometry.symmetry_of
-# would then happily resolve against the *wrong* generator instead of
-# erroring. Require literal identity with the billiard the sector was built
-# for, which every legitimate call site already has on hand.
+# Verify that a sector is being resolved against the exact billiard instance
+# from which it was constructed. Symmetry IDs are assigned locally by each
+# billiard's symmetry registry, so the same integer ID may refer to unrelated
+# generators for two distinct billiard instances.
 function _check_sector_billiard(billiard::BilliardGeometry.AbsBilliard, sector::SymmetrySector)
     sector.billiard === billiard || throw(ArgumentError(
         "SymmetrySector was built against a different billiard instance than " *
@@ -115,22 +121,12 @@ function _check_sector_billiard(billiard::BilliardGeometry.AbsBilliard, sector::
     return nothing
 end
 
-"""
-    _resolve_bim_symmetry(billiard::BilliardGeometry.AbsBilliard, sector::SymmetrySector) → (symmetry, character::Tuple)
-
-Resolves `sector`'s per-`sym_id` characters, looked up against `billiard`'s
-own [`BilliardGeometry.SymmetryRegistry`](@ref) (`BilliardGeometry.symmetry_of`),
-into the bare `(symmetry::BilliardGeometry.AbsSymmetry, character::Tuple)`
-pair consumed by [`DoubleLayerPotentialSolver`](@ref)/
-[`CombinedFieldIntegralEquationSolver`](@ref)'s unvalidated constructor
-keywords. `sector` must have been built against this exact `billiard`
-instance (checked by identity, since `sym_id` is only unique per-billiard,
-not globally) — this is what closes the "sector built against the wrong
-billiard" gap.
-
-An empty `sector` (no characters requested) resolves to the trivial
-representation, `(nothing, ())`.
-"""
+# Resolve a sector into the `(symmetry, character)` representation stored by a
+# BIM solver. The sector is first checked against the exact billiard instance
+# from which it was constructed, since symmetry IDs are local to each billiard's
+# registry. An empty sector gives `(nothing, ())`; otherwise the stored symmetry
+# IDs are resolved to their registered generators and dispatched to the
+# reflection or cyclic-rotation resolution path.
 function _resolve_bim_symmetry(billiard::BilliardGeometry.AbsBilliard, sector::SymmetrySector)
     _check_sector_billiard(billiard, sector)
     isempty(sector.characters) && return nothing, ()
@@ -138,6 +134,10 @@ function _resolve_bim_symmetry(billiard::BilliardGeometry.AbsBilliard, sector::S
     return _resolve_bim_symmetry(gens)
 end
 
+# Dispatch resolved generator-character pairs to the supported BIM symmetry
+# reductions. Pure reflection families use the composite-reflection path and
+# pure cyclic-rotation families use the rotation-sector path. Mixed families
+# require general dihedral representation handling, which is not implemented.
 function _resolve_bim_symmetry(gens::Vector{Pair{BilliardGeometry.AbsSymmetry,ComplexF64}})
     if all(g -> g.first isa BilliardGeometry.AbsReflection, gens)
         return _resolve_bim_reflection_sector(gens)
@@ -148,13 +148,11 @@ function _resolve_bim_symmetry(gens::Vector{Pair{BilliardGeometry.AbsSymmetry,Co
     end
 end
 
-# Reflection family: always fold via the generated group's full closure,
-# reusing BilliardGeometry.jl's existing CompositeReflection algorithm
-# (handles 1 generator, 2 independent generators i.e. a full D2 fold, or any
-# larger combination, uniformly and with automatic consistency validation).
-# The one irreducible exception is a lone XYAxisReflection character, which
-# cannot determine a unique 1D representation of the D2 group on its own
-# (both (χx,χy)=(+1,-1) and (-1,+1) give the same combined character).
+# Resolve a family of reflection characters through `CompositeReflection`,
+# which constructs the closure of the generated reflection group and validates
+# character consistency. A lone `XYAxisReflection` is rejected because its
+# character does not uniquely determine the two independent D2 reflection
+# characters χx and χy.
 function _resolve_bim_reflection_sector(gens::Vector{Pair{BilliardGeometry.AbsSymmetry,ComplexF64}})
     if length(gens) == 1 && gens[1].first isa BilliardGeometry.XYAxisReflection
         throw(ArgumentError(
@@ -169,20 +167,10 @@ function _resolve_bim_reflection_sector(gens::Vector{Pair{BilliardGeometry.AbsSy
     return BilliardGeometry.CompositeReflection(generators), Tuple(characters)
 end
 
-# NFoldRotation family: Cn_symmetry(n) registers n-1 non-identity elements of
-# the *same* cyclic group (m=1:n-1), so a "pick sector s" choice legitimately
-# produces several matched sym_ids at once. Recover s from each matched
-# entry using *that entry's own* m and cross-check all matched entries
-# agree, instead of assuming m=1 for whichever entry happens to be
-# inspected first.
-#
-# Matching is done by brute-force search over the (tiny, order<=~12 in
-# practice) candidate sector values rather than inverting
-# `character = cis(2π*s*m/order)` by real-valued division: dividing the
-# *wrapped* angle by `m` does not correctly invert "multiply by m mod
-# order" whenever `s*m/order >= 1` causes the angle to wrap (confirmed by
-# direct testing on C3Billiard's sector=2, m=2 entry, which the naive
-# division recovers as the non-integer 0.5, not the correct s=2).
+# Recover the cyclic sector `s` whose character on the registered element g^m
+# equals `char`. The finite set s=0,...,N-1 is searched directly because the
+# phase is defined modulo 2π; dividing the principal argument by `m` does not
+# in general invert the map s ↦ sm mod N.
 function _match_rotation_sector(gen::BilliardGeometry.NFoldRotation, char::ComplexF64)
     order = gen.order
     for s in 0:order-1
@@ -191,6 +179,10 @@ function _match_rotation_sector(gen::BilliardGeometry.NFoldRotation, char::Compl
     throw(ArgumentError("Character $char is not a valid NFoldRotation irrep value for m=$(gen.m), order=$order"))
 end
 
+# Resolve several registered elements of one cyclic rotation group to a common
+# sector index. All elements must have the same group order and independently
+# recover the same sector, ensuring that their characters define one consistent
+# one-dimensional representation.
 function _resolve_bim_rotation_sector(gens::Vector{Pair{BilliardGeometry.AbsSymmetry,ComplexF64}})
     order = gens[1].first.order
     all(g -> g.first.order == order, gens) || throw(ArgumentError("Mismatched NFoldRotation orders within one SymmetrySector"))
