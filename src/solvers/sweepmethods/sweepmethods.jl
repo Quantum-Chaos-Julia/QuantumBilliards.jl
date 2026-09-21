@@ -208,7 +208,7 @@ function symmetrize_layer_density(solver::AbsBIMSolver, layer_density::AbstractV
     Nfull = length(pts)
     length(layer_density) == Nfull && return layer_density
     solver.symmetry === nothing && throw(DimensionMismatch("Boundary data has length $(length(layer_density)); expected full length $Nfull because no symmetry is active"))
-    orbits = _fold_boundary(T, pts.xy, solver.symmetry, solver.character)
+    orbits = solver isa CompositeBIMSolver ? _composite_symmetry_orbits(T, solver, pts) : _fold_boundary(T, pts.xy, solver.symmetry, solver.character)
     Nred = fundamental_size(orbits)
     length(layer_density) == Nred || throw(DimensionMismatch("Boundary data has length $(length(layer_density)); expected reduced $Nred or full $Nfull"))
     S = promote_type(N, Complex{T}); full_data = Vector{S}(undef, Nfull)
