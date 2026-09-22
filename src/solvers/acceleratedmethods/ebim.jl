@@ -715,7 +715,7 @@ function solve(solver::ExpandedBIMSolver, pts::BoundaryPoints, k, nlevels::Int; 
         p = sortperm(abs.(μ[1:nconv]); rev=true); nkeep = min(nev, nconv)
         ks = Vector{Complex{T}}(undef, nkeep); ts = Vector{T}(undef, nkeep); buf = Vector{Complex{T}}(undef, n)
         @inbounds for q in 1:nkeep
-            j = p[q]; λ = inv(μ[j]); v = VR[j]; u = UL[j]; ε1 = -λ
+            j = p[q]; λ = inv(μ[j]); v = VR[j]; u = Ft\UL[j]; ε1 = -λ
             mul!(buf, ddA, v); num = dot(u, buf)
             mul!(buf, dA, v); den = dot(u, buf)
             ε2 = abs(den)>eps(T) ? -T(0.5)*ε1^2*(num/den) : zero(ε1)
