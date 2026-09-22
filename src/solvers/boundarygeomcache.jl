@@ -138,6 +138,43 @@ speeds and the scaled curvature entering diagonal kernel limits.
 If `corner_kress=true`, `pts.ts` is copied into `original_ts` for use by the
 corner-graded Kress construction.
 """
+function boundary_geom_cache_fused(pts::BoundaryPoints{T}, corner_kress::Bool=false) where {T<:Real}
+    N = length(pts)
+    length(pts.tangent)==N || throw(ArgumentError("BoundaryPoints does not contain tangent data"))
+    length(pts.tangent_2)==N || throw(ArgumentError("BoundaryPoints does not contain tangent_2 data"))
+    length(pts.ts)==N || throw(ArgumentError("BoundaryPoints does not contain ts data"))
+    ts = pts.ts
+    X = getindex.(pts.xy, 1); Y = getindex.(pts.xy, 2)
+    dX = getindex.(pts.tangent, 1); dY = getindex.(pts.tangent, 2)
+    ddX = getindex.(pts.tangent_2, 1); ddY = getindex.(pts.tangent_2, 2)
+    R = Matrix{T}(undef, N, N); invR = Matrix{T}(undef, N, N)
+    inner = Matrix{T}(undef, N, N); logterm = Matrix{T}(undef, N, N)
+    @inbounds for i in 1:N
+        R[i,i] = one(T); invR[i,i] = zero(T)
+        inner[i,i] = zero(T); logterm[i,i] = zero(T)
+    end
+    Threads.@threads for j in 2:N
+        xj = X[j]; yj = Y[j]; dxj = dX[j]; dyj = dY[j]; tj = ts[j]
+        @inbounds for i in 1:j-1
+            Δx = X[i]-xj; Δy = Y[i]-yj
+            r = hypot(Δx, Δy); rinv = inv(r)
+            R[i,j] = r; R[j,i] = r
+            invR[i,j] = rinv; invR[j,i] = rinv
+            inner[i,j] = dyj*Δx-dxj*Δy
+            inner[j,i] = -dY[i]*Δx+dX[i]*Δy
+            Δt = ts[i]-tj
+            lt = log(4*sin(Δt/2)^2)
+            logterm[i,j] = lt; logterm[j,i] = lt
+        end
+    end
+    speed = @. hypot(dX, dY)
+    κnum = @. -(dX*ddY-dY*ddX)
+    κden = @. dX*dX+dY*dY
+    kappa = @. κnum/(2*T(pi)*κden)
+    original_ts = corner_kress ? copy(ts) : T[]
+    return QuantumBilliards.BoundaryGeomCache(R, invR, inner, logterm, speed, kappa, original_ts)
+end
+#= REF IMPLEMENTATION
 function boundary_geom_cache(pts::BoundaryPoints{T}, corner_kress::Bool=false) where T<:Real
     N = length(pts)
     length(pts.tangent) == N || throw(ArgumentError("BoundaryPoints does not contain tangent data"))
@@ -169,6 +206,7 @@ function boundary_geom_cache(pts::BoundaryPoints{T}, corner_kress::Bool=false) w
     kappa = (inv(2*T(pi))).*(κnum./κden)
     return BoundaryGeomCache(R, invR, inner, logterm, speed, kappa, original_ts)
 end
+=#
 
 ################################################################################
 ############### COMPLEX-SAFE HANKEL/BESSEL-J KERNEL EVALUATION ###############
