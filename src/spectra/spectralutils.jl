@@ -421,8 +421,9 @@ function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::F
             seg_last += 1
         end
         seg_last!=seg_first && (pts = evaluate_points(solver, billiard, ks_grid[seg_last]))
+        cache = EBIMCache(solver.kernel, pts)
         for i in seg_first:seg_last
-            ki, ti = solve(solver, pts, ks_grid[i], nlevels[i]; multithreaded, cheb_config)
+            ki, ti = solve(solver, pts, ks_grid[i], nlevels[i]; multithreaded, cheb_config, cache)
             keep = abs.(real.(ki).-ks_grid[i]).<=dks[i]
             ks_corr[i] = ki[keep]; ts_corr[i] = ti[keep]
             show_progress && next!(progress)

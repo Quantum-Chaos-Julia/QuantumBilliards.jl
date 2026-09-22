@@ -558,67 +558,64 @@ end
 ############################## PUBLIC API ######################################
 ################################################################################
 
+### CACHES FOR GEOM REUSE, HERE NOT HIDDEN LIKE IN BEYN ###
+struct EBIMCache{G,R,O}
+    G::G
+    Rmat::R
+    orbits::O
+end
+
+function EBIMCache(cs::Union{DoubleLayerPotentialSolver,CombinedFieldIntegralEquationSolver}, pts::BoundaryPoints{T}) where {T<:Real}
+    N = length(pts)
+    G = boundary_geom_cache(pts, _is_nontrivial_dlp_grading(pts))
+    Rmat = zeros(T, N, N); kress_R!(Rmat)
+    orbits = cs.symmetry===nothing ? nothing : _fold_boundary(T, cs.billiard, N, cs.symmetry, cs.character)
+    return EBIMCache(G, Rmat, orbits)
+end
+
 # Assemble A(k), A'(k), and A''(k) for a DLP discretization using Chebyshev-interpolated H₀⁽¹⁾, H₁⁽¹⁾, J₀, and J₁. The Fredholm discretization
 # and analytic wavenumber derivatives are identical to the direct EBIM path; only radial special-function evaluation is replaced by Chebyshev interpolation.
-function _ebim_construct_matrices_cheb(cs::DoubleLayerPotentialSolver, pts::BoundaryPoints{T}, k, cfg::ChebyshevConfig; multithreaded::Bool=true) where {T<:Real}
+function _ebim_construct_matrices_cheb(cs::DoubleLayerPotentialSolver, pts::BoundaryPoints{T}, k, cfg::ChebyshevConfig, cache::EBIMCache; multithreaded::Bool=true) where {T<:Real}
     T===Float64 || error("Chebyshev-accelerated EBIM evaluation currently requires a Float64 kernel; received numeric type $T. Construct the ExpandedBIMSolver with use_chebyshev=false.")
-    kc = ComplexF64(_bim_widen_k(T, k))
-    N = length(pts)
-    graded = _is_nontrivial_dlp_grading(pts)
-    G = boundary_geom_cache(pts, graded)
-    Rmat = zeros(T, N, N)
-    kress_R!(Rmat)
+    kc = ComplexF64(_bim_widen_k(T, k)); N = length(pts)
+    G = cache.G; Rmat = cache.Rmat
     rmin, rmax = _cheb_geom_rminmax(G, [kc])
     plans0, plans1, plansj0, plansj1, _ = tune_cfie_cheb_plans(rmin, rmax, [kc], cfg)
     plan0 = plans0[1]; plan1 = plans1[1]; planj0 = plansj0[1]; planj1 = plansj1[1]
     entry_fn = (p, R, Gc, kk, i, j) -> _dlp_kernel_entry_with_derivatives_cheb(p, R, Gc, kk, plan0, plan1, planj0, planj1, i, j)
-    if cs.symmetry===nothing
-        A = Matrix{ComplexF64}(undef, N, N)
-        dA = similar(A)
-        ddA = similar(A)
+    if cache.orbits===nothing
+        A = Matrix{ComplexF64}(undef, N, N); dA = similar(A); ddA = similar(A)
         _ebim_fredholm_full_with_derivatives!(entry_fn, A, dA, ddA, pts, Rmat, G, kc; multithreaded)
         return A, dA, ddA
     end
-    orbits = _fold_boundary(T, cs.billiard, N, cs.symmetry, cs.character)
-    m = fundamental_size(orbits)
-    A = Matrix{ComplexF64}(undef, m, m)
-    dA = similar(A)
-    ddA = similar(A)
-    _ebim_fredholm_reduced_with_derivatives!(entry_fn, A, dA, ddA, pts, Rmat, G, orbits, kc; multithreaded)
+    m = fundamental_size(cache.orbits)
+    A = Matrix{ComplexF64}(undef, m, m); dA = similar(A); ddA = similar(A)
+    _ebim_fredholm_reduced_with_derivatives!(entry_fn, A, dA, ddA, pts, Rmat, G, cache.orbits, kc; multithreaded)
     return A, dA, ddA
 end
 
 # Assemble A(k), A'(k), and A''(k) for a CFIE discretization using Chebyshev-interpolated H₀⁽¹⁾, H₁⁽¹⁾, J₀, and J₁. The Fredholm discretization
 # and analytic wavenumber derivatives are identical to the direct EBIM path; only radial special-function evaluation is replaced by Chebyshev interpolation.
-function _ebim_construct_matrices_cheb(cs::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints{T}, k, cfg::ChebyshevConfig; multithreaded::Bool=true) where {T<:Real}
+function _ebim_construct_matrices_cheb(cs::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints{T}, k, cfg::ChebyshevConfig, cache::EBIMCache; multithreaded::Bool=true) where {T<:Real}
     T===Float64 || error("Chebyshev-accelerated EBIM evaluation currently requires a Float64 kernel; received numeric type $T. Construct the ExpandedBIMSolver with use_chebyshev=false.")
-    kc = ComplexF64(_bim_widen_k(T, k))
-    N = length(pts)
-    graded = _is_nontrivial_dlp_grading(pts)
-    G = boundary_geom_cache(pts, graded)
-    Rmat = zeros(T, N, N)
-    kress_R!(Rmat)
+    kc = ComplexF64(_bim_widen_k(T, k)); N = length(pts)
+    G = cache.G; Rmat = cache.Rmat
     rmin, rmax = _cheb_geom_rminmax(G, [kc])
     plans0, plans1, plansj0, plansj1, _ = tune_cfie_cheb_plans(rmin, rmax, [kc], cfg)
     plan0 = plans0[1]; plan1 = plans1[1]; planj0 = plansj0[1]; planj1 = plansj1[1]
     entry_fn = (p, R, Gc, kk, i, j) -> _cfie_kernel_entry_with_derivatives_cheb(p, R, Gc, kk, plan0, plan1, planj0, planj1, i, j)
-    if cs.symmetry===nothing
-        A = Matrix{ComplexF64}(undef, N, N)
-        dA = similar(A)
-        ddA = similar(A)
+    if cache.orbits===nothing
+        A = Matrix{ComplexF64}(undef, N, N); dA = similar(A); ddA = similar(A)
         _ebim_fredholm_full_with_derivatives!(entry_fn, A, dA, ddA, pts, Rmat, G, kc; multithreaded)
         return A, dA, ddA
     end
-    orbits = _fold_boundary(T, cs.billiard, N, cs.symmetry, cs.character)
-    m = fundamental_size(orbits)
-    A = Matrix{ComplexF64}(undef, m, m)
-    dA = similar(A)
-    ddA = similar(A)
-    _ebim_fredholm_reduced_with_derivatives!(entry_fn, A, dA, ddA, pts, Rmat, G, orbits, kc; multithreaded)
+    m = fundamental_size(cache.orbits)
+    A = Matrix{ComplexF64}(undef, m, m); dA = similar(A); ddA = similar(A)
+    _ebim_fredholm_reduced_with_derivatives!(entry_fn, A, dA, ddA, pts, Rmat, G, cache.orbits, kc; multithreaded)
     return A, dA, ddA
 end
 
-_ebim_construct_matrices_cheb(cs::CompositeBIMSolver, pts::BoundaryPoints, k, cfg::ChebyshevConfig; multithreaded::Bool=true) = error("Chebyshev-accelerated EBIM evaluation is not yet implemented for CompositeBIMSolver kernels. Construct the ExpandedBIMSolver with use_chebyshev=false.")
+_ebim_construct_matrices_cheb(cs::CompositeBIMSolver, pts::BoundaryPoints, k, cfg::ChebyshevConfig, cache; multithreaded::Bool=true) = error("Chebyshev-accelerated EBIM evaluation is not yet implemented for CompositeBIMSolver kernels. Construct the ExpandedBIMSolver with use_chebyshev=false.")
 
 # Tune the H₀⁽¹⁾, H₁⁽¹⁾, J₀, and J₁ Chebyshev approximations over the radial interval required by the boundary geometry at expansion center `k`. The
 # returned configuration uses `param_strategy=:manual` so it can be reused across subsequent EBIM evaluations without repeating the tuning procedure.
@@ -655,15 +652,17 @@ special functions through Chebyshev interpolation.
 ## Keyword Arguments
 * `multithreaded::Bool = true`: Enable multithreaded matrix assembly.
 * `cheb_config::ChebyshevConfig = solver.cheb_config`: Chebyshev configuration.
+* `cache`: Optional precomputed boundary-geometry cache to accelerate matrix construction.
 
 ## Returns
 * `A::Matrix`: Fredholm matrix `A(k)`.
 * `dA::Matrix`: First wavenumber derivative `A'(k)`.
 * `ddA::Matrix`: Second wavenumber derivative `A''(k)`.
 """
-function construct_matrices(solver::ExpandedBIMSolver, pts::BoundaryPoints, k; multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config)
+function construct_matrices(solver::ExpandedBIMSolver, pts::BoundaryPoints, k; multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config, cache=nothing)
     solver.use_chebyshev || return _ebim_construct_matrices(solver.kernel, pts, k; multithreaded)
-    return _ebim_construct_matrices_cheb(solver.kernel, pts, k, cheb_config; multithreaded)
+    cache===nothing && (cache = EBIMCache(solver.kernel, pts))
+    return _ebim_construct_matrices_cheb(solver.kernel, pts, k, cheb_config, cache; multithreaded)
 end
 
 """
@@ -695,14 +694,15 @@ estimates.
 ## Keyword Arguments
 * `multithreaded::Bool = true`: Enable multithreaded matrix assembly.
 * `cheb_config::ChebyshevConfig = solver.cheb_config`: Chebyshev configuration.
+* `cache`: Optional precomputed boundary-geometry cache to accelerate matrix construction.
 
 ## Returns
 * `ks::Vector{Complex{T}}`: Second-order EBIM eigenvalue estimates around `k`.
 * `ts::Vector{T}`: Magnitudes `|ε₁ + ε₂|` of the corresponding displacements from `k`.
 """
-function solve(solver::ExpandedBIMSolver, pts::BoundaryPoints, k, nlevels::Int; multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config)
+function solve(solver::ExpandedBIMSolver, pts::BoundaryPoints, k, nlevels::Int; multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config, cache=nothing)
     T = _bim_numeric_type(solver)
-    A, dA, ddA = construct_matrices(solver, pts, k; multithreaded, cheb_config)
+    A, dA, ddA = construct_matrices(solver, pts, k; multithreaded, cheb_config, cache)
     n = size(A, 1); nev = min(nlevels+5, n-1)
     @blas_multi_then_1 MAX_BLAS_THREADS begin
         F = lu!(A)
@@ -749,7 +749,6 @@ Taylor expansion.
 * `multithreaded::Bool = true`: Enable multithreaded matrix assembly.
 * `nlevels::Int = 5`: Number of local eigenvalue estimates to compute.
 * `cheb_config::ChebyshevConfig = solver.cheb_config`: Configuration for Chebyshev acceleration.
-
 
 ## Returns
 * `ks::Vector{Complex{T}}`: Second-order EBIM eigenvalue estimates around `k`.
