@@ -138,7 +138,7 @@ speeds and the scaled curvature entering diagonal kernel limits.
 If `corner_kress=true`, `pts.ts` is copied into `original_ts` for use by the
 corner-graded Kress construction.
 """
-function boundary_geom_cache_fused(pts::BoundaryPoints{T}, corner_kress::Bool=false) where {T<:Real}
+function boundary_geom_cache(pts::BoundaryPoints{T}, corner_kress::Bool=false) where {T<:Real}
     N = length(pts)
     length(pts.tangent)==N || throw(ArgumentError("BoundaryPoints does not contain tangent data"))
     length(pts.tangent_2)==N || throw(ArgumentError("BoundaryPoints does not contain tangent_2 data"))
