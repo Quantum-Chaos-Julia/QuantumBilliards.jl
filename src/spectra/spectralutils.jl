@@ -245,12 +245,16 @@ function compute_spectrum(solver::BeynSolver, billiard::Bi, k1, k2; multithreade
     for i in 1:nw
         pts[i] = evaluate_points(solver, billiard, real(k0[i]))
     end
+    cheb_config = solver.cheb_config
+    if solver.use_chebyshev && solver.cheb_config.param_strategy!==:manual
+        cheb_config = tune_cheb_config(solver.kernel, pts[end], real(k0[end])+R[end], solver.cheb_config)
+    end
     if !solver.imag_k_check
         ks_win = Vector{Vector{Complex{T}}}(undef, nw); ts_win = Vector{Vector{T}}(undef, nw)
         if solver.eigenvectors
             X_win = Vector{Matrix{Complex{T}}}(undef, nw)
             @maybe_showprogress show_progress for i in 1:nw
-                ks_win[i], ts_win[i], X_win[i] = solve_vectors(solver, pts[i], k0[i], 2R[i]; multithreaded)
+                ks_win[i], ts_win[i], X_win[i] = solve_vectors(solver, pts[i], k0[i], 2R[i]; multithreaded, cheb_config)
             end
             states_win = [[BIMEigenstate(ks_win[i][j], symmetrize_layer_density(solver.kernel, X_win[i][:,j], pts[i], billiard), ts_win[i][j], solver.kernel, billiard, pts[i]) for j in eachindex(ks_win[i])] for i in 1:nw]
             ks = reduce(vcat, ks_win); ts = reduce(vcat, ts_win); states = reduce(vcat, states_win)
@@ -258,16 +262,16 @@ function compute_spectrum(solver::BeynSolver, billiard::Bi, k1, k2; multithreade
             return _finalize_spectrum(ks[keep], ts[keep], fill(false, count(keep)); states=states[keep])
         end
         @maybe_showprogress show_progress for i in 1:nw
-            ks_win[i], ts_win[i] = solve(solver, pts[i], k0[i], 2R[i]; multithreaded)
+            ks_win[i], ts_win[i] = solve(solver, pts[i], k0[i], 2R[i]; multithreaded, cheb_config)
         end
         ks = reduce(vcat, ks_win); ts = reduce(vcat, ts_win); keep = (T(k1).<=real.(ks)).&(real.(ks).<=T(k2))
         return _finalize_spectrum(ks[keep], ts[keep], fill(false, count(keep)))
     end
     ks_win = Vector{Vector{Complex{T}}}(undef, nw); X_win = Vector{Matrix{Complex{T}}}(undef, nw)
     @maybe_showprogress show_progress for i in 1:nw
-        ks_win[i], X_win[i] = _beyn_projected_solve(solver, pts[i], k0[i], 2R[i]; multithreaded)
+        ks_win[i], X_win[i] = _beyn_projected_solve(solver, pts[i], k0[i], 2R[i]; multithreaded, cheb_config)
     end
-    idx_keep, residuals = _beyn_imag_k_check(solver, ks_win, X_win, pts; multithreaded)
+    idx_keep, residuals = _beyn_imag_k_check(solver, ks_win, X_win, pts; multithreaded, cheb_config)
     n = sum(length, idx_keep); ks = Vector{Complex{T}}(undef, n); ts = Vector{T}(undef, n); control = Vector{Bool}(undef, n)
     if solver.eigenvectors
         entries = Tuple{Int,Int}[]; p = 0

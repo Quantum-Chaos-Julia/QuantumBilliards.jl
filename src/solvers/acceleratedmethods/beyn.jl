@@ -179,6 +179,20 @@ function beyn_buffer_matrices(::Type{T}, N::Int, r::Int, rng) where {T<:Real}
     return V, X, A0, A1
 end
 
+function tune_cheb_config(cs::DoubleLayerPotentialSolver, pts::BoundaryPoints, k, cfg::ChebyshevConfig)
+    z = ComplexF64[ComplexF64(k)]; G = boundary_geom_cache(pts, _is_nontrivial_dlp_grading(pts))
+    rmin, rmax = _cheb_geom_rminmax(G, z)
+    _, _, tuned = tune_dlp_cheb_plans(rmin, rmax, z, cfg)
+    return ChebyshevConfig(_bim_numeric_type(cs); n_panels_h=tuned.n_panels_h, M_h=tuned.M_h, n_panels_j=tuned.n_panels_j, M_j=tuned.M_j, tol=tuned.tol, max_iter=tuned.max_iter, sampling_points=tuned.sampling_points, grow_panels=tuned.grow_panels, grow_M=tuned.grow_M, param_strategy=:manual)
+end
+
+function tune_cheb_config(cs::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints, k, cfg::ChebyshevConfig)
+    z = ComplexF64[ComplexF64(k)]; G = boundary_geom_cache(pts, _is_nontrivial_dlp_grading(pts))
+    rmin, rmax = _cheb_geom_rminmax(G, z)
+    _, _, _, _, tuned = tune_cfie_cheb_plans(rmin, rmax, z, cfg)
+    return ChebyshevConfig(_bim_numeric_type(cs); n_panels_h=tuned.n_panels_h, M_h=tuned.M_h, n_panels_j=tuned.n_panels_j, M_j=tuned.M_j, tol=tuned.tol, max_iter=tuned.max_iter, sampling_points=tuned.sampling_points, grow_panels=tuned.grow_panels, grow_M=tuned.grow_M, param_strategy=:manual)
+end
+
 function _construct_matrices_multi_k_cheb(cs::DoubleLayerPotentialSolver, pts::BoundaryPoints{T}, zj::Vector{ComplexF64}, cfg::ChebyshevConfig; multithreaded::Bool=true) where {T<:Real}
     T === Float64 || error("Chebyshev-accelerated Beyn evaluation requires Float64")
     N = length(pts); graded = _is_nontrivial_dlp_grading(pts); G = boundary_geom_cache(pts, graded); Rmat = zeros(T, N, N); kress_R!(Rmat)
@@ -218,7 +232,7 @@ function _accumulate_beyn_moments!(A0, A1, X, V, Fs, zj, wj)
 end
 
 """
-    construct_matrices(solver::BeynSolver, pts::BoundaryPoints, k0, R; multithreaded::Bool=true, rng=MersenneTwister(0))
+    construct_matrices(solver::BeynSolver, pts::BoundaryPoints, k0, R; multithreaded::Bool=true, rng=MersenneTwister(0), cheb_config::ChebyshevConfig=solver.cheb_config)
 
 Construct the zeroth and first contour moments used by Beyn's nonlinear
 eigensolver. Fredholm matrices are assembled and factorized once; if the
@@ -234,16 +248,17 @@ reusing those factorizations.
 ## Keyword Arguments
 * `multithreaded::Bool=true`: Enable multithreaded matrix construction.
 * `rng=MersenneTwister(0)`: Random-number generator for probing matrices.
+* `cheb_config::ChebyshevConfig=solver.cheb_config`: Chebyshev configuration used for accelerated matrix construction.
 
 ## Returns
 * `A0::Matrix{Complex{T}}`: Zeroth contour moment.
 * `A1::Matrix{Complex{T}}`: First contour moment.
 """
-function construct_matrices(solver::BeynSolver, pts::BoundaryPoints, k0, R; multithreaded::Bool=true, rng=MersenneTwister(0))
+function construct_matrices(solver::BeynSolver, pts::BoundaryPoints, k0, R; multithreaded::Bool=true, rng=MersenneTwister(0), cheb_config::ChebyshevConfig=solver.cheb_config)
     T = _bim_numeric_type(solver); N = boundary_matrix_size(solver.kernel, pts); k0c = Complex{T}(k0); Rc = T(R); nq = solver.nq
     θ = range(zero(T), 2T(pi); length=nq+1)[1:end-1]; ej = cis.(θ); zj = k0c .+ Rc.*ej; wj = (Rc/nq).*ej
     if solver.use_chebyshev
-        Tbufs = _construct_matrices_multi_k_cheb(solver.kernel, pts, ComplexF64.(zj), solver.cheb_config; multithreaded)
+        Tbufs = _construct_matrices_multi_k_cheb(solver.kernel, pts, ComplexF64.(zj), cheb_config; multithreaded)
     else
         Tbufs = Vector{Matrix{Complex{T}}}(undef, nq)
         @inbounds for j in eachindex(zj)
@@ -266,7 +281,7 @@ function construct_matrices(solver::BeynSolver, pts::BoundaryPoints, k0, R; mult
 end
 
 """
-    _beyn_projected_solve(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, rng=MersenneTwister(0))
+    _beyn_projected_solve(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, rng=MersenneTwister(0), cheb_config::ChebyshevConfig=solver.cheb_config)
 
 Perform the projected stage of Beyn's method without nonlinear-residual
 validation. The contour has center `k0` and radius `dk/2`. The reduced Beyn
@@ -282,14 +297,15 @@ outside the contour are discarded.
 ## Keyword Arguments
 * `multithreaded::Bool=true`: Enable multithreaded matrix construction.
 * `rng=MersenneTwister(0)`: Random-number generator for probing.
+* `cheb_config::ChebyshevConfig=solver.cheb_config`: Chebyshev configuration.
 
 ## Returns
 * `ks::Vector{Complex{T}}`: Complex roots inside the contour.
 * `X::Matrix{Complex{T}}`: Corresponding layer density vectors as columns.
 """
-function _beyn_projected_solve(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, rng=MersenneTwister(0))
-    T = _bim_numeric_type(solver); k0c = Complex{T}(k0); Rc = T(dk)/2; 
-    @blas_1 A0, A1 = construct_matrices(solver, pts, k0c, Rc; multithreaded, rng)
+function _beyn_projected_solve(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, rng=MersenneTwister(0), cheb_config::ChebyshevConfig=solver.cheb_config)
+    T = _bim_numeric_type(solver); k0c = Complex{T}(k0); Rc = T(dk)/2
+    @blas_1 A0, A1 = construct_matrices(solver, pts, k0c, Rc; multithreaded, rng, cheb_config)
     N = size(A0, 1)
     @blas_multi_then_1 MAX_BLAS_THREADS U, Σ, W = svd!(A0; full=false)
     rk = count(>=(solver.svd_tol), Σ)
@@ -302,9 +318,9 @@ function _beyn_projected_solve(solver::BeynSolver, pts::BoundaryPoints, k0, dk; 
     B = Matrix{Complex{T}}(undef, rk, rk)
     @blas_multi_then_1 MAX_BLAS_THREADS mul!(B, adjoint(Uk), tmp)
     @blas_multi_then_1 MAX_BLAS_THREADS ev = eigen!(B)
-    ks = ev.values; X = Uk*ev.vectors; idx = findall(j -> abs(ks[j]-k0c) <= Rc, eachindex(ks))
+    ks = ev.values; X = Uk*ev.vectors; idx = findall(j -> abs(ks[j]-k0c)<=Rc, eachindex(ks))
     isempty(idx) && return Complex{T}[], Matrix{Complex{T}}(undef, N, 0)
-    return ks[idx], X[:, idx]
+    return ks[idx], X[:,idx]
 end
 
 # Compute the residual of a candidate root and its corresponding layer density vector.
@@ -315,7 +331,7 @@ end
 end
 
 """
-    _beyn_solve_core(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, rng=MersenneTwister(0))
+    _beyn_solve_core(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, rng=MersenneTwister(0), cheb_config::ChebyshevConfig=solver.cheb_config)
 
 Perform an exhaustive single-contour Beyn solve. Every projected candidate is
 explicitly residual-checked. This is the reference path used by `solve` and
@@ -330,26 +346,27 @@ explicitly residual-checked. This is the reference path used by `solve` and
 ## Keyword Arguments
 * `multithreaded::Bool=true`: Enable multithreaded matrix construction.
 * `rng=MersenneTwister(0)`: Random-number generator for probing.
+* `cheb_config::ChebyshevConfig=solver.cheb_config`: Chebyshev configuration.
 
 ## Returns
 * `ks::Vector{Complex{T}}`: Accepted complex roots.
 * `residuals::Vector{T}`: Corresponding nonlinear residuals.
 * `X::Matrix{Complex{T}}`: Corresponding layer density vectors.
 """
-function _beyn_solve_core(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, rng=MersenneTwister(0))
-    T = _bim_numeric_type(solver); ks, X = _beyn_projected_solve(solver, pts, k0, dk; multithreaded, rng); N = size(X, 1)
+function _beyn_solve_core(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, rng=MersenneTwister(0), cheb_config::ChebyshevConfig=solver.cheb_config)
+    T = _bim_numeric_type(solver); ks, X = _beyn_projected_solve(solver, pts, k0, dk; multithreaded, rng, cheb_config); N = size(X, 1)
     isempty(ks) && return Complex{T}[], T[], Matrix{Complex{T}}(undef, N, 0)
     !solver.auto_discard_spurious && return ks, fill(T(NaN), length(ks)), X
     residuals = Vector{T}(undef, length(ks)); keep = falses(length(ks)); y = Vector{Complex{T}}(undef, N)
     @inbounds for j in eachindex(ks)
-        rj = _beyn_residual(solver, pts, ks[j], @view(X[:, j]), y; multithreaded); residuals[j] = rj; keep[j] = rj < solver.res_tol
+        rj = _beyn_residual(solver, pts, ks[j], @view(X[:,j]), y; multithreaded); residuals[j] = rj; keep[j] = rj<solver.res_tol
     end
     idx = findall(keep)
-    return ks[idx], residuals[idx], isempty(idx) ? Matrix{Complex{T}}(undef, N, 0) : X[:, idx]
+    return ks[idx], residuals[idx], isempty(idx) ? Matrix{Complex{T}}(undef, N, 0) : X[:,idx]
 end
 
 """
-    _beyn_imag_k_check(solver::BeynSolver, ks_all, X_all, all_pts; pad::Int=solver.imag_k_pad, group_size::Int=solver.imag_k_group_size, multithreaded::Bool=true)
+    _beyn_imag_k_check(solver::BeynSolver, ks_all, X_all, all_pts; pad::Int=solver.imag_k_pad, group_size::Int=solver.imag_k_group_size, multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config)
 
 Apply imaginary-`k` screening to projected roots from multiple Beyn
 windows.
@@ -374,13 +391,14 @@ multi-`k` Chebyshev backend when available.
 * `pad::Int=solver.imag_k_pad`: Consecutive good roots required before stopping.
 * `group_size::Int=solver.imag_k_group_size`: Maximum residual-check batch size.
 * `multithreaded::Bool=true`: Enable multithreaded matrix construction.
+* `cheb_config::ChebyshevConfig=solver.cheb_config`: Chebyshev configuration.
 
 ## Returns
 * `idx_keep::Vector{Vector{Int}}`: Retained local root indices for each window.
 * `residuals::Vector{Vector{T}}`: Residuals aligned with retained roots. Roots
   accepted after early termination contain `NaN`.
 """
-function _beyn_imag_k_check(solver::BeynSolver, ks_all, X_all, all_pts; pad::Int=solver.imag_k_pad, group_size::Int=solver.imag_k_group_size, multithreaded::Bool=true)
+function _beyn_imag_k_check(solver::BeynSolver, ks_all, X_all, all_pts; pad::Int=solver.imag_k_pad, group_size::Int=solver.imag_k_group_size, multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config)
     T = _bim_numeric_type(solver); nw = length(ks_all)
     keep = [trues(length(ks_all[i])) for i in 1:nw]; residuals = [fill(T(NaN), length(ks_all[i])) for i in 1:nw]; candidates = Tuple{Int,Int,T}[]
     @inbounds for i in 1:nw
@@ -403,7 +421,7 @@ function _beyn_imag_k_check(solver::BeynSolver, ks_all, X_all, all_pts; pad::Int
                 for q in 1:nk
                     zg[q] = ComplexF64(ks_all[i][js[q]])
                 end
-                Abufs = _construct_matrices_multi_k_cheb(solver.kernel, pts, zg, solver.cheb_config; multithreaded)
+                Abufs = _construct_matrices_multi_k_cheb(solver.kernel, pts, zg, cheb_config; multithreaded)
                 for q in 1:nk
                     j = js[q]
                     @blas_multi_then_1 MAX_BLAS_THREADS mul!(y, Abufs[q], @view(X_all[i][:, j]))
@@ -438,7 +456,7 @@ function _beyn_imag_k_check(solver::BeynSolver, ks_all, X_all, all_pts; pad::Int
 end
 
 """
-    solve(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true)
+    solve(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config)
 
 Solve one circular Beyn contour with residual validation.
 
@@ -450,18 +468,19 @@ Solve one circular Beyn contour with residual validation.
 
 ## Keyword Arguments
 * `multithreaded::Bool=true`: Enable multithreaded matrix construction.
+* `cheb_config::ChebyshevConfig=solver.cheb_config`: Chebyshev configuration.
 
 ## Returns
 * `ks::Vector{Complex{T}}`: Accepted complex eigenvalues.
 * `residuals::Vector{T}`: Corresponding nonlinear residuals.
 """
-function solve(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true)
-    ks, residuals, _ = _beyn_solve_core(solver, pts, k0, dk; multithreaded)
+function solve(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config)
+    ks, residuals, _ = _beyn_solve_core(solver, pts, k0, dk; multithreaded, cheb_config)
     return ks, residuals
 end
 
 """
-    solve_vectors(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true)
+    solve_vectors(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config)
 
 Solve one circular Beyn contour with residual validation and return
 the corresponding layer density vectors.
@@ -474,14 +493,15 @@ the corresponding layer density vectors.
 
 ## Keyword Arguments
 * `multithreaded::Bool=true`: Enable multithreaded matrix construction.
+* `cheb_config::ChebyshevConfig=solver.cheb_config`: Chebyshev configuration.
 
 ## Returns
 * `ks::Vector{Complex{T}}`: Accepted complex eigenvalues.
 * `residuals::Vector{T}`: Corresponding nonlinear residuals.
 * `X::Matrix{Complex{T}}`: Corresponding layer density vectors.
 """
-function solve_vectors(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true)
-    return _beyn_solve_core(solver, pts, k0, dk; multithreaded)
+function solve_vectors(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config)
+    return _beyn_solve_core(solver, pts, k0, dk; multithreaded, cheb_config)
 end
 
 """
