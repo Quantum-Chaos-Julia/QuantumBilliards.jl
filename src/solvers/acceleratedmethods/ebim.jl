@@ -622,17 +622,15 @@ _ebim_construct_matrices_cheb(cs::CompositeBIMSolver, pts::BoundaryPoints, k, cf
 
 # Tune the H₀⁽¹⁾, H₁⁽¹⁾, J₀, and J₁ Chebyshev approximations over the radial interval required by the boundary geometry at expansion center `k`. The
 # returned configuration uses `param_strategy=:manual` so it can be reused across subsequent EBIM evaluations without repeating the tuning procedure.
-function _tune_ebim_cheb_config(solver::ExpandedBIMSolver, pts::BoundaryPoints{T}, k) where {T<:Real}
-    kc = ComplexF64(_bim_widen_k(T, k))
-    graded = _is_nontrivial_dlp_grading(pts)
-    G = boundary_geom_cache(pts, graded)
-    rmin, rmax = _cheb_geom_rminmax(G, [kc])
-    _, _, _, _, cfg_used = tune_cfie_cheb_plans(rmin, rmax, [kc], solver.cheb_config)
-    return ChebyshevConfig(T; n_panels_h=cfg_used.n_panels_h, M_h=cfg_used.M_h, n_panels_j=cfg_used.n_panels_j, M_j=cfg_used.M_j, tol=cfg_used.tol, max_iter=cfg_used.max_iter, sampling_points=cfg_used.sampling_points, grow_panels=cfg_used.grow_panels, grow_M=cfg_used.grow_M, param_strategy=:manual)
+function tune_ebim_cheb_config(cs::Union{DoubleLayerPotentialSolver,CombinedFieldIntegralEquationSolver}, pts::BoundaryPoints, k, cfg::ChebyshevConfig)
+    z = ComplexF64[ComplexF64(k)]; G = boundary_geom_cache(pts, _is_nontrivial_dlp_grading(pts))
+    rmin, rmax = _cheb_geom_rminmax(G, z)
+    _, _, _, _, tuned = tune_cfie_cheb_plans(rmin, rmax, z, cfg)
+    return ChebyshevConfig(_bim_numeric_type(cs); n_panels_h=tuned.n_panels_h, M_h=tuned.M_h, n_panels_j=tuned.n_panels_j, M_j=tuned.M_j, tol=tuned.tol, max_iter=tuned.max_iter, sampling_points=tuned.sampling_points, grow_panels=tuned.grow_panels, grow_M=tuned.grow_M, param_strategy=:manual)
 end
 
 """
-    construct_matrices(solver::ExpandedBIMSolver, pts::BoundaryPoints, k; multithreaded::Bool=true, cheb_override::Union{Nothing,ChebyshevConfig}=nothing)
+    construct_matrices(solver::ExpandedBIMSolver, pts::BoundaryPoints, k; multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config)
 
 Assemble the Fredholm matrix and its first two wavenumber derivatives at `k`.
 
@@ -647,8 +645,7 @@ and define the second-order local expansion used by EBIM,
     A(k + ε) = A + ε*dA + (ε²/2)*ddA + O(ε³).
 
 If `solver.use_chebyshev` is `true`, supported kernels evaluate their radial
-special functions through Chebyshev interpolation. `cheb_override` may be used
-to supply a pre-tuned configuration for the current evaluation.
+special functions through Chebyshev interpolation. 
 
 ## Arguments
 * `solver::ExpandedBIMSolver`: EBIM solver defining the underlying BIM kernel.
@@ -657,21 +654,20 @@ to supply a pre-tuned configuration for the current evaluation.
 
 ## Keyword Arguments
 * `multithreaded::Bool = true`: Enable multithreaded matrix assembly.
-* `cheb_override::Union{Nothing,ChebyshevConfig} = nothing`: Optional Chebyshev configuration overriding `solver.cheb_config` for this call.
+* `cheb_config::ChebyshevConfig = solver.cheb_config`: Chebyshev configuration.
 
 ## Returns
 * `A::Matrix`: Fredholm matrix `A(k)`.
 * `dA::Matrix`: First wavenumber derivative `A'(k)`.
 * `ddA::Matrix`: Second wavenumber derivative `A''(k)`.
 """
-function construct_matrices(solver::ExpandedBIMSolver, pts::BoundaryPoints, k; multithreaded::Bool=true, cheb_override::Union{Nothing,ChebyshevConfig}=nothing)
+function construct_matrices(solver::ExpandedBIMSolver, pts::BoundaryPoints, k; multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config)
     solver.use_chebyshev || return _ebim_construct_matrices(solver.kernel, pts, k; multithreaded)
-    cfg = cheb_override===nothing ? solver.cheb_config : cheb_override
-    return _ebim_construct_matrices_cheb(solver.kernel, pts, k, cfg; multithreaded)
+    return _ebim_construct_matrices_cheb(solver.kernel, pts, k, cheb_config; multithreaded)
 end
 
 """
-    solve(solver::ExpandedBIMSolver, pts::BoundaryPoints, k, nlevels::Int; multithreaded::Bool=true, cheb_override::Union{Nothing,ChebyshevConfig}=nothing)
+    solve(solver::ExpandedBIMSolver, pts::BoundaryPoints, k, nlevels::Int; multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config)
 
 Compute second-order EBIM eigenvalue estimates around the expansion center `k`.
 
@@ -698,46 +694,39 @@ estimates.
 
 ## Keyword Arguments
 * `multithreaded::Bool = true`: Enable multithreaded matrix assembly.
-* `cheb_override::Union{Nothing,ChebyshevConfig} = nothing`: Optional pre-tuned Chebyshev configuration for this evaluation.
+* `cheb_config::ChebyshevConfig = solver.cheb_config`: Chebyshev configuration.
 
 ## Returns
 * `ks::Vector{Complex{T}}`: Second-order EBIM eigenvalue estimates around `k`.
 * `ts::Vector{T}`: Magnitudes `|ε₁ + ε₂|` of the corresponding displacements from `k`.
 """
-function solve(solver::ExpandedBIMSolver, pts::BoundaryPoints, k, nlevels::Int; multithreaded::Bool = true, cheb_override::Union{Nothing,ChebyshevConfig} = nothing)
+function solve(solver::ExpandedBIMSolver, pts::BoundaryPoints, k, nlevels::Int; multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config)
     T = _bim_numeric_type(solver)
-    A, dA, ddA = construct_matrices(solver, pts, k; multithreaded, cheb_override)
-    n = size(A, 1); 
-    nev = min(nlevels+5, n-1)
+    A, dA, ddA = construct_matrices(solver, pts, k; multithreaded, cheb_config)
+    n = size(A, 1); nev = min(nlevels+5, n-1)
     @blas_multi_then_1 MAX_BLAS_THREADS begin
         F = lu!(A)
         Ft = adjoint(F); dAt = adjoint(dA)
         op_r = x -> F \ (dA*x)
         op_l = x -> dAt*(Ft \ x)
-        μ, (VR, UL), (info_r, info_l) = KrylovKit.bieigsolve((op_r, op_l), n, nev, :LM, Complex{T}; tol = solver.tol, maxiter = solver.maxiter, krylovdim = max(solver.krylovdim, 2*nev+1))
+        μ, (VR, UL), (info_r, info_l) = KrylovKit.bieigsolve((op_r, op_l), n, nev, :LM, Complex{T}; tol=solver.tol, maxiter=solver.maxiter, krylovdim=max(solver.krylovdim, 2*nev+1))
         nconv = min(info_r.converged, info_l.converged)
         nconv >= nlevels || error("EBIM Krylov solve converged only $nconv eigenpairs; requested $nlevels")
-        p = sortperm(abs.(μ[1:nconv]); rev = true)
-        nkeep = min(nev, nconv)
-        ks = Vector{Complex{T}}(undef, nkeep); ts = Vector{T}(undef, nkeep)
-        buf = Vector{Complex{T}}(undef, n)
+        p = sortperm(abs.(μ[1:nconv]); rev=true); nkeep = min(nev, nconv)
+        ks = Vector{Complex{T}}(undef, nkeep); ts = Vector{T}(undef, nkeep); buf = Vector{Complex{T}}(undef, n)
         @inbounds for q in 1:nkeep
-            j = p[q]
-            λ = inv(μ[j]); v = VR[j]; u = UL[j]
-            ε1 = -λ
+            j = p[q]; λ = inv(μ[j]); v = VR[j]; u = UL[j]; ε1 = -λ
             mul!(buf, ddA, v); num = dot(u, buf)
             mul!(buf, dA, v); den = dot(u, buf)
-            ε2 = abs(den) > eps(T) ? -T(0.5)*ε1^2*(num/den) : zero(ε1)
-            corr = ε1+ε2
-            ks[q] = k+corr
-            ts[q] = abs(corr)
+            ε2 = abs(den)>eps(T) ? -T(0.5)*ε1^2*(num/den) : zero(ε1)
+            corr = ε1+ε2; ks[q] = k+corr; ts[q] = abs(corr)
         end
     end
     return ks, ts
 end
 
 """
-    solve_wavenumber(solver::ExpandedBIMSolver, billiard::Bi, k, dk; multithreaded::Bool=true, nlevels::Int=5) where {Bi<:AbsBilliard}
+    solve_wavenumber(solver::ExpandedBIMSolver, billiard::Bi, k, dk; multithreaded::Bool=true, nlevels::Int=5, cheb_config::ChebyshevConfig=solver.cheb_config) where {Bi<:AbsBilliard}
 
 Compute local second-order EBIM eigenvalue estimates around the expansion
 center `k`.
@@ -759,14 +748,16 @@ Taylor expansion.
 ## Keyword Arguments
 * `multithreaded::Bool = true`: Enable multithreaded matrix assembly.
 * `nlevels::Int = 5`: Number of local eigenvalue estimates to compute.
+* `cheb_config::ChebyshevConfig = solver.cheb_config`: Configuration for Chebyshev acceleration.
+
 
 ## Returns
 * `ks::Vector{Complex{T}}`: Second-order EBIM eigenvalue estimates around `k`.
 * `ts::Vector{T}`: Magnitudes of the corresponding EBIM displacements from `k`.
 """
-function solve_wavenumber(solver::ExpandedBIMSolver, billiard::Bi, k, dk; multithreaded::Bool=true, nlevels::Int=5) where {Bi<:AbsBilliard}
+function solve_wavenumber(solver::ExpandedBIMSolver, billiard::Bi, k, dk; multithreaded::Bool=true, nlevels::Int=5, cheb_config::ChebyshevConfig=solver.cheb_config) where {Bi<:AbsBilliard}
     pts = evaluate_points(solver, billiard, k)
-    return solve(solver, pts, k, nlevels; multithreaded)
+    return solve(solver, pts, k, nlevels; multithreaded, cheb_config)
 end
 
 """
@@ -798,13 +789,18 @@ solvers and is not used by the local EBIM expansion.
 * `ts::Vector{T}`: Magnitudes of the corresponding displacements from their expansion centers.
 """
 function solve_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k, dk; multithreaded::Bool=true, nlevels::Int=5) where {Bi<:AbsBilliard}
-    T = _bim_numeric_type(solver)
-    ks = Complex{T}[]
-    ts = T[]
-    for ki in k
-        ksi, tsi = solve_wavenumber(solver, billiard, ki, dk; multithreaded, nlevels)
-        append!(ks, ksi)
-        append!(ts, tsi)
+    T = _bim_numeric_type(solver); kv = collect(k)
+    isempty(kv) && return Complex{T}[], T[]
+    cheb_config = solver.cheb_config
+    if solver.use_chebyshev && solver.cheb_config.param_strategy!==:manual
+        imax = argmax(real.(kv))
+        pts_max = evaluate_points(solver, billiard, kv[imax])
+        cheb_config = tune_ebim_cheb_config(solver.kernel, pts_max, kv[imax], solver.cheb_config)
+    end
+    ks = Complex{T}[]; ts = T[]
+    for ki in kv
+        ksi, tsi = solve_wavenumber(solver, billiard, ki, dk; multithreaded, nlevels, cheb_config)
+        append!(ks, ksi); append!(ts, tsi)
     end
     return ks, ts
 end

@@ -394,10 +394,10 @@ eigenstates are constructed.
 ## Returns
 * `data::SpectralData`: Finalized eigenvalues, tensions, and control flags without eigenstates.
 """
-function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::Function = (k -> 0.05), tol = 1e-5, spacing_frac = 0.02, tolmax = 5e-3, local_window::Int = 4, seg_reuse_frac = 0.95, multithreaded::Bool = true, show_progress::Bool = true) where {Bi<:AbsBilliard}
+function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::Function=(k -> 0.05), tol=1e-5, spacing_frac=0.02, tolmax=5e-3, local_window::Int=4, seg_reuse_frac=0.95, multithreaded::Bool=true, show_progress::Bool=true) where {Bi<:AbsBilliard}
     T = _bim_numeric_type(solver); k1T, k2T = T(k1), T(k2); tolT, spacingT, tolmaxT, reuseT = T(tol), T(spacing_frac), T(tolmax), T(seg_reuse_frac)
     k1T < k2T || throw(ArgumentError("require k1 < k2")); 0 < reuseT <= 1 || throw(ArgumentError("seg_reuse_frac must satisfy 0 < seg_reuse_frac <= 1"))
-    fundamental = solver.kernel.symmetry !== nothing
+    fundamental = solver.kernel.symmetry!==nothing
     ks_grid = T[]; dks = T[]; nlevels = Int[]; k = k1T
     while k < k2T
         Δk = T(dk(k)); Δk > 0 || throw(ArgumentError("dk(k) must be positive; received dk($k) = $Δk"))
@@ -407,11 +407,11 @@ function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::F
     end
     n = length(ks_grid); n > 0 || throw(ArgumentError("Spectrum interval [$k1,$k2] contains no expansion centers"))
     ks_corr = Vector{Vector{Complex{T}}}(undef, n); ts_corr = Vector{Vector{T}}(undef, n)
-    pts = evaluate_points(solver, billiard, ks_grid[1]); cheb_override = nothing
-    if solver.use_chebyshev
-        solver.cheb_config.param_strategy === :manual && (cheb_override = solver.cheb_config)
-        solver.cheb_config.param_strategy === :global && (cheb_override = _tune_ebim_cheb_config(solver, evaluate_points(solver, billiard, ks_grid[end]), ks_grid[end]))
-        solver.cheb_config.param_strategy === :segment && (cheb_override = _tune_ebim_cheb_config(solver, pts, ks_grid[1]))
+    pts = evaluate_points(solver, billiard, ks_grid[1])
+    cheb_config = solver.cheb_config
+    if solver.use_chebyshev && solver.cheb_config.param_strategy!==:manual
+        pts_max = evaluate_points(solver, billiard, ks_grid[end])
+        cheb_config = tune_ebim_cheb_config(solver.kernel, pts_max, ks_grid[end], solver.cheb_config)
     end
     progress = show_progress ? Progress(n) : nothing
     seg_first = 1
@@ -420,13 +420,10 @@ function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::F
         while seg_last < n && ks_grid[seg_last+1] <= ks_grid[seg_first]/reuseT
             seg_last += 1
         end
-        if seg_last != seg_first
-            pts = evaluate_points(solver, billiard, ks_grid[seg_last])
-            solver.use_chebyshev && solver.cheb_config.param_strategy === :segment && (cheb_override = _tune_ebim_cheb_config(solver, pts, ks_grid[seg_last]))
-        end
+        seg_last!=seg_first && (pts = evaluate_points(solver, billiard, ks_grid[seg_last]))
         for i in seg_first:seg_last
-            ki, ti = solve(solver, pts, ks_grid[i], nlevels[i]; multithreaded, cheb_override)
-            keep = abs.(real.(ki) .- ks_grid[i]) .<= dks[i]
+            ki, ti = solve(solver, pts, ks_grid[i], nlevels[i]; multithreaded, cheb_config)
+            keep = abs.(real.(ki).-ks_grid[i]).<=dks[i]
             ks_corr[i] = ki[keep]; ts_corr[i] = ti[keep]
             show_progress && next!(progress)
         end
@@ -434,9 +431,9 @@ function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::F
     end
     ks = Complex{T}[]; ts = T[]; control = Bool[]
     for i in eachindex(ks_corr)
-        overlap_and_merge_ebim!(ks, ts, ks_corr[i], ts_corr[i], control; tol = tolT, spacing_frac = spacingT, tolmax = tolmaxT, local_window)
+        overlap_and_merge_ebim!(ks, ts, ks_corr[i], ts_corr[i], control; tol=tolT, spacing_frac=spacingT, tolmax=tolmaxT, local_window)
     end
-    keep = (k1T .<= real.(ks)) .& (real.(ks) .<= k2T)
+    keep = (k1T.<=real.(ks)).&(real.(ks).<=k2T)
     return _finalize_spectrum(ks[keep], ts[keep], control[keep])
 end
 
