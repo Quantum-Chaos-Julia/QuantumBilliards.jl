@@ -36,7 +36,6 @@ export resize_basis, basis_fun, dk_fun, gradient, basis_and_gradient
 include("solvers/boundarypoints.jl")
 export BoundaryPoints
 export boundary_s, component_offsets, points_in_billiard
-export estimate_rmin_rmax
 include("solvers/boundarygeomcache.jl")
 export BoundaryPanelArrays, BoundaryGeomCache, boundary_geom_cache, component_normals
 export flatten_boundary_components, flatten_boundary_ds

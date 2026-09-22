@@ -123,32 +123,43 @@ function k_sweep(solver::SweepBIMSolver, billiard::Bi, ks; multithreaded::Bool=t
 end
 
 """
+    _fold_boundary(::Type{T}, billiard::Bi, N::Int, symmetry::AbsSymmetry, character::Tuple) where {T<:Real,Bi<:AbsBilliard} → orbits::SymmetryOrbitMap{T}
 
-    _fold_boundary(::Type{T}, xy, symmetry::AbsSymmetry, character::Tuple) where {T<:Real} → orbits::SymmetryOrbitMap{T}
+Construct the exact symmetry-orbit map used to fold or expand one invariant
+physical boundary component.
 
-Construct the symmetry-orbit map used to fold or expand a BIM boundary discretization.
-The stored symmetry character is converted to the representation expected by
-[`symmetry_index_orbits`](@ref). Ordinary symmetry types receive the character
-entries as separate scalar arguments, while [`CompositeReflection`](@ref)
-receives them as a single `Vector{Complex{T}}`.
+## Description
+The orbit map is derived algebraically from the physical-boundary
+reconstruction encoded by `billiard.symmetries`. No boundary coordinates are
+used and no floating-point point matching is performed.
+
+The stored solver character is converted to the representation expected by
+[`BilliardGeometry.symmetry_index_orbits`](@ref). Ordinary symmetry types
+receive character entries as separate scalar arguments, while
+[`CompositeReflection`](@ref) receives them as a single
+`Vector{Complex{T}}`.
 
 ## Arguments
 * `T::Type{<:Real}`: Real scalar type used by the boundary discretization.
-* `xy`: Boundary coordinates on the complete physical boundary.
+* `billiard::Bi`: Billiard defining the physical symmetry reconstruction.
+* `N::Int`: Number of nodes on the complete invariant physical component.
 * `symmetry::AbsSymmetry`: Active boundary symmetry.
-* `character::Tuple`: Characters of the selected symmetry irreps.
+* `character::Tuple`: Characters of the selected symmetry irrep.
 
 ## Returns
-* `orbits::SymmetryOrbitMap{T}`: Symmetry-orbit mapping between the complete and fundamental-domain boundary discretizations.
+* `orbits::SymmetryOrbitMap{T}`: Exact symmetry-orbit map.
 """
-_fold_boundary(::Type{T}, xy, symmetry::AbsSymmetry, character::Tuple) where {T<:Real} = symmetry_index_orbits(T,xy,symmetry,Complex{T}.(character)...)
-_fold_boundary(::Type{T}, xy, symmetry::CompositeReflection, character::Tuple) where {T<:Real} = symmetry_index_orbits(T,xy,symmetry,Complex{T}[character...])
-function _fold_boundary(::Type{T}, xy, symmetry::NFoldRotation, character::Tuple) where {T<:Real}
-    isempty(character) && return symmetry_index_orbits(T,xy,symmetry)
-    length(character)==1 || throw(ArgumentError("NFoldRotation requires exactly one sector"))
-    sector=only(character)
+_fold_boundary(::Type{T}, billiard::Bi, N::Int, symmetry::AbsSymmetry, character::Tuple) where {T<:Real,Bi<:AbsBilliard} = BilliardGeometry.symmetry_index_orbits(T, billiard, N, symmetry, Complex{T}.(character)...)
+_fold_boundary(::Type{T}, billiard::Bi, N::Int, symmetry::CompositeReflection, character::Tuple) where {T<:Real,Bi<:AbsBilliard} = BilliardGeometry.symmetry_index_orbits(T, billiard, N, symmetry, Complex{T}[character...])
+
+# Convert the stored rotational character tuple to the integer Cₙ sector
+# expected by BilliardGeometry's exact rotational orbit construction.
+function _fold_boundary(::Type{T}, billiard::Bi, N::Int, symmetry::NFoldRotation, character::Tuple) where {T<:Real,Bi<:AbsBilliard}
+    isempty(character) && return BilliardGeometry.symmetry_index_orbits(T, billiard, N, symmetry)
+    length(character) == 1 || throw(ArgumentError("NFoldRotation requires exactly one sector"))
+    sector = only(character)
     sector isa Int || throw(ArgumentError("NFoldRotation sector must be an Int"))
-    return symmetry_index_orbits(T,xy,symmetry,sector)
+    return BilliardGeometry.symmetry_index_orbits(T, billiard, N, symmetry, sector)
 end
 
 ################################################################################
@@ -188,30 +199,32 @@ Expand a symmetry-reduced boundary density onto the complete physical boundary.
 
 If no symmetry is active, `layer_density` must already have the same length as
 `pts`. When symmetry reduction is active, a fundamental-domain density is
-expanded using the [`BilliardGeometry.SymmetryOrbitMap`](@ref) defined by
-`solver.symmetry` and `solver.character`. An already full-length density is
-returned unchanged.
+expanded using the exact [`BilliardGeometry.SymmetryOrbitMap`](@ref) defined
+by the billiard's physical-boundary reconstruction, `solver.symmetry`, and
+`solver.character`. An already full-length density is returned unchanged.
 
-`pts` must describe the complete physical boundary. The returned density
-therefore corresponds point-for-point to `pts`.
+For a `CompositeBIMSolver`, every physical boundary component is required to
+be individually invariant under the active symmetry. Symmetries that exchange
+distinct physical components are currently unsupported.
 
 ## Arguments
-- `solver::AbsBIMSolver`: BIM solver defining the active symmetry and character.
-- `layer_density::AbstractVector{N}`: Boundary density on either the fundamental or complete physical boundary.
-- `pts::BoundaryPoints{T}`: Complete physical-boundary discretization.
-- `billiard::Bi`: Associated billiard, retained for a uniform BIM state-construction API.
+* `solver::AbsBIMSolver`: BIM solver defining the active symmetry and character.
+* `layer_density::AbstractVector{N}`: Boundary density on either the reduced or complete physical boundary.
+* `pts::BoundaryPoints{T}`: Complete physical-boundary discretization.
+* `billiard::Bi`: Billiard defining the physical symmetry reconstruction.
 
 ## Returns
-- `full_density::Vector`: Boundary density on the complete physical boundary.
+* `full_density::Vector`: Boundary density on the complete physical boundary.
 """
 function symmetrize_layer_density(solver::AbsBIMSolver, layer_density::AbstractVector{N}, pts::BoundaryPoints{T}, billiard::Bi) where {N<:Number,T<:Real,Bi<:AbsBilliard}
     Nfull = length(pts)
     length(layer_density) == Nfull && return layer_density
     solver.symmetry === nothing && throw(DimensionMismatch("Boundary data has length $(length(layer_density)); expected full length $Nfull because no symmetry is active"))
-    orbits = solver isa CompositeBIMSolver ? _composite_symmetry_orbits(T, solver, pts) : _fold_boundary(T, pts.xy, solver.symmetry, solver.character)
+    orbits = solver isa CompositeBIMSolver ? _composite_symmetry_orbits(T, solver, pts) : _fold_boundary(T, billiard, Nfull, solver.symmetry, solver.character)
     Nred = fundamental_size(orbits)
     length(layer_density) == Nred || throw(DimensionMismatch("Boundary data has length $(length(layer_density)); expected reduced $Nred or full $Nfull"))
-    S = promote_type(N, Complex{T}); full_data = Vector{S}(undef, Nfull)
+    S = promote_type(N, Complex{T})
+    full_data = Vector{S}(undef, Nfull)
     @inbounds for q in 1:Nfull
         full_data[q] = orbits.phase[q] * layer_density[orbits.orbit_of[q]]
     end
@@ -219,39 +232,35 @@ function symmetrize_layer_density(solver::AbsBIMSolver, layer_density::AbstractV
 end
 
 """
-    _bim_normal_derivative(solver::DLP, pts::BoundaryPoints{T}, lvec::AbstractVector) where {T<:Real}
+    _bim_normal_derivative(solver::DLP, pts::BoundaryPoints{T}, lvec::AbstractVector, billiard::Bi) where {T<:Real,Bi<:AbsBilliard}
 
 Recover the unnormalized physical boundary normal derivative `u = ∂ₙψ` from
 the left singular vector of a DLP Fredholm matrix.
 
 For the Nyström-discretized DLP formulation, the adjoint boundary problem is
-related to the primal Fredholm matrix by the weighted transpose
+related to the Fredholm matrix by the weighted transpose
 
-    A_adj = W⁻¹ Aᵀ W,     W = diag(ds).
+    A_adj = W⁻¹ Aᵀ W,     W = diag(ds),
 
-If `lvec` is the left singular vector associated with the smallest singular
-value of `A`, the corresponding physical boundary normal derivative is
+so the physical boundary normal derivative is
 
     u_raw = W⁻¹ conj(lvec).
 
-For a symmetry-reduced solve, only the fundamental-domain entries of the
-full-boundary quadrature weights are used. The returned vector therefore has
-the same length as `lvec`; symmetry expansion and Rellich normalization are
-performed by [`solve_state`](@ref).
-
-This relation is specific to the DLP formulation. A CFIE left singular vector
-must not in general be interpreted as the physical normal derivative.
+For a symmetry-reduced solve, the quadrature weights corresponding to the
+exact fundamental boundary representatives are selected using the same
+construction-derived symmetry orbit map as the Fredholm matrix.
 
 ## Arguments
-- `solver::DLP`: DLP solver defining the active symmetry and character.
-- `pts::BoundaryPoints{T}`: Complete physical-boundary discretization.
-- `lvec::AbstractVector`: Left singular vector of the DLP Fredholm matrix.
+* `solver::DLP`: DLP solver defining the active symmetry and character.
+* `pts::BoundaryPoints{T}`: Complete physical-boundary discretization.
+* `lvec::AbstractVector`: Left singular vector of the DLP Fredholm matrix.
+* `billiard::Bi`: Billiard defining the physical symmetry reconstruction.
 
 ## Returns
-- `u_raw::Vector`: Unnormalized physical boundary normal derivative, reduced when symmetry is active and full-length otherwise.
+* `u_raw::Vector`: Unnormalized physical boundary normal derivative on the reduced boundary when symmetry is active, or the complete boundary otherwise.
 """
-function _bim_normal_derivative(solver::DLP, pts::BoundaryPoints{T}, lvec::AbstractVector) where {T<:Real}
-    idx = solver.symmetry === nothing ? (1:length(lvec)) : _fold_boundary(T, pts.xy, solver.symmetry, solver.character).fundamental_indices
+function _bim_normal_derivative(solver::DLP, pts::BoundaryPoints{T}, lvec::AbstractVector, billiard::Bi) where {T<:Real,Bi<:AbsBilliard}
+    idx = solver.symmetry === nothing ? (1:length(lvec)) : _fold_boundary(T, billiard, length(pts), solver.symmetry, solver.character).fundamental_indices
     return conj.(lvec) ./ pts.ds[idx]
 end
 
@@ -286,13 +295,13 @@ physical-boundary discretization.
 - `u::Vector`: Rellich-normalized physical boundary normal derivative `∂ₙψ` on the complete physical boundary.
 - `bnd_norm::Real`: Rellich norm of the unnormalized physical boundary derivative.
 """
-function solve_state(solver::DLP, pts::BoundaryPoints{T}, k, billiard::Bi; multithreaded::Bool=true) where {T<:Real,Bi<:AbsBilliard}
+function solve_state(solver::DLP, pts::BoundaryPoints{T}, k, billiard::Bi; multithreaded::Bool = true) where {T<:Real,Bi<:AbsBilliard}
     kT = T(k)
     A = construct_matrices(solver, pts, kT; multithreaded)
     @blas_1 vals, lvecs, rvecs, _ = KrylovKit.svdsolve(A, 5, :SR)
     ten = vals[1]
     vec = symmetrize_layer_density(solver, Vector{Complex{T}}(rvecs[1]), pts, billiard)
-    u = symmetrize_layer_density(solver, _bim_normal_derivative(solver, pts, lvecs[1]), pts, billiard)
+    u = symmetrize_layer_density(solver, _bim_normal_derivative(solver, pts, lvecs[1], billiard), pts, billiard)
     bnd_norm = _rellich(pts, u, kT)
     u ./= sqrt(bnd_norm)
     return ten, vec, u, bnd_norm
@@ -592,14 +601,14 @@ and `pts` all correspond point-for-point to the complete physical boundary.
 * `u::Vector{Complex{T}}`: Rellich-normalized physical boundary normal derivative `∂ₙψ`.
 * `bnd_norm::T`: Rellich norm of the unnormalized physical boundary normal derivative.
 """
-function solve_state(solver::CFIE, pts::BoundaryPoints{T}, k, billiard::Bi; multithreaded::Bool=true) where {T<:Real,Bi<:AbsBilliard}
+function solve_state(solver::CFIE, pts::BoundaryPoints{T}, k, billiard::Bi; multithreaded::Bool = true) where {T<:Real,Bi<:AbsBilliard}
     kT = T(k)
-    A = construct_matrices(solver,pts,kT; multithreaded)
-    @blas_1 vals, _, rvecs, _ = KrylovKit.svdsolve(A,5,:SR)
+    A = construct_matrices(solver, pts, kT; multithreaded)
+    @blas_1 vals, _, rvecs, _ = KrylovKit.svdsolve(A, 5, :SR)
     ten = vals[1]
-    vec = symmetrize_layer_density(solver,Vector{Complex{T}}(rvecs[1]),pts,billiard)
-    u = _cfie_normal_derivative(solver,pts,vec,kT)
-    bnd_norm = _rellich(pts,u,kT)
+    vec = symmetrize_layer_density(solver, Vector{Complex{T}}(rvecs[1]), pts, billiard)
+    u = _cfie_normal_derivative(solver, pts, vec, kT)
+    bnd_norm = _rellich(pts, u, kT)
     u ./= sqrt(bnd_norm)
-    return ten,vec,u,bnd_norm
+    return ten, vec, u, bnd_norm
 end

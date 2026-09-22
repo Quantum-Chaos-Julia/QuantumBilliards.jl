@@ -59,11 +59,10 @@ quadrature. A source component using DLP contributes a double-layer
 cross-component kernel, whereas a source component using CFIE contributes the
 combined `D(k)+ikS(k)` kernel.
 
-Hole components are identified from their boundary orientation and reversed
-before discretization so that all component normals follow the physical
-outward-normal convention. An optional common discrete symmetry reduces the
-resulting full-boundary composite Fredholm operator to a selected symmetry
-sector.
+Hole components are identified from the orientation of their fundamental-boundary curves. 
+They are discretized in the canonical boundary ordering and their tangent orientation is 
+subsequently flipped, without changing node ordering, so that the resulting normals 
+follow the physical outward-normal convention.
 
 ## Attributes
 * `component_solvers::CS`: Tuple containing one DLP or CFIE solver for each connected physical boundary component.
@@ -204,19 +203,19 @@ end
 function _composite_offsets(pts::BoundaryPoints{T}, nc::Int) where {T<:Real}
     N = length(pts)
     length(pts.w_dm) == N || error("CompositeBIMSolver.construct_matrices requires pts to originate from evaluate_points(::CompositeBIMSolver, ...) (missing per-point component bookkeeping)")
-    offs = Vector{Int}(undef, nc+1)
+    offs = Vector{Int}(undef, nc + 1)
     offs[1] = 1
     a = 1
     @inbounds for i in 1:N
-        cid = round(Int, pts.w_dm[i])
+        cid = Int(pts.w_dm[i])
         if cid != a
-            cid == a+1 || error("pts.w_dm component indices are inconsistent with $nc component solvers")
-            offs[a+1] = i
+            cid == a + 1 || error("pts.w_dm component indices are inconsistent with $nc component solvers")
+            offs[a + 1] = i
             a += 1
         end
     end
     a == nc || error("pts.w_dm component indices are inconsistent with $nc component solvers")
-    offs[nc+1] = N+1
+    offs[nc + 1] = N + 1
     return offs
 end
 
@@ -242,12 +241,12 @@ end
 # expressed in global boundary indices, whereas same- and cross-component
 # kernel evaluations require component-local indices.
 function _composite_global_to_local(offs::Vector{Int})
-    Ntot = offs[end]-1
+    Ntot = offs[end] - 1
     g2c = Vector{Int}(undef, Ntot)
     g2l = Vector{Int}(undef, Ntot)
-    @inbounds for a in 1:length(offs)-1
+    @inbounds for a in 1:length(offs) - 1
         off = offs[a]
-        for j in 1:(offs[a+1]-offs[a])
+        for j in 1:offs[a+1] - offs[a]
             g2c[off+j-1] = a
             g2l[off+j-1] = j
         end
@@ -274,10 +273,10 @@ assembled into one ordinary SymmetryOrbitMap.
 function _combine_composite_orbits(::Type{T}, local_orbits::Vector{SymmetryOrbitMap{T}}) where {T<:Real}
     isempty(local_orbits) && throw(ArgumentError("Cannot combine an empty collection of symmetry orbit maps"))
     ng = orbit_size(local_orbits[1])
-    all(o -> orbit_size(o)==ng,local_orbits) || throw(ArgumentError("All CompositeBIMSolver boundary blocks must have the same symmetry-orbit size"))
-    N = sum(full_size,local_orbits); m = sum(fundamental_size,local_orbits)
-    fundamental_indices = Vector{Int}(undef,m); orbit_of = Vector{Int}(undef,N); phase = Vector{Complex{T}}(undef,N)
-    fund_to_full = Matrix{Int}(undef,ng,m); fund_to_scale = Matrix{Complex{T}}(undef,ng,m)
+    all(o -> orbit_size(o) == ng, local_orbits) || throw(ArgumentError("All CompositeBIMSolver boundary blocks must have the same symmetry-orbit size"))
+    N = sum(full_size, local_orbits); m = sum(fundamental_size, local_orbits)
+    fundamental_indices = Vector{Int}(undef, m); orbit_of = Vector{Int}(undef, N); phase = Vector{Complex{T}}(undef, N)
+    fund_to_full = Matrix{Int}(undef, ng, m); fund_to_scale = Matrix{Complex{T}}(undef, ng, m)
     full_off = 0; fund_off = 0
     @inbounds for o in local_orbits
         Na = full_size(o); ma = fundamental_size(o)
@@ -289,7 +288,7 @@ function _combine_composite_orbits(::Type{T}, local_orbits::Vector{SymmetryOrbit
         fund_to_scale[:,mrng] .= o.fund_to_scale
         full_off += Na; fund_off += ma
     end
-    return SymmetryOrbitMap{T}(fundamental_indices,orbit_of,phase,N,m,fund_to_full,fund_to_scale)
+    return SymmetryOrbitMap{T}(fundamental_indices, orbit_of, phase, N, m, fund_to_full, fund_to_scale)
 end
 
 """
@@ -297,37 +296,35 @@ end
 
 Construct the exact symmetry orbit map of a CompositeBIMSolver boundary.
 
-The merged boundary is separated into the contiguous blocks created by
-`_merge_composite_points`. Each block is folded using `_fold_boundary`,
- so every exact integer symmetry permutation is evaluated with that block's 
-own periodic node count rather than the total node count of the concatenated 
-composite boundary. The component-local orbit maps are then combined
-algebraically into one global SymmetryOrbitMap. 
+Each connected physical boundary component is folded independently using its
+own node count and exact construction provenance from the billiard geometry.
+The component-local orbit maps are then shifted into the concatenated
+composite indexing and combined into one global SymmetryOrbitMap.
 
-This construction requires each CompositeBIMSolver boundary block to be
-invariant under the selected symmetry. Symmetry-related disconnected
-components represented inside one block require a separate Composite-specific
-component-permutation extension.
+Every physical boundary component must be individually invariant under the
+selected symmetry. Symmetries exchanging distinct physical components are not
+supported.
 
 No geometric point matching or floating-point tolerances are used.
 
 ## Arguments
 * `T`: Real scalar type of the boundary discretization.
 * `solver::CompositeBIMSolver`: Composite solver defining the common symmetry and character.
-* `pts::BoundaryPoints{T}`: Merged boundary discretization produced by `evaluate_points`.
+* `pts::BoundaryPoints{T}`: Merged boundary discretization produced by [`evaluate_points`](@ref).
 
 ## Returns
 * `orbits::SymmetryOrbitMap{T}`: Exact global symmetry orbit map.
 """
 function _composite_symmetry_orbits(::Type{T}, solver::CompositeBIMSolver, pts::BoundaryPoints{T}) where {T<:Real}
     solver.symmetry === nothing && throw(ArgumentError("_composite_symmetry_orbits requires a nontrivial symmetry"))
-    nc = length(solver.component_solvers); offs = _composite_offsets(pts,nc)
-    local_orbits = Vector{SymmetryOrbitMap{T}}(undef,nc)
+    nc = length(solver.component_solvers)
+    offs = _composite_offsets(pts, nc)
+    local_orbits = Vector{SymmetryOrbitMap{T}}(undef, nc)
     @inbounds for a in 1:nc
-        rng = offs[a]:offs[a+1]-1
-        local_orbits[a] = _fold_boundary(T,@view(pts.xy[rng]),solver.symmetry,solver.character)
+        N = offs[a+1] - offs[a]
+        local_orbits[a] = _fold_boundary(T, solver.component_solvers[a].billiard, N, solver.symmetry, solver.character)
     end
-    return _combine_composite_orbits(T,local_orbits)
+    return _combine_composite_orbits(T, local_orbits)
 end
 
 # Dispatch a same-component kernel entry to the solver assigned to that
@@ -446,9 +443,11 @@ function _composite_fredholm_full!(A::AbstractMatrix{Complex{T}}, solver::Compos
 end
 
 # Assemble the symmetry-reduced composite Fredholm matrix by folding the
-# complete physical-boundary operator over source symmetry orbits. Symmetry
-# acts only after the full composite discretization has been defined, so each
-# orbit may contain source nodes belonging to different connected components.
+# complete physical-boundary operator over source symmetry orbits. Each
+# connected physical boundary component is individually invariant under the
+# selected symmetry, so every symmetry orbit remains inside one component.
+# The globally coupled operator nevertheless contains both same-component and
+# cross-component interactions between the reduced component degrees of freedom.
 #
 # For fundamental target index fund[a] and source orbit b,
 #

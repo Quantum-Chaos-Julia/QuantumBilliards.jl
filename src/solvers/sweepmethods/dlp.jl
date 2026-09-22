@@ -44,7 +44,7 @@
 ################################################################################
 
 """
-    DoubleLayerPotentialSolver{T,G,Sy,Ch} <: DLP
+    DoubleLayerPotentialSolver{T,G,Sy,Bi,Ch} <: DLP
 
 Boundary-integral eigensolver based on the interior Helmholtz double-layer
 potential.
@@ -77,8 +77,9 @@ full-boundary Fredholm operator to a selected symmetry sector.
 [`boundary_matrix_size`](@ref), [`construct_matrices`](@ref), [`solve`](@ref),
 [`solve_vect`](@ref), [`solve_wavenumber`](@ref), and [`k_sweep`](@ref).
 """
-struct DoubleLayerPotentialSolver{T<:Real,G<:BoundaryGrading,Sy<:Union{AbsSymmetry,Nothing},Ch<:Tuple} <: DLP
+struct DoubleLayerPotentialSolver{T<:Real,G<:BoundaryGrading,Sy<:Union{AbsSymmetry,Nothing},Bi<:AbsBilliard,Ch<:Tuple} <: DLP
     pts_scaling_factor::Vector{T}
+    billiard::Bi
     min_pts::Int64
     grading::G
     symmetry::Sy
@@ -99,6 +100,7 @@ map around geometric corners.
 
 ## Arguments
 * `pts_scaling_factor::Union{T,Vector{T}}`: Boundary-point scaling factor or collection of scaling factors used to determine the discretization size.
+* `billiard::Bi`: Billiard defining the available discrete symmetries.
 
 ## Keyword Arguments
 * `min_pts::Int = 200`: Minimum number of boundary sampling points.
@@ -108,15 +110,15 @@ map around geometric corners.
 * `eps::T = T(1e-15)`: Relative numerical tolerance associated with the solver.
 
 ## Returns
-* `solver::DoubleLayerPotentialSolver{T}`: Configured DLP solver.
+* `solver::DoubleLayerPotentialSolver{T,typeof(grading),typeof(symmetry),typeof(billiard),typeof(character)}`: Configured DLP solver.
 """
-function DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}; min_pts::Int=200, grading::BoundaryGrading=SmoothPeriodicGrading(), symmetry::Union{Nothing,AbsSymmetry}=nothing, character::Tuple=(), eps::T=T(1e-15)) where {T<:Real}
+function DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::Bi; min_pts::Int=200, grading::BoundaryGrading=SmoothPeriodicGrading(), symmetry::Union{Nothing,AbsSymmetry}=nothing, character::Tuple=(), eps::T=T(1e-15)) where {T<:Real,Bi<:AbsBilliard}
     bs = pts_scaling_factor isa T ? [pts_scaling_factor] : pts_scaling_factor
-    return DoubleLayerPotentialSolver{T,typeof(grading),typeof(symmetry),typeof(character)}(bs, min_pts, grading, symmetry, character, eps)
+    return DoubleLayerPotentialSolver{T,typeof(grading),typeof(symmetry),typeof(billiard),typeof(character)}(bs, billiard, min_pts, grading, symmetry, character, eps)
 end
 
 """
-    DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::BilliardGeometry.AbsBilliard, sector::SymmetrySector; kwargs...) where {T<:Real}
+    DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::Bi, sector::SymmetrySector; kwargs...) where {T<:Real,Bi<:AbsBilliard}
 
 Construct a double-layer potential solver in a validated symmetry sector of
 `billiard`.
@@ -139,9 +141,9 @@ symmetry sector.
 ## Returns
 * `solver::DoubleLayerPotentialSolver{T}`: Configured DLP solver in the requested symmetry sector.
 """
-function DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::BilliardGeometry.AbsBilliard, sector::SymmetrySector; kwargs...) where {T<:Real}
+function DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::Bi, sector::SymmetrySector; kwargs...) where {T<:Real,Bi<:AbsBilliard}
     generator, character = _resolve_bim_symmetry(billiard, sector)
-    return DoubleLayerPotentialSolver(pts_scaling_factor; symmetry=generator, character=character, kwargs...)
+    return DoubleLayerPotentialSolver(pts_scaling_factor, billiard; symmetry=generator, character=character, kwargs...)
 end
 
 _bim_numeric_type(::DoubleLayerPotentialSolver{T}) where {T} = T
@@ -427,13 +429,21 @@ end
 """
     boundary_matrix_size(solver::DoubleLayerPotentialSolver, pts::BoundaryPoints) → N::Int
 
-Returns the dimension of the assembled Fredholm matrix, accounting for any
-symmetry-orbit folding onto a fundamental domain.
+Return the dimension of the assembled DLP Fredholm matrix, including exact
+algebraic symmetry reduction when a symmetry sector is active.
+
+## Arguments
+* `solver::DoubleLayerPotentialSolver`: DLP solver defining the symmetry sector.
+* `pts::BoundaryPoints`: Complete physical-boundary discretization.
+
+## Returns
+* `N::Int`: Dimension of the assembled Fredholm matrix.
 """
 function boundary_matrix_size(solver::DoubleLayerPotentialSolver, pts::BoundaryPoints)
     solver.symmetry === nothing && return boundary_matrix_size(pts)
     T = _bim_numeric_type(solver)
-    return fundamental_size(symmetry_index_orbits(T, pts.xy, solver.symmetry))
+    orbits = _fold_boundary(T, solver.billiard, length(pts), solver.symmetry, solver.character)
+    return fundamental_size(orbits)
 end
 
 """
@@ -485,7 +495,7 @@ function construct_matrices(solver::DoubleLayerPotentialSolver, pts::BoundaryPoi
             return A
         else
             @timeit_debug "symmetry_orbits" begin
-                orbits = _fold_boundary(T, pts.xy, solver.symmetry, solver.character)
+                orbits = _fold_boundary(T, solver.billiard, N, solver.symmetry, solver.character)
             end
             m = fundamental_size(orbits)
             A = Matrix{Complex{T}}(undef, m, m)

@@ -38,7 +38,7 @@
 ################################################################################
 
 """
-    CombinedFieldIntegralEquationSolver{T,G,Sy,Ch} <: CFIE
+    CombinedFieldIntegralEquationSolver{T,G,Sy,Bi,Ch} <: CFIE
 
 Boundary-integral eigensolver based on the Helmholtz combined-field integral
 equation.
@@ -61,6 +61,7 @@ resulting full-boundary Fredholm operator to a selected symmetry sector.
 
 ## Attributes
 * `pts_scaling_factor::Vector{T}`: Boundary-point scaling factors used to determine the discretization size.
+* `billiard::Bi`: Billiard defining the available discrete symmetries.
 * `min_pts::Int64`: Minimum number of boundary sampling points.
 * `grading::G`: [`BoundaryGrading`](@ref) strategy controlling the periodic boundary parametrization used by the Kress quadrature scheme.
 * `symmetry::Sy`: Optional discrete symmetry used to reduce the full-boundary Fredholm operator.
@@ -72,8 +73,9 @@ resulting full-boundary Fredholm operator to a selected symmetry sector.
 [`construct_matrices`](@ref), [`solve`](@ref), [`solve_vect`](@ref),
 [`solve_wavenumber`](@ref), and [`k_sweep`](@ref).
 """
-struct CombinedFieldIntegralEquationSolver{T<:Real,G<:BoundaryGrading,Sy<:Union{AbsSymmetry,Nothing},Ch<:Tuple} <: CFIE
+struct CombinedFieldIntegralEquationSolver{T<:Real,G<:BoundaryGrading,Sy<:Union{AbsSymmetry,Nothing},Bi<:AbsBilliard,Ch<:Tuple} <: CFIE
     pts_scaling_factor::Vector{T}
+    billiard::Bi
     min_pts::Int64
     grading::G
     symmetry::Sy
@@ -82,7 +84,7 @@ struct CombinedFieldIntegralEquationSolver{T<:Real,G<:BoundaryGrading,Sy<:Union{
 end
 
 """
-    CombinedFieldIntegralEquationSolver(pts_scaling_factor::Union{T,Vector{T}}; min_pts::Int=200, grading::BoundaryGrading=SmoothPeriodicGrading(), symmetry::Union{Nothing,AbsSymmetry}=nothing, character::Tuple=(), eps::T=T(1e-15)) where {T<:Real}
+    CombinedFieldIntegralEquationSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::Bi; min_pts::Int=200, grading::BoundaryGrading=SmoothPeriodicGrading(), symmetry::Union{Nothing,AbsSymmetry}=nothing, character::Tuple=(), eps::T=T(1e-15)) where {T<:Real, Bi<:AbsBilliard}
 
 Construct a combined-field boundary-integral solver.
 All boundary discretizations use the Kress quadrature scheme for the
@@ -91,6 +93,7 @@ parametrization on which this quadrature is applied.
 
 ## Arguments
 * `pts_scaling_factor::Union{T,Vector{T}}`: Boundary-point scaling factor or collection of scaling factors used to determine the discretization size.
+* `billiard::Bi`: Billiard defining the available discrete symmetries.
 
 ## Keyword Arguments
 * `min_pts::Int = 200`: Minimum number of boundary sampling points.
@@ -100,15 +103,15 @@ parametrization on which this quadrature is applied.
 * `eps::T = T(1e-15)`: Relative numerical tolerance associated with the solver.
 
 ## Returns
-* `solver::CombinedFieldIntegralEquationSolver{T}`: Configured CFIE solver.
+* `solver::CombinedFieldIntegralEquationSolver`: Configured CFIE solver in the requested symmetry sector.
 """
-function CombinedFieldIntegralEquationSolver(pts_scaling_factor::Union{T,Vector{T}}; min_pts::Int=200, grading::BoundaryGrading=SmoothPeriodicGrading(),symmetry::Union{Nothing,AbsSymmetry}=nothing, character::Tuple=(), eps::T=T(1e-15)) where {T<:Real}
+function CombinedFieldIntegralEquationSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::Bi; min_pts::Int=200, grading::BoundaryGrading=SmoothPeriodicGrading(), symmetry::Union{Nothing,AbsSymmetry}=nothing, character::Tuple=(), eps::T=T(1e-15)) where {T<:Real,Bi<:AbsBilliard}
     bs = pts_scaling_factor isa T ? [pts_scaling_factor] : pts_scaling_factor
-    return CombinedFieldIntegralEquationSolver{T,typeof(grading),typeof(symmetry),typeof(character)}(bs, min_pts, grading, symmetry, character, eps)
+    return CombinedFieldIntegralEquationSolver{T,typeof(grading),typeof(symmetry),typeof(billiard),typeof(character)}(bs, billiard, min_pts, grading, symmetry, character, eps)
 end
 
 """
-    CombinedFieldIntegralEquationSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::BilliardGeometry.AbsBilliard, sector::SymmetrySector; kwargs...) where {T<:Real}
+    CombinedFieldIntegralEquationSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::Bi, sector::SymmetrySector; kwargs...) where {T<:Real,Bi<:AbsBilliard}
 
 Construct a combined-field boundary-integral solver in a validated symmetry
 sector of `billiard`.
@@ -129,11 +132,11 @@ symmetry sector.
 * `kwargs...`: Additional keyword arguments forwarded to [`CombinedFieldIntegralEquationSolver`](@ref).
 
 ## Returns
-* `solver::CombinedFieldIntegralEquationSolver{T}`: Configured CFIE solver in the requested symmetry sector.
+* `solver::CombinedFieldIntegralEquationSolver{T,typeof(grading),typeof(symmetry),typeof(billiard),typeof(character)}`: Configured CFIE solver in the requested symmetry sector.
 """
-function CombinedFieldIntegralEquationSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::BilliardGeometry.AbsBilliard, sector::SymmetrySector; kwargs...) where {T<:Real}
+function CombinedFieldIntegralEquationSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::Bi, sector::SymmetrySector; kwargs...) where {T<:Real,Bi<:AbsBilliard}
     generator, character = _resolve_bim_symmetry(billiard, sector)
-    return CombinedFieldIntegralEquationSolver(pts_scaling_factor; symmetry=generator, character=character, kwargs...)
+    return CombinedFieldIntegralEquationSolver(pts_scaling_factor, billiard; symmetry=generator, character=character, kwargs...)
 end
 
 _bim_numeric_type(::CombinedFieldIntegralEquationSolver{T}) where {T} = T
@@ -505,11 +508,24 @@ function evaluate_points(solver::CombinedFieldIntegralEquationSolver, billiard::
     return _cfie_evaluate_points(solver, solver.grading, comp, T(k))
 end
 
-# Returns the dimension of the assembled Fredholm matrix, accounting for any symmetry-orbit folding onto a fundamental domain.
+"""
+    boundary_matrix_size(solver::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints) → N::Int
+
+Return the dimension of the assembled CFIE Fredholm matrix, including exact
+algebraic symmetry reduction when a symmetry sector is active.
+
+## Arguments
+* `solver::CombinedFieldIntegralEquationSolver`: CFIE solver defining the symmetry sector.
+* `pts::BoundaryPoints`: Complete physical-boundary discretization.
+
+## Returns
+* `N::Int`: Dimension of the assembled Fredholm matrix.
+"""
 function boundary_matrix_size(solver::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints)
     solver.symmetry === nothing && return boundary_matrix_size(pts)
     T = _bim_numeric_type(solver)
-    return fundamental_size(symmetry_index_orbits(T, pts.xy, solver.symmetry))
+    orbits = _fold_boundary(T, solver.billiard, length(pts), solver.symmetry, solver.character)
+    return fundamental_size(orbits)
 end
 
 """
@@ -561,7 +577,7 @@ function construct_matrices(solver::CombinedFieldIntegralEquationSolver, pts::Bo
             return A
         else
             @timeit_debug "symmetry_orbits" begin
-                orbits = _fold_boundary(T, pts.xy, solver.symmetry, solver.character)
+                orbits = _fold_boundary(T, solver.billiard, N, solver.symmetry, solver.character)
             end
             m = fundamental_size(orbits)
             A = Matrix{Complex{T}}(undef, m, m)

@@ -961,7 +961,7 @@ function build_cork_polynomial(solver::SweepBIMSolver, pts, k0::Float64, Δ::Flo
         B,t = build_B_full(cache,k0,Δ,p; multithreaded=multithreaded)
         return CORKPolynomial(B,k0,Δ,p,cache.N),t
     end
-    orbits = _fold_boundary(Float64,pts.xy,solver.symmetry,solver.character)
+    orbits = solver isa CompositeBIMSolver ? _composite_symmetry_orbits(Float64,solver,pts) : _fold_boundary(Float64,solver.billiard,length(pts.xy),solver.symmetry,solver.character)
     N = fundamental_size(orbits)
     B,t = build_B_reduced(cache,orbits,k0,Δ,p; multithreaded=multithreaded)
     return CORKPolynomial(B,k0,Δ,p,N),t
