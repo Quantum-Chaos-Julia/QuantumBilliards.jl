@@ -50,28 +50,6 @@
 # boundary over source symmetry orbits.
 ################################################################################
 
-struct ChebRadialLookupCache
-    pidx_h::Matrix{Int32}
-    t_h::Matrix{Float64}
-    pidx_j::Matrix{Int32}
-    t_j::Matrix{Float64}
-end
-
-function ChebRadialLookupCache(G::BoundaryGeomCache, plan_h::ChebHankelPlanH, plan_j::ChebJPlan; multithreaded::Bool = true)
-    N = size(G.R, 1)
-    pidx_h = Matrix{Int32}(undef, N, N); t_h = Matrix{Float64}(undef, N, N)
-    pidx_j = Matrix{Int32}(undef, N, N); t_j = Matrix{Float64}(undef, N, N)
-    @use_threads multithreading = (multithreaded && N >= 32) for j in 2:N
-        @inbounds for i in 1:j-1
-            r = Float64(G.R[i, j])
-            ph, th = panel_t(plan_h, r); pj, tj = panel_t(plan_j, r)
-            pidx_h[i, j] = ph; pidx_h[j, i] = ph; t_h[i, j] = th; t_h[j, i] = th
-            pidx_j[i, j] = pj; pidx_j[j, i] = pj; t_j[i, j] = tj; t_j[j, i] = tj
-        end
-    end
-    return ChebRadialLookupCache(pidx_h, t_h, pidx_j, t_j)
-end
-
 function _dlp_fredholm_full_cheb!(F::AbstractMatrix{ComplexF64}, pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, C::ChebRadialLookupCache, k::ComplexF64, plan1::ChebHankelPlanH, planj1::ChebJPlan; multithreaded::Bool=true) where {T<:Real}
     invtwopi = inv(2*pi); αL1 = -k*invtwopi; αL2 = im*k/2; N = length(pts)
     fill!(F,zero(ComplexF64))
