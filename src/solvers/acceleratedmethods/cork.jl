@@ -188,7 +188,7 @@ function evaluate_cork_polynomial(P::CORKPolynomial, t::Real)::Matrix{ComplexF64
 end
 
 """
-    validate_polynomial!(solver::SweepBIMSolver, pts, P::CORKPolynomial, tol::Real; nsample::Int=5, multithreaded::Bool=true) -> Nothing
+        validate_polynomial(solver::SweepBIMSolver, pts, P::CORKPolynomial; nsample::Int=5, multithreaded::Bool=true) -> Float64
 
 Validate the Chebyshev approximation against directly constructed BIM
 Fredholm matrices. At each normalized coordinate `t`, the reported relative
@@ -202,24 +202,21 @@ where `Δpoly=P.Δ` is the guarded polynomial half-width.
 - `solver::SweepBIMSolver`: BIM solver defining the direct Fredholm matrix.
 - `pts`: Boundary discretization used to construct the polynomial.
 - `P::CORKPolynomial`: Chebyshev polynomial to validate.
-- `tol::Real`: Tolerance for the worst relative error.
 - `nsample::Int`: Number of sample points in `[-1,1]`.
 - `multithreaded::Bool`: Whether direct matrix construction uses threading.
 
 ## Returns
-- `Nothing`: Returns `nothing` if the polynomial validation passes.
+- `Float64`: Worst relative error over the sampled points.
 """
-function validate_polynomial!(solver::SweepBIMSolver, pts, P::CORKPolynomial, tol::Real; nsample::Int=5, multithreaded::Bool=true)::Nothing
-    ts = collect(range(-1.0, 1.0, length = nsample)); worst = 0.0
+function validate_polynomial(solver::SweepBIMSolver, pts, P::CORKPolynomial; nsample::Int=5, multithreaded::Bool=true)
+    ts = range(-1.0, 1.0, length=nsample); worst = 0.0
     for t in ts
-        k = P.k0 + P.Δ * t; Ap = evaluate_cork_polynomial(P, t)
-        Ad = construct_matrices(solver, pts, k; multithreaded = multithreaded)
-        err = norm(Ap - Ad) / norm(Ad); worst = max(worst, err)
+        k = P.k0+P.Δ*t; Ap = evaluate_cork_polynomial(P, t)
+        Ad = construct_matrices(solver, pts, k; multithreaded)
+        worst = max(worst, norm(Ap-Ad)/norm(Ad))
     end
-    worst > tol && throw(ArgumentError("Polynomial validation failed: worst relative error = $worst exceeds tolerance $tol. Try reducing the polynomial half-width or increasing the polynomial degree p."))
-    return nothing
+    return worst
 end
-
 
 """
     get_A0(B::Matrix{ComplexF64}, N::Int, p::Int) -> Matrix{ComplexF64}
@@ -866,7 +863,7 @@ end
 # SOLVER AND PUBLIC API
 ################################################################################
 
-struct CORKSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
+mutable struct CORKSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
     kernel::K
     p::Int
     guard::T
@@ -950,7 +947,7 @@ evaluate_points(solver::CORKSolver, billiard::Bi, k) where {Bi<:AbsBilliard} = e
 @inline _cork_kernel_name(solver)::String = solver isa DoubleLayerPotentialSolver ? "DLP" : solver isa CombinedFieldIntegralEquationSolver ? "CFIE" : solver isa CompositeBIMSolver ? "CompositeBIM" : string(typeof(solver))
 
 """
-    _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=true, eigenvectors::Bool=solver.eigenvectors)
+    _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=true, eigenvectors::Bool=solver.eigenvectors, p::Int=solver.p)
 
 Execute the complete Chebyshev-CORK pipeline on the interval `[k₀-dk/2,k₀+dk/2]`.
 
@@ -960,38 +957,41 @@ Execute the complete Chebyshev-CORK pipeline on the interval `[k₀-dk/2,k₀+dk
 - `k0`: Center of the requested physical interval.
 - `dk`: Full width of the requested physical interval.
 - `multithreaded::Bool`: Whether polynomial assembly and direct validation matrices use Julia threading.
-- `eigenvectors::Bool`: Whether to reconstruct final physical Fredholm vectors.
+- `eigenvectors::Bool = solver.eigenvectors`: Whether to reconstruct final physical Fredholm vectors.
+- `p::Int = solver.p`: Polynomial degree for the Chebyshev-CORK expansion.
 
 ## Returns
 - `Tuple`: Chebyshev polynomial, final CORK state, accepted roots, optional
   physical vectors, requested Ritz roots, all guarded Ritz roots, requested
   edge roots, edge convergence flags, and final compact Krylov dimension.
 """
-function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=true, eigenvectors::Bool=solver.eigenvectors)
-    k0f = Float64(k0); Δ = Float64(dk) / 2
-    Δpoly = Δ * (1 + solver.guard)
+function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=true, eigenvectors::Bool=solver.eigenvectors, p::Int=solver.p)
+    k0f = Float64(k0); Δ = Float64(dk)/2; Δpoly = Δ*(1+solver.guard)
     P = nothing; tbuild = 0.0
     @timeit_debug "CORK polynomial construction" begin
-        P, tbuild = build_cork_polynomial(solver.kernel, pts, k0f, Δpoly, solver.p; multithreaded = multithreaded)
+        P, tbuild = build_cork_polynomial(solver.kernel, pts, k0f, Δpoly, p; multithreaded)
     end
     if solver.verbose
-        @printf("CORK matrix size     = %d\nB build              = %.6f s\nB memory             = %.3f MiB\n", P.N, tbuild, Base.summarysize(P.B) / 2^20)
-        solver.kernel.symmetry !== nothing && @printf("dimension reduction  = %.3fx\n", length(pts.xy) / P.N)
+        @printf("CORK matrix size     = %d\npolynomial degree    = %d\nB build              = %.6f s\nB memory             = %.3f MiB\n", P.N, p, tbuild, Base.summarysize(P.B)/2^20)
+        solver.kernel.symmetry!==nothing && @printf("dimension reduction  = %.3fx\n", length(pts.xy)/P.N)
     end
-    solver.validate && validate_polynomial!(solver.kernel, pts, P, solver.taylor_tol; multithreaded = multithreaded)
-    t = time_ns(); A0 = get_A0(P.B, P.N, solver.p); ta0 = (time_ns() - t) * 1e-9
+    if solver.validate # never true in compute_spectrum!
+        err = validate_polynomial(solver.kernel, pts, P; multithreaded)
+        err<=solver.taylor_tol || throw(ArgumentError("Polynomial validation failed: worst relative error = $err exceeds tolerance $(solver.taylor_tol)."))
+    end
+    t = time_ns(); A0 = get_A0(P.B, P.N, p); ta0 = (time_ns()-t)*1e-9
     F = nothing; t = time_ns()
     @blas_multi_then_1 MAX_BLAS_THREADS begin
         F = lu(A0)
     end
-    tfact = (time_ns() - t) * 1e-9
+    tfact = (time_ns()-t)*1e-9
     solver.verbose && @printf("\nP(0) assembly        = %.6f s\nLU                   = %.6f s\n\n", ta0, tfact)
-    S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = adaptive_cork(P.B, F, solver.p, P.N; k0=k0f, Δ=Δ, Δpoly=Δpoly, b=solver.b, mstart=solver.mstart, mstep=solver.mstep, stable_checks=solver.stable_checks, imag_tol=solver.imag_tol, edge_tol=solver.edge_tol, res_tol=solver.res_tol, stable_tol=solver.stable_tol, imag_search_tol=solver.imag_search_tol, eigenvectors=eigenvectors, verbose=solver.verbose)
+    S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = adaptive_cork(P.B, F, p, P.N; k0=k0f, Δ=Δ, Δpoly=Δpoly, b=solver.b, mstart=solver.mstart, mstep=solver.mstep, stable_checks=solver.stable_checks, imag_tol=solver.imag_tol, edge_tol=solver.edge_tol, res_tol=solver.res_tol, stable_tol=solver.stable_tol, imag_search_tol=solver.imag_search_tol, eigenvectors, verbose=solver.verbose)
     return P, S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal
 end
 
 """
-    solve(solver::CORKSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true)
+    solve(solver::CORKSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, p::Int=solver.p)
 
 Compute the accepted CORK roots in `[k₀-dk/2,k₀+dk/2]` using an existing
 boundary discretization.
@@ -1002,19 +1002,20 @@ boundary discretization.
 - `k0`: Center of the requested physical interval.
 - `dk`: Full width of the requested physical interval.
 - `multithreaded::Bool`: Whether polynomial assembly uses Julia threads.
+- `p::Int = solver.p`: Polynomial degree for the Chebyshev-CORK expansion.
 
 ## Returns
 - `Vector{ComplexF64}`: Accepted physical wavenumbers.
 - `Vector{Float64}`: Corresponding projected CORK residual indicators.
 """
-function solve(solver::CORKSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true)
-    P, S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = _cork_solve_core(solver, pts, k0, dk; multithreaded = multithreaded)
-    λ = ComplexF64[complex(x[1], x[2]) for x in ks]; ts = Float64[x[3] for x in ks]
+function solve(solver::CORKSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, p::Int=solver.p)
+    P, S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = _cork_solve_core(solver, pts, k0, dk; multithreaded, p)
+    λ = ComplexF64[complex(x[1],x[2]) for x in ks]; ts = Float64[x[3] for x in ks]
     return λ, ts
 end
 
 """
-    solve_vectors(solver::CORKSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true)
+    solve_vectors(solver::CORKSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, p::Int=solver.p)
 
 Compute the accepted CORK roots and their corresponding layer densities in
 `[k₀-dk/2,k₀+dk/2]`.
@@ -1025,15 +1026,16 @@ Compute the accepted CORK roots and their corresponding layer densities in
 - `k0`: Center of the requested physical interval.
 - `dk`: Full width of the requested physical interval.
 - `multithreaded::Bool=true`: Whether polynomial assembly uses Julia threads.
+- `p::Int = solver.p`: Polynomial degree for the Chebyshev-CORK expansion.
 
 ## Returns
 - `Vector{ComplexF64}`: Accepted physical wavenumbers.
 - `Vector{Float64}`: Corresponding projected CORK residual indicators.
 - `Matrix{ComplexF64}`: Corresponding layer densities stored column-wise.
 """
-function solve_vectors(solver::CORKSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true)
-    P, S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = _cork_solve_core(solver, pts, k0, dk; multithreaded, eigenvectors=true)
-    λ = ComplexF64[complex(x[1], x[2]) for x in ks]; ts = Float64[x[3] for x in ks]
+function solve_vectors(solver::CORKSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, p::Int=solver.p)
+    P, S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = _cork_solve_core(solver, pts, k0, dk; multithreaded, eigenvectors=true, p)
+    λ = ComplexF64[complex(x[1],x[2]) for x in ks]; ts = Float64[x[3] for x in ks]
     return λ, ts, Ψ
 end
 

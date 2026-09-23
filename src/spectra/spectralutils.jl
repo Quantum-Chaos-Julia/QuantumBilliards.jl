@@ -508,25 +508,40 @@ function compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; multithreade
         ap, bp = intervals[end-1]; a, b = intervals[end]; dkprev = bp-ap
         b-a<dkprev && (intervals[end] = (a, a+dkprev))
     end
-    check_indices = unique(round.(Int, range(1, length(intervals), length=min(5, length(intervals)))))
-    @time "Polynomial Validation..." for i in check_indices
-        a, b = intervals[i]; k0 = (a+b)/2; Δpoly = (1+solver.guard)*(b-a)/2; pts = evaluate_points(solver, billiard, k0)
-        P, _ = build_cork_polynomial(solver.kernel, pts, Float64(k0), Float64(Δpoly), solver.p; multithreaded)
-        validate_polynomial!(solver.kernel, pts, P, solver.taylor_tol; multithreaded)
+    a, b = intervals[1]; k0 = (a+b)/2; Δpoly = (1+solver.guard)*(b-a)/2; pts = evaluate_points(solver, billiard, k0)
+    pmin = max(2, ceil(Int, sqrt(solver.b))); p = max(solver.p, pmin)
+    @time "Polynomial Validation..." begin
+        P, _ = build_cork_polynomial(solver.kernel, pts, Float64(k0), Float64(Δpoly), p; multithreaded)
+        err = validate_polynomial(solver.kernel, pts, P; multithreaded)
+        if err>solver.taylor_tol
+            while err>solver.taylor_tol
+                p += 1
+                P, _ = build_cork_polynomial(solver.kernel, pts, Float64(k0), Float64(Δpoly), p; multithreaded)
+                err = validate_polynomial(solver.kernel, pts, P; multithreaded)
+            end
+        else
+            while p>pmin
+                P1, _ = build_cork_polynomial(solver.kernel, pts, Float64(k0), Float64(Δpoly), p-1; multithreaded)
+                err1 = validate_polynomial(solver.kernel, pts, P1; multithreaded)
+                err1>solver.taylor_tol && break
+                p -= 1; err = err1
+            end
+        end
+        solver.verbose && @printf("CORK polynomial degree: %d -> %d, validation error = %.3e, tolerance = %.3e\n", solver.p, p, err, solver.taylor_tol)
     end
     ks = Complex{T}[]; ts = T[]
     if solver.eigenvectors
         states = nothing
         @maybe_showprogress show_progress for i in eachindex(intervals)
             a, b = intervals[i]; k0 = (a+b)/2; dk = b-a; pts = evaluate_points(solver, billiard, k0)
-            ki, ti, X = solve_vectors(solver, pts, k0, dk; multithreaded)
+            ki, ti, X = solve_vectors(solver, pts, k0, dk; multithreaded, p)
             keep = findall(j -> begin
                 x = real(ki[j])
                 a<=x && (i==length(intervals) ? x<=k2T : x<b) && k1T<=x
             end, eachindex(ki))
             isempty(keep) && continue
             si = [BIMEigenstate(ki[j], symmetrize_layer_density(solver.kernel, X[:,j], pts, billiard), ti[j], solver.kernel, billiard, pts) for j in keep]
-            states === nothing ? (states = si) : append!(states, si)
+            states===nothing ? (states = si) : append!(states, si)
             append!(ks, Complex{T}.(ki[keep])); append!(ts, T.(ti[keep]))
         end
         states===nothing && throw(ArgumentError("compute_spectrum found no candidates in the requested range"))
@@ -534,7 +549,7 @@ function compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; multithreade
     end
     @maybe_showprogress show_progress for i in eachindex(intervals)
         a, b = intervals[i]; k0 = (a+b)/2; dk = b-a; pts = evaluate_points(solver, billiard, k0)
-        ki, ti = solve(solver, pts, k0, dk; multithreaded)
+        ki, ti = solve(solver, pts, k0, dk; multithreaded, p)
         keep = findall(j -> begin
             x = real(ki[j])
             a<=x && (i==length(intervals) ? x<=k2T : x<b) && k1T<=x
