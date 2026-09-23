@@ -138,11 +138,11 @@ end
 
 _bim_numeric_type(::ExpandedBIMSolver{T}) where {T} = T
 
-mutable struct EBIMCache{G,R,O,C}
+mutable struct EBIMCache{G,R,O}
     G::G
     Rmat::R
     orbits::O
-    cheb_lookup::C
+    cheb_lookup::Union{Nothing,ChebRadialLookupCache}
 end
 
 function EBIMCache(cs::Union{DoubleLayerPotentialSolver,CombinedFieldIntegralEquationSolver}, pts::BoundaryPoints{T}) where {T<:Real}
