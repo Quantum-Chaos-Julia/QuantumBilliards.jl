@@ -118,7 +118,7 @@ function DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}, bill
 end
 
 """
-    DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::Bi, sector::SymmetrySector; kwargs...) where {T<:Real,Bi<:AbsBilliard}
+    DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}, sector::SymmetrySector; kwargs...) where {T<:Real}
 
 Construct a double-layer potential solver in a validated symmetry sector of
 `billiard`.
@@ -132,18 +132,17 @@ symmetry sector.
 
 ## Arguments
 * `pts_scaling_factor::Union{T,Vector{T}}`: Boundary-point scaling factor or collection of scaling factors used to determine the discretization size.
-* `billiard::BilliardGeometry.AbsBilliard`: Billiard defining the available discrete symmetries.
 * `sector::SymmetrySector`: Validated symmetry sector used for the Fredholm reduction.
 
 ## Keyword Arguments
 * `kwargs...`: Additional keyword arguments forwarded to [`DoubleLayerPotentialSolver`](@ref).
 
 ## Returns
-* `solver::DoubleLayerPotentialSolver{T}`: Configured DLP solver in the requested symmetry sector.
+* `solver::DoubleLayerPotentialSolver`: Configured DLP solver in the requested symmetry sector.
 """
-function DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::Bi, sector::SymmetrySector; kwargs...) where {T<:Real,Bi<:AbsBilliard}
-    generator, character = _resolve_bim_symmetry(billiard, sector)
-    return DoubleLayerPotentialSolver(pts_scaling_factor, billiard; symmetry=generator, character=character, kwargs...)
+function DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}, sector::SymmetrySector; kwargs...) where {T<:Real}
+    generator, character = _resolve_bim_symmetry(sector.billiard, sector)
+    return DoubleLayerPotentialSolver(pts_scaling_factor, sector.billiard; symmetry=generator, character=character, kwargs...)
 end
 
 _bim_numeric_type(::DoubleLayerPotentialSolver{T}) where {T} = T

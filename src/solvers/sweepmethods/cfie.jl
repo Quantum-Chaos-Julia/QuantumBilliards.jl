@@ -111,7 +111,7 @@ function CombinedFieldIntegralEquationSolver(pts_scaling_factor::Union{T,Vector{
 end
 
 """
-    CombinedFieldIntegralEquationSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::Bi, sector::SymmetrySector; kwargs...) where {T<:Real,Bi<:AbsBilliard}
+    CombinedFieldIntegralEquationSolver(pts_scaling_factor::Union{T,Vector{T}}, sector::SymmetrySector; kwargs...) where {T<:Real}
 
 Construct a combined-field boundary-integral solver in a validated symmetry
 sector of `billiard`.
@@ -125,7 +125,6 @@ symmetry sector.
 
 ## Arguments
 * `pts_scaling_factor::Union{T,Vector{T}}`: Boundary-point scaling factor or collection of scaling factors used to determine the discretization size.
-* `billiard::BilliardGeometry.AbsBilliard`: Billiard defining the available discrete symmetries.
 * `sector::SymmetrySector`: Validated symmetry sector used for the Fredholm reduction.
 
 ## Keyword Arguments
@@ -134,9 +133,9 @@ symmetry sector.
 ## Returns
 * `solver::CombinedFieldIntegralEquationSolver{T,typeof(grading),typeof(symmetry),typeof(billiard),typeof(character)}`: Configured CFIE solver in the requested symmetry sector.
 """
-function CombinedFieldIntegralEquationSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::Bi, sector::SymmetrySector; kwargs...) where {T<:Real,Bi<:AbsBilliard}
-    generator, character = _resolve_bim_symmetry(billiard, sector)
-    return CombinedFieldIntegralEquationSolver(pts_scaling_factor, billiard; symmetry=generator, character=character, kwargs...)
+function CombinedFieldIntegralEquationSolver(pts_scaling_factor::Union{T,Vector{T}}, sector::SymmetrySector; kwargs...) where {T<:Real}
+    generator, character = _resolve_bim_symmetry(sector.billiard, sector)
+    return CombinedFieldIntegralEquationSolver(pts_scaling_factor, sector.billiard; symmetry=generator, character=character, kwargs...)
 end
 
 _bim_numeric_type(::CombinedFieldIntegralEquationSolver{T}) where {T} = T
