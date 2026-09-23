@@ -235,16 +235,16 @@ end
 
 function _build_h_plans(ν::Int, ks::AbstractVector{ComplexF64}, rmin::Float64, rmax::Float64, npanels::Int, M::Int)
     plans = Vector{ChebHankelPlanH}(undef, length(ks))
-    @inbounds for j in eachindex(ks)
-        plans[j] = plan_h(ν, 1, ks[j], rmin, rmax; npanels, M)
+    Threads.@threads for j in eachindex(ks)
+        @inbounds plans[j] = plan_h(ν, 1, ks[j], rmin, rmax; npanels, M)
     end
     return plans
 end
 
 function _build_j_plans(ν::Int, ks::AbstractVector{ComplexF64}, rmin::Float64, rmax::Float64, npanels::Int, M::Int)
     plans = Vector{ChebJPlan}(undef, length(ks))
-    @inbounds for j in eachindex(ks)
-        plans[j] = plan_j(ν, ks[j], rmin, rmax; npanels, M)
+    Threads.@threads for j in eachindex(ks)
+        @inbounds plans[j] = plan_j(ν, ks[j], rmin, rmax; npanels, M)
     end
     return plans
 end
