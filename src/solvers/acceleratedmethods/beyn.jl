@@ -193,30 +193,34 @@ function tune_cheb_config(cs::CombinedFieldIntegralEquationSolver, pts::Boundary
     return ChebyshevConfig(_bim_numeric_type(cs); n_panels_h=tuned.n_panels_h, M_h=tuned.M_h, n_panels_j=tuned.n_panels_j, M_j=tuned.M_j, tol=tuned.tol, max_iter=tuned.max_iter, sampling_points=tuned.sampling_points, grow_panels=tuned.grow_panels, grow_M=tuned.grow_M, param_strategy=:manual)
 end
 
-function _construct_matrices_multi_k_cheb(cs::DoubleLayerPotentialSolver, pts::BoundaryPoints{T}, zj::Vector{ComplexF64}, cfg::ChebyshevConfig; multithreaded::Bool=true) where {T<:Real}
+function _construct_matrices_multi_k_cheb(cs::DoubleLayerPotentialSolver, pts::BoundaryPoints{T}, zj::Vector{ComplexF64}, cfg::ChebyshevConfig; multithreaded::Bool = true) where {T<:Real}
     T === Float64 || error("Chebyshev-accelerated Beyn evaluation requires Float64")
     N = length(pts); graded = _is_nontrivial_dlp_grading(pts); G = boundary_geom_cache(pts, graded); Rmat = zeros(T, N, N); kress_R!(Rmat)
     rmin, rmax = _cheb_geom_rminmax(G, zj); plans1, plansj1, _ = tune_dlp_cheb_plans(rmin, rmax, zj, cfg)
+    C = ChebRadialLookupCache(G, plans1[1], plansj1[1]; multithreaded)
     if cs.symmetry === nothing
         Tbufs = [Matrix{ComplexF64}(undef, N, N) for _ in zj]
-        _dlp_fredholm_full_multi_k_cheb!(Tbufs, pts, Rmat, G, zj, plans1, plansj1; multithreaded)
+        _dlp_fredholm_full_multi_k_cheb!(Tbufs, pts, Rmat, G, C, zj, plans1, plansj1; multithreaded)
     else
-        orbits = _fold_boundary(T, cs.billiard, N, cs.symmetry, cs.character); M = fundamental_size(orbits); Tbufs = [Matrix{ComplexF64}(undef, M, M) for _ in zj]
-        _dlp_fredholm_reduced_multi_k_cheb!(Tbufs, pts, Rmat, G, orbits, zj, plans1, plansj1; multithreaded)
+        orbits = _fold_boundary(T, cs.billiard, N, cs.symmetry, cs.character); M = fundamental_size(orbits)
+        Tbufs = [Matrix{ComplexF64}(undef, M, M) for _ in zj]
+        _dlp_fredholm_reduced_multi_k_cheb!(Tbufs, pts, Rmat, G, C, orbits, zj, plans1, plansj1; multithreaded)
     end
     return Tbufs
 end
 
-function _construct_matrices_multi_k_cheb(cs::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints{T}, zj::Vector{ComplexF64}, cfg::ChebyshevConfig; multithreaded::Bool=true) where {T<:Real}
+function _construct_matrices_multi_k_cheb(cs::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints{T}, zj::Vector{ComplexF64}, cfg::ChebyshevConfig; multithreaded::Bool = true) where {T<:Real}
     T === Float64 || error("Chebyshev-accelerated Beyn evaluation requires Float64")
     N = length(pts); graded = _is_nontrivial_dlp_grading(pts); G = boundary_geom_cache(pts, graded); Rmat = zeros(T, N, N); kress_R!(Rmat)
     rmin, rmax = _cheb_geom_rminmax(G, zj); plans0, plans1, plansj0, plansj1, _ = tune_cfie_cheb_plans(rmin, rmax, zj, cfg)
+    C = ChebRadialLookupCache(G, plans1[1], plansj1[1]; multithreaded)
     if cs.symmetry === nothing
         Tbufs = [Matrix{ComplexF64}(undef, N, N) for _ in zj]
-        _cfie_fredholm_full_multi_k_cheb!(Tbufs, pts, Rmat, G, zj, plans0, plans1, plansj0, plansj1; multithreaded)
+        _cfie_fredholm_full_multi_k_cheb!(Tbufs, pts, Rmat, G, C, zj, plans0, plans1, plansj0, plansj1; multithreaded)
     else
-        orbits = _fold_boundary(T, cs.billiard, N, cs.symmetry, cs.character); M = fundamental_size(orbits); Tbufs = [Matrix{ComplexF64}(undef, M, M) for _ in zj]
-        _cfie_fredholm_reduced_multi_k_cheb!(Tbufs, pts, Rmat, G, orbits, zj, plans0, plans1, plansj0, plansj1; multithreaded)
+        orbits = _fold_boundary(T, cs.billiard, N, cs.symmetry, cs.character); M = fundamental_size(orbits)
+        Tbufs = [Matrix{ComplexF64}(undef, M, M) for _ in zj]
+        _cfie_fredholm_reduced_multi_k_cheb!(Tbufs, pts, Rmat, G, C, orbits, zj, plans0, plans1, plansj0, plansj1; multithreaded)
     end
     return Tbufs
 end
