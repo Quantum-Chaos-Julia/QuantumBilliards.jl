@@ -63,10 +63,9 @@ function _dlp_fredholm_full_cheb!(F::AbstractMatrix{ComplexF64}, pts::BoundaryPo
             ph = C.pidx_h[i, j]; th = C.t_h[i, j]; pj = C.pidx_j[i, j]; tj = C.t_j[i, j]
             h1 = eval_h(plan1, ph, th, r); j1 = eval_j(planj1, pj, tj, r)
             c_ij = inn_ij * invr; c_ji = inn_ji * invr
-            l1_ij = αL1 * c_ij * j1; l2_ij = αL2 * c_ij * h1 - l1_ij * lt
-            F[i, j] = -(Rmat[i, j] * l1_ij + pts.ws[j] * l2_ij)
-            l1_ji = αL1 * c_ji * j1; l2_ji = αL2 * c_ji * h1 - l1_ji * lt
-            F[j, i] = -(Rmat[j, i] * l1_ji + pts.ws[i] * l2_ji)
+            l1 = αL1 * j1; h = αL2 * h1
+            F[i, j] = -(c_ij * Rmat[i, j] * l1 + c_ij * pts.ws[j] * h - c_ij * pts.ws[j] * lt * l1)
+            F[j, i] = -(c_ji * Rmat[j, i] * l1 + c_ji * pts.ws[i] * h - c_ji * pts.ws[i] * lt * l1)
         end
     end
     return F
@@ -77,34 +76,36 @@ end
     r = Float64(G.R[i, j]); invr = Float64(G.invR[i, j]); lt = Float64(G.logterm[i, j]); inn = Float64(G.inner[i, j])
     ph = C.pidx_h[i, j]; th = C.t_h[i, j]; pj = C.pidx_j[i, j]; tj = C.t_j[i, j]
     h1 = eval_h(plan1, ph, th, r); j1 = eval_j(planj1, pj, tj, r)
-    c = inn * invr; l1 = -k * inv(2 * pi) * c * j1; l2 = im * k / 2 * c * h1 - l1 * lt
-    return Rmat[i, j] * l1 + pts.ws[j] * l2
+    c = inn * invr; l1 = -k * inv(2 * pi) * j1; h = im * k / 2 * h1
+    return c * Rmat[i, j] * l1 + c * pts.ws[j] * h - c * pts.ws[j] * lt * l1
 end
 
 function _dlp_fredholm_reduced_cheb!(F::AbstractMatrix{ComplexF64}, pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, C::ChebRadialLookupCache, orbits::SymmetryOrbitMap{T}, k::ComplexF64, plan1::ChebHankelPlanH, planj1::ChebJPlan; multithreaded::Bool = true) where {T<:Real}
-    m = fundamental_size(orbits); fund = orbits.fundamental_indices; images = orbits.fund_to_full; scales = orbits.fund_to_scale
+    m = fundamental_size(orbits); N = length(orbits); fund = orbits.fundamental_indices; orbit_of = orbits.orbit_of; phase = orbits.phase
+    images = [Int[] for _ in 1:m]
+    @inbounds for j in 1:N
+        push!(images[orbit_of[j]], j)
+    end
     αL1 = -k * inv(2 * pi); αL2 = im * k / 2
     fill!(F, zero(ComplexF64))
     @use_threads multithreading = (multithreaded && m >= 32) for b in 1:m
-        imgs = images[b]; scls = scales[b]
         @inbounds for a in 1:m
             i = fund[a]; acc = zero(ComplexF64)
-            for l in eachindex(imgs)
-                j = imgs[l]; scale = ComplexF64(scls[l])
+            for j in images[b]
+                phase_j = phase[j]
                 if i == j
-                    acc += scale * ComplexF64(pts.ws[i] * G.kappa[i], 0.0)
+                    acc += phase_j * Complex{Float64}(pts.ws[i] * G.kappa[i], 0.0)
                 else
                     r = Float64(G.R[i, j]); invr = Float64(G.invR[i, j]); lt = Float64(G.logterm[i, j]); inn = Float64(G.inner[i, j])
                     ph = C.pidx_h[i, j]; th = C.t_h[i, j]; pj = C.pidx_j[i, j]; tj = C.t_j[i, j]
                     h1 = eval_h(plan1, ph, th, r); j1 = eval_j(planj1, pj, tj, r)
-                    c = scale * inn * invr; l1 = αL1 * j1
-                    acc += c * Rmat[i, j] * l1 + c * pts.ws[j] * αL2 * h1 - c * pts.ws[j] * lt * l1
+                    c = phase_j * inn * invr; c1 = c * Rmat[i, j]; c2 = c * pts.ws[j]; c3 = c2 * lt
+                    l1 = αL1 * j1
+                    acc += c1 * l1 + c2 * αL2 * h1 - c3 * l1
                 end
             end
             F[a, b] = -acc
         end
-    end
-    @inbounds for b in 1:m
         F[b, b] += one(ComplexF64)
     end
     return F
@@ -137,7 +138,7 @@ function _dlp_fredholm_full_multi_k_cheb!(Fs::Vector{<:AbstractMatrix{ComplexF64
         αL1[mm] = -zj[mm] * invtwopi; αL2[mm] = im * zj[mm] / 2
         fill!(Fs[mm], zero(ComplexF64))
         for i in 1:N
-            Fs[mm][i, i] = one(ComplexF64) - ComplexF64(pts.ws[i] * G.kappa[i])
+            Fs[mm][i, i] = one(ComplexF64) - Complex{Float64}(pts.ws[i] * G.kappa[i], 0.0)
         end
     end
     nt = _cheb_nthreads_buf()
@@ -155,8 +156,7 @@ function _dlp_fredholm_full_multi_k_cheb!(Fs::Vector{<:AbstractMatrix{ComplexF64
             cR_ij = c_ij * Rij; cw_ij = c_ij * wj; cwl_ij = cw_ij * lt
             cR_ji = c_ji * Rji; cw_ji = c_ji * wi; cwl_ji = cw_ji * lt
             for mm in 1:Mk
-                l1 = αL1[mm] * j1vals[mm]
-                h = αL2[mm] * h1vals[mm]
+                l1 = αL1[mm] * j1vals[mm]; h = αL2[mm] * h1vals[mm]
                 Fs[mm][i, j] = -(cR_ij * l1 + cw_ij * h - cwl_ij * l1)
                 Fs[mm][j, i] = -(cR_ji * l1 + cw_ji * h - cwl_ji * l1)
             end
@@ -168,7 +168,11 @@ end
 function _dlp_fredholm_reduced_multi_k_cheb!(Fs::Vector{<:AbstractMatrix{ComplexF64}}, pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, C::ChebRadialLookupCache, orbits::SymmetryOrbitMap{T}, zj::Vector{ComplexF64}, plans1::Vector{ChebHankelPlanH}, plansj1::Vector{ChebJPlan}; multithreaded::Bool = true) where {T<:Real}
     Mk = length(zj)
     @assert length(Fs) == Mk && length(plans1) == Mk && length(plansj1) == Mk
-    m = fundamental_size(orbits); fund = orbits.fundamental_indices; images = orbits.fund_to_full; scales = orbits.fund_to_scale
+    m = fundamental_size(orbits); N = length(orbits); fund = orbits.fundamental_indices; orbit_of = orbits.orbit_of; phase = orbits.phase
+    images = [Int[] for _ in 1:m]
+    @inbounds for j in 1:N
+        push!(images[orbit_of[j]], j)
+    end
     invtwopi = inv(2 * pi)
     αL1 = Vector{ComplexF64}(undef, Mk); αL2 = Vector{ComplexF64}(undef, Mk)
     @inbounds for mm in 1:Mk
@@ -181,22 +185,21 @@ function _dlp_fredholm_reduced_multi_k_cheb!(Fs::Vector{<:AbstractMatrix{Complex
     acc_tls = [Vector{ComplexF64}(undef, Mk) for _ in 1:nt]
     @use_threads multithreading = (multithreaded && m >= 32) for b in 1:m
         tid = Threads.threadid(); h1vals = h1_tls[tid]; j1vals = j1_tls[tid]; acc = acc_tls[tid]
-        imgs = images[b]; scls = scales[b]
         @inbounds for a in 1:m
             i = fund[a]; fill!(acc, zero(ComplexF64))
-            for l in eachindex(imgs)
-                j = imgs[l]; scale = ComplexF64(scls[l])
+            for j in images[b]
+                phase_j = phase[j]
                 if i == j
-                    val = scale * ComplexF64(pts.ws[i] * G.kappa[i])
+                    val = Complex{Float64}(pts.ws[i] * G.kappa[i], 0.0)
                     for mm in 1:Mk
-                        acc[mm] += val
+                        acc[mm] += phase_j * val
                     end
                 else
                     r = Float64(G.R[i, j]); invr = Float64(G.invR[i, j]); lt = Float64(G.logterm[i, j]); inn = Float64(G.inner[i, j])
                     Rij = Float64(Rmat[i, j]); wj = Float64(pts.ws[j])
                     ph = C.pidx_h[i, j]; th = C.t_h[i, j]; pj = C.pidx_j[i, j]; tj = C.t_j[i, j]
                     h1_j1_multi_ks_at_r!(h1vals, j1vals, plans1, plansj1, ph, th, pj, tj, r)
-                    c = scale * inn * invr; c1 = c * Rij; c2 = c * wj; c3 = c2 * lt
+                    c = phase_j * inn * invr; c1 = c * Rij; c2 = c * wj; c3 = c2 * lt
                     for mm in 1:Mk
                         l1 = αL1[mm] * j1vals[mm]
                         acc[mm] += c1 * l1 + c2 * αL2[mm] * h1vals[mm] - c3 * l1
@@ -207,9 +210,9 @@ function _dlp_fredholm_reduced_multi_k_cheb!(Fs::Vector{<:AbstractMatrix{Complex
                 Fs[mm][a, b] = -acc[mm]
             end
         end
-    end
-    @inbounds for mm in 1:Mk, b in 1:m
-        Fs[mm][b, b] += one(ComplexF64)
+        for mm in 1:Mk
+            Fs[mm][b, b] += one(ComplexF64)
+        end
     end
     return Fs
 end
