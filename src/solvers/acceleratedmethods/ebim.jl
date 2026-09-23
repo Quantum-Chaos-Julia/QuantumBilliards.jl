@@ -577,12 +577,11 @@ end
 # and analytic wavenumber derivatives are identical to the direct EBIM path; only radial special-function evaluation is replaced by Chebyshev interpolation.
 function _ebim_construct_matrices_cheb(cs::DoubleLayerPotentialSolver, pts::BoundaryPoints{T}, k, cfg::ChebyshevConfig, cache::EBIMCache; multithreaded::Bool = true) where {T<:Real}
     T === Float64 || error("Chebyshev-accelerated EBIM evaluation currently requires a Float64 kernel; received numeric type $T. Construct the ExpandedBIMSolver with use_chebyshev=false.")
-    kc = ComplexF64(_bim_widen_k(T, k)); N = length(pts)
-    G = cache.G; Rmat = cache.Rmat
+    kc = ComplexF64(_bim_widen_k(T, k)); N = length(pts); G = cache.G; Rmat = cache.Rmat
     rmin, rmax = _cheb_geom_rminmax(G, [kc])
     plans0, plans1, plansj0, plansj1, _ = tune_cfie_cheb_plans(rmin, rmax, [kc], cfg)
     plan0 = plans0[1]; plan1 = plans1[1]; planj0 = plansj0[1]; planj1 = plansj1[1]
-    cache.cheb_lookup === nothing && (cache.cheb_lookup = ChebRadialLookupCache(G, plan1, planj1; multithreaded))
+    cache.cheb_lookup = ChebRadialLookupCache(G, plan1, planj1; multithreaded)
     C = cache.cheb_lookup
     entry_fn = (p, R, Gc, kk, i, j) -> _dlp_kernel_entry_with_derivatives_cheb(p, R, Gc, C, kk, plan0, plan1, planj0, planj1, i, j)
     if cache.orbits === nothing
@@ -590,8 +589,7 @@ function _ebim_construct_matrices_cheb(cs::DoubleLayerPotentialSolver, pts::Boun
         _ebim_fredholm_full_with_derivatives!(entry_fn, A, dA, ddA, pts, Rmat, G, kc; multithreaded)
         return A, dA, ddA
     end
-    m = fundamental_size(cache.orbits)
-    A = Matrix{ComplexF64}(undef, m, m); dA = similar(A); ddA = similar(A)
+    m = fundamental_size(cache.orbits); A = Matrix{ComplexF64}(undef, m, m); dA = similar(A); ddA = similar(A)
     _ebim_fredholm_reduced_with_derivatives!(entry_fn, A, dA, ddA, pts, Rmat, G, cache.orbits, kc; multithreaded)
     return A, dA, ddA
 end
@@ -600,12 +598,11 @@ end
 # and analytic wavenumber derivatives are identical to the direct EBIM path; only radial special-function evaluation is replaced by Chebyshev interpolation.
 function _ebim_construct_matrices_cheb(cs::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints{T}, k, cfg::ChebyshevConfig, cache::EBIMCache; multithreaded::Bool = true) where {T<:Real}
     T === Float64 || error("Chebyshev-accelerated EBIM evaluation currently requires a Float64 kernel; received numeric type $T. Construct the ExpandedBIMSolver with use_chebyshev=false.")
-    kc = ComplexF64(_bim_widen_k(T, k)); N = length(pts)
-    G = cache.G; Rmat = cache.Rmat
+    kc = ComplexF64(_bim_widen_k(T, k)); N = length(pts); G = cache.G; Rmat = cache.Rmat
     rmin, rmax = _cheb_geom_rminmax(G, [kc])
     plans0, plans1, plansj0, plansj1, _ = tune_cfie_cheb_plans(rmin, rmax, [kc], cfg)
     plan0 = plans0[1]; plan1 = plans1[1]; planj0 = plansj0[1]; planj1 = plansj1[1]
-    cache.cheb_lookup === nothing && (cache.cheb_lookup = ChebRadialLookupCache(G, plan1, planj1; multithreaded))
+    cache.cheb_lookup = ChebRadialLookupCache(G, plan1, planj1; multithreaded)
     C = cache.cheb_lookup
     entry_fn = (p, R, Gc, kk, i, j) -> _cfie_kernel_entry_with_derivatives_cheb(p, R, Gc, C, kk, plan0, plan1, planj0, planj1, i, j)
     if cache.orbits === nothing
@@ -613,8 +610,7 @@ function _ebim_construct_matrices_cheb(cs::CombinedFieldIntegralEquationSolver, 
         _ebim_fredholm_full_with_derivatives!(entry_fn, A, dA, ddA, pts, Rmat, G, kc; multithreaded)
         return A, dA, ddA
     end
-    m = fundamental_size(cache.orbits)
-    A = Matrix{ComplexF64}(undef, m, m); dA = similar(A); ddA = similar(A)
+    m = fundamental_size(cache.orbits); A = Matrix{ComplexF64}(undef, m, m); dA = similar(A); ddA = similar(A)
     _ebim_fredholm_reduced_with_derivatives!(entry_fn, A, dA, ddA, pts, Rmat, G, cache.orbits, kc; multithreaded)
     return A, dA, ddA
 end
