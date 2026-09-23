@@ -306,7 +306,7 @@ generalized eigenvalues `mu` are computed with [`generalized_eigvals`](@ref)
 """
 function solve(solver::VerginiSaracenoSolver, basis::Ba, pts::BoundaryPoints, k, dk; multithreaded = true) where {Ba<:AbsBasis}
     F, Fk = construct_matrices(solver, basis, pts, k; multithreaded)
-    mu = generalized_eigvals(Symmetric(F),Symmetric(Fk);eps=solver.eps)
+    @blas_multi_then_1 MAX_BLAS_THREADS mu = generalized_eigvals(Symmetric(F),Symmetric(Fk);eps=solver.eps)
     ks, ten = sm_results(mu,k)
     idx = abs.(ks.-k) .< dk
     ks = ks[idx]
