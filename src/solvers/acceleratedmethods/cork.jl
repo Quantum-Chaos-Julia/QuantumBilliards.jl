@@ -885,7 +885,7 @@ mutable struct CORKSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
 end
 
 """
-    CORKSolver(kernel::K; p::Int=16, guard::Real=0.05, nlevels::Int=200, Rmax::Real=0.8, b::Int=10, mstart::Int=30*b, mstep::Int=10*b, stable_checks::Int=1, imag_tol::Real=1e-8, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, eigenvectors::Bool=false, validate::Bool=false, verbose::Bool=false, taylor_tol::Real=1e-10) where {K<:SweepBIMSolver}
+    CORKSolver(kernel::K; p::Int=16, guard::Real=0.05, nlevels::Int=100, Rmax::Real=0.6, b::Int=12, mstart::Int=b*ceil(Int,5.0nlevels/b), mstep::Int=b*ceil(Int,50/b), stable_checks::Int=1, imag_tol::Real=1e-4, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, eigenvectors::Bool=false, validate::Bool=false, verbose::Bool=false, taylor_tol::Real=3e-10) where {K<:SweepBIMSolver} 
 
 Construct a Chebyshev-CORK eigensolver for a BIM Fredholm nonlinear
 eigenvalue problem `A(k)u=0`.
@@ -911,13 +911,13 @@ of each window.
 ## Keyword Arguments
 - `p::Int=16`: Degree of the Chebyshev matrix polynomial.
 - `guard::Real=0.05`: Relative enlargement of the requested interval used for polynomial construction and Ritz discovery.
-- `nlevels::Int=200`: Target number of physical levels per spectral window.
-- `Rmax::Real=0.8`: Maximum requested half-width `Δ` of a spectral window.
-- `b::Int=10`: Block-Arnoldi block size.
-- `mstart::Int=30*b`: Initial compact Krylov dimension.
-- `mstep::Int=10*b`: Krylov-dimension increment between convergence tests.
+- `nlevels::Int=100`: Target number of physical levels per spectral window.
+- `Rmax::Real=0.6`: Maximum requested half-width `Δ` of a spectral window.
+- `b::Int=12`: Block-Arnoldi block size.
+- `mstart::Int=b*ceil(Int,5.0nlevels/b)`: Initial compact Krylov dimension.
+- `mstep::Int=b*ceil(Int,50/b)`: Krylov-dimension increment between convergence tests.
 - `stable_checks::Int=1`: Number of consecutive stable accepted spectra required.
-- `imag_tol::Real=1e-8`: Final tolerance on `|Im(k)|` for accepted roots.
+- `imag_tol::Real=1e-4`: Final tolerance on `|Im(k)|` for accepted roots.
 - `edge_tol::Real=1e-8`: Normalized tolerance used when extracting Ritz roots from the guarded polynomial interval.
 - `res_tol::Real=1e-10`: Maximum projected CORK residual indicator for accepted roots.
 - `stable_tol::Real=1e-9`: Maximum root displacement allowed between consecutive accepted spectra.
@@ -925,12 +925,12 @@ of each window.
 - `eigenvectors::Bool=false`: Whether ordinary solve calls also reconstruct physical Fredholm vectors internally.
 - `validate::Bool=false`: Whether to compare the Chebyshev polynomial with directly constructed BIM matrices before the CORK iteration.
 - `verbose::Bool=false`: Whether to print detailed polynomial and CORK convergence diagnostics.
-- `taylor_tol::Real=1e-10`: Maximum relative polynomial-validation error when `validate=true`.
+- `taylor_tol::Real=3e-10`: Maximum relative polynomial-validation error when `validate=true`.
 
 ## Returns
 - `CORKSolver`: Configured Chebyshev-CORK solver.
 """
-function CORKSolver(kernel::K; p::Int=16, guard::Real=0.05, nlevels::Int=200, Rmax::Real=0.8, b::Int=10, mstart::Int=30*b, mstep::Int=10*b, stable_checks::Int=1, imag_tol::Real=1e-8, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, eigenvectors::Bool=false, validate::Bool=false, verbose::Bool=false, taylor_tol::Real=1e-10) where {K<:SweepBIMSolver} 
+function CORKSolver(kernel::K; p::Int=16, guard::Real=0.05, nlevels::Int=100, Rmax::Real=0.6, b::Int=12, mstart::Int=b*ceil(Int,5.0nlevels/b), mstep::Int=b*ceil(Int,50/b), stable_checks::Int=1, imag_tol::Real=1e-4, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, eigenvectors::Bool=false, validate::Bool=false, verbose::Bool=false, taylor_tol::Real=3e-10) where {K<:SweepBIMSolver} 
     T = _bim_numeric_type(kernel)
     T === Float64 || throw(ArgumentError("CORKSolver currently requires a Float64 BIM kernel"))
     mstart % b == 0 || throw(ArgumentError("mstart must be divisible by b"))
