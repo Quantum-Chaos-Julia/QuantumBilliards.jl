@@ -402,7 +402,7 @@ function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::F
     while k < k2T
         Δk = T(dk(k)); Δk > 0 || throw(ArgumentError("dk(k) must be positive; received dk($k) = $Δk"))
         m = weyl_window_count(billiard, k-Δk, 2Δk; fundamental)
-        push!(ks_grid, k); push!(dks, Δk); push!(nlevels, 20)#push!(nlevels, max(1, ceil(Int, m)))
+        push!(ks_grid, k); push!(dks, Δk); push!(nlevels, max(1, ceil(Int, m)))
         k += Δk
     end
     n = length(ks_grid); n > 0 || throw(ArgumentError("Spectrum interval [$k1,$k2] contains no expansion centers"))
@@ -417,18 +417,19 @@ function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::F
     seg_first = 1
     while seg_first <= n
         seg_last = seg_first
-        while seg_last < n && ks_grid[seg_last+1] <= ks_grid[seg_first]/reuseT
+        while seg_last < n && ks_grid[seg_last + 1] <= ks_grid[seg_first] / reuseT
             seg_last += 1
         end
-        seg_last!=seg_first && (pts = evaluate_points(solver, billiard, ks_grid[seg_last]))
+        seg_last != seg_first && (pts = evaluate_points(solver, billiard, ks_grid[seg_last]))
         cache = EBIMCache(solver.kernel, pts)
+        solver.use_chebyshev && prepare_ebim_cheb_cache!(cache, @view(ks_grid[seg_first:seg_last]), cheb_config; multithreaded)
         for i in seg_first:seg_last
             ki, ti = solve(solver, pts, ks_grid[i], nlevels[i]; multithreaded, cheb_config, cache)
-            keep = abs.(real.(ki).-ks_grid[i]).<=dks[i]
+            keep = abs.(real.(ki) .- ks_grid[i]) .<= dks[i]
             ks_corr[i] = ki[keep]; ts_corr[i] = ti[keep]
             show_progress && next!(progress)
         end
-        seg_first = seg_last+1
+        seg_first = seg_last + 1
     end
     ks = Complex{T}[]; ts = T[]; control = Bool[]
     for i in eachindex(ks_corr)

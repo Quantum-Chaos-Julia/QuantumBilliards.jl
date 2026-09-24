@@ -143,6 +143,8 @@ mutable struct EBIMCache{G,R,O}
     Rmat::R
     orbits::O
     cheb_lookup::Union{Nothing,ChebRadialLookupCache}
+    rmin::Float64
+    rmax::Float64
 end
 
 function EBIMCache(cs::Union{DoubleLayerPotentialSolver,CombinedFieldIntegralEquationSolver}, pts::BoundaryPoints{T}) where {T<:Real}
@@ -150,7 +152,17 @@ function EBIMCache(cs::Union{DoubleLayerPotentialSolver,CombinedFieldIntegralEqu
     G = boundary_geom_cache(pts, _is_nontrivial_dlp_grading(pts))
     Rmat = zeros(T, N, N); kress_R!(Rmat)
     orbits = cs.symmetry === nothing ? nothing : _fold_boundary(T, cs.billiard, N, cs.symmetry, cs.character)
-    return EBIMCache(G, Rmat, orbits, nothing)
+    return EBIMCache(G, Rmat, orbits, nothing, NaN, NaN)
+end
+
+function prepare_ebim_cheb_cache!(cache::EBIMCache, ks, cfg::ChebyshevConfig; multithreaded::Bool = true)
+    z = ComplexF64.(ks)
+    cache.rmin, cache.rmax = _cheb_geom_rminmax(cache.G, z)
+    kref = z[argmax(abs.(z))]
+    ph = plan_h(1, 1, kref, cache.rmin, cache.rmax; npanels = cfg.n_panels_h, M = cfg.M_h)
+    pj = plan_j(1, kref, cache.rmin, cache.rmax; npanels = cfg.n_panels_j, M = cfg.M_j)
+    cache.cheb_lookup = ChebRadialLookupCache(cache.G, ph, pj; multithreaded)
+    return cache
 end
 
 ################################################################################
@@ -573,15 +585,22 @@ end
 ############################## PUBLIC API ######################################
 ################################################################################
 
+@inline function _ebim_cheb_plans(kc::ComplexF64, cfg::ChebyshevConfig, cache::EBIMCache)
+    isfinite(cache.rmin) && isfinite(cache.rmax) || error("EBIM Chebyshev cache has not been prepared")
+    cache.cheb_lookup === nothing && error("EBIM Chebyshev radial lookup has not been prepared")
+    plan0 = plan_h(0, 1, kc, cache.rmin, cache.rmax; npanels = cfg.n_panels_h, M = cfg.M_h)
+    plan1 = plan_h(1, 1, kc, cache.rmin, cache.rmax; npanels = cfg.n_panels_h, M = cfg.M_h)
+    planj0 = plan_j(0, kc, cache.rmin, cache.rmax; npanels = cfg.n_panels_j, M = cfg.M_j)
+    planj1 = plan_j(1, kc, cache.rmin, cache.rmax; npanels = cfg.n_panels_j, M = cfg.M_j)
+    return plan0, plan1, planj0, planj1
+end
+
 # Assemble A(k), A'(k), and A''(k) for a DLP discretization using Chebyshev-interpolated H₀⁽¹⁾, H₁⁽¹⁾, J₀, and J₁. The Fredholm discretization
 # and analytic wavenumber derivatives are identical to the direct EBIM path; only radial special-function evaluation is replaced by Chebyshev interpolation.
 function _ebim_construct_matrices_cheb(cs::DoubleLayerPotentialSolver, pts::BoundaryPoints{T}, k, cfg::ChebyshevConfig, cache::EBIMCache; multithreaded::Bool = true) where {T<:Real}
     T === Float64 || error("Chebyshev-accelerated EBIM evaluation currently requires a Float64 kernel; received numeric type $T. Construct the ExpandedBIMSolver with use_chebyshev=false.")
     kc = ComplexF64(_bim_widen_k(T, k)); N = length(pts); G = cache.G; Rmat = cache.Rmat
-    rmin, rmax = _cheb_geom_rminmax(G, [kc])
-    plans0, plans1, plansj0, plansj1, _ = tune_cfie_cheb_plans(rmin, rmax, [kc], cfg)
-    plan0 = plans0[1]; plan1 = plans1[1]; planj0 = plansj0[1]; planj1 = plansj1[1]
-    cache.cheb_lookup = ChebRadialLookupCache(G, plan1, planj1; multithreaded)
+    plan0, plan1, planj0, planj1 = _ebim_cheb_plans(kc, cfg, cache)
     C = cache.cheb_lookup
     entry_fn = (p, R, Gc, kk, i, j) -> _dlp_kernel_entry_with_derivatives_cheb(p, R, Gc, C, kk, plan0, plan1, planj0, planj1, i, j)
     if cache.orbits === nothing
@@ -599,10 +618,7 @@ end
 function _ebim_construct_matrices_cheb(cs::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints{T}, k, cfg::ChebyshevConfig, cache::EBIMCache; multithreaded::Bool = true) where {T<:Real}
     T === Float64 || error("Chebyshev-accelerated EBIM evaluation currently requires a Float64 kernel; received numeric type $T. Construct the ExpandedBIMSolver with use_chebyshev=false.")
     kc = ComplexF64(_bim_widen_k(T, k)); N = length(pts); G = cache.G; Rmat = cache.Rmat
-    rmin, rmax = _cheb_geom_rminmax(G, [kc])
-    plans0, plans1, plansj0, plansj1, _ = tune_cfie_cheb_plans(rmin, rmax, [kc], cfg)
-    plan0 = plans0[1]; plan1 = plans1[1]; planj0 = plansj0[1]; planj1 = plansj1[1]
-    cache.cheb_lookup = ChebRadialLookupCache(G, plan1, planj1; multithreaded)
+    plan0, plan1, planj0, planj1 = _ebim_cheb_plans(kc, cfg, cache)
     C = cache.cheb_lookup
     entry_fn = (p, R, Gc, kk, i, j) -> _cfie_kernel_entry_with_derivatives_cheb(p, R, Gc, C, kk, plan0, plan1, planj0, planj1, i, j)
     if cache.orbits === nothing
@@ -627,7 +643,7 @@ function tune_ebim_cheb_config(cs::Union{DoubleLayerPotentialSolver,CombinedFiel
 end
 
 """
-    construct_matrices(solver::ExpandedBIMSolver, pts::BoundaryPoints, k; multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config)
+    construct_matrices(solver::ExpandedBIMSolver, pts::BoundaryPoints, k; multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config, cache=nothing)
 
 Assemble the Fredholm matrix and its first two wavenumber derivatives at `k`.
 
@@ -659,9 +675,14 @@ special functions through Chebyshev interpolation.
 * `dA::Matrix`: First wavenumber derivative `A'(k)`.
 * `ddA::Matrix`: Second wavenumber derivative `A''(k)`.
 """
-function construct_matrices(solver::ExpandedBIMSolver, pts::BoundaryPoints, k; multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config, cache=nothing)
+function construct_matrices(solver::ExpandedBIMSolver, pts::BoundaryPoints, k; multithreaded::Bool = true, cheb_config::ChebyshevConfig = solver.cheb_config, cache = nothing)
     solver.use_chebyshev || return _ebim_construct_matrices(solver.kernel, pts, k; multithreaded)
-    cache===nothing && (cache = EBIMCache(solver.kernel, pts))
+    if cache === nothing
+        cache = EBIMCache(solver.kernel, pts)
+        prepare_ebim_cheb_cache!(cache, (k,), cheb_config; multithreaded)
+    elseif cache.cheb_lookup === nothing
+        prepare_ebim_cheb_cache!(cache, (k,), cheb_config; multithreaded)
+    end
     return _ebim_construct_matrices_cheb(solver.kernel, pts, k, cheb_config, cache; multithreaded)
 end
 
