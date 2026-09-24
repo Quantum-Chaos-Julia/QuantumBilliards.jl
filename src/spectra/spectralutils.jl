@@ -401,7 +401,7 @@ function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::F
     ks_grid = T[]; dks = T[]; nlevels = Int[]; k = k1T
     while k < k2T
         Δk = T(dk(k)); Δk > 0 || throw(ArgumentError("dk(k) must be positive; received dk($k) = $Δk"))
-        m = weyl_window_count(billiard, k, Δk; fundamental)
+        m = weyl_window_count(billiard, k-Δk, 2Δk; fundamental)
         push!(ks_grid, k); push!(dks, Δk); push!(nlevels, max(1, ceil(Int, m)))
         k += Δk
     end
