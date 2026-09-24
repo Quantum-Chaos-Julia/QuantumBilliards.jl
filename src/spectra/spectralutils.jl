@@ -402,7 +402,7 @@ function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::F
     while k < k2T
         Δk = T(dk(k)); Δk > 0 || throw(ArgumentError("dk(k) must be positive; received dk($k) = $Δk"))
         m = weyl_window_count(billiard, k-Δk, 2Δk; fundamental)
-        push!(ks_grid, k); push!(dks, Δk); push!(nlevels, max(1, ceil(Int, m)))
+        push!(ks_grid, k); push!(dks, Δk); push!(nlevels, 20)#push!(nlevels, max(1, ceil(Int, m)))
         k += Δk
     end
     n = length(ks_grid); n > 0 || throw(ArgumentError("Spectrum interval [$k1,$k2] contains no expansion centers"))
