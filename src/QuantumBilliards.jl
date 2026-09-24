@@ -66,7 +66,7 @@ export SweepBasisSolver, AcceleratedBasisSolver
 export SweepBIMSolver, AcceleratedBIMSolver
 export VerginiSaracenoSolver, print_benchmark_info
 export DecompositionMethodSolver
-export ParticularSolutionsMethod
+export ParticularSolutionsMethodSolver
 export BoundaryGrading, SmoothPeriodicGrading, CornerGrading, GlobalCornerGrading
 export DoubleLayerPotentialSolver, CombinedFieldIntegralEquationSolver, CompositeBIMSolver
 export ExpandedBIMSolver, BeynSolver, CORKSolver

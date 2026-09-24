@@ -34,9 +34,9 @@
 ################################################################################
 
 """
-    ParticularSolutionsMethod{T} <: SweepBasisSolver
+    ParticularSolutionsMethodSolver{T} <: SweepBasisSolver
 
-`ParticularSolutionsMethod` is a concrete [`SweepBasisSolver`](@ref)
+`ParticularSolutionsMethodSolver` is a concrete [`SweepBasisSolver`](@ref)
 implementing the particular solutions method (PSM) for computing quantum
 billiard spectra by sweeping over individual wavenumbers.
 
@@ -74,7 +74,7 @@ The following functions can be evaluated for this type:
 `solve_wavenumber` and `k_sweep` are inherited for free from the shared
 [`SweepBasisSolver`](@ref) generics.
 """
-struct ParticularSolutionsMethod{T} <: SweepBasisSolver where {T<:Real}
+struct ParticularSolutionsMethodSolver{T} <: SweepBasisSolver where {T<:Real}
     dim_scaling_factor::T
     pts_scaling_factor::Vector{T}
     int_pts_scaling_factor::T
@@ -86,9 +86,9 @@ struct ParticularSolutionsMethod{T} <: SweepBasisSolver where {T<:Real}
 end
 
 """
-    ParticularSolutionsMethod(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}, int_pts_scaling_factor::T; min_dim::Int = 100, min_pts::Int = 500, min_int_pts::Int = 500) where {T<:Real} → solver::ParticularSolutionsMethod{T}
+    ParticularSolutionsMethodSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}, int_pts_scaling_factor::T; min_dim::Int = 100, min_pts::Int = 500, min_int_pts::Int = 500) where {T<:Real} → solver::ParticularSolutionsMethodSolver{T}
 
-Constructs a [`ParticularSolutionsMethod`](@ref) with a single
+Constructs a [`ParticularSolutionsMethodSolver`](@ref) with a single
 `GaussLegendreNodes` sampler shared by every fundamental boundary curve.
 
 ## Arguments
@@ -102,21 +102,21 @@ Constructs a [`ParticularSolutionsMethod`](@ref) with a single
 * `min_int_pts::Int = 500`: Minimum number of interior sampling points.
 
 ## Returns
-* `solver`: A [`ParticularSolutionsMethod{T}`](@ref) instance.
+* `solver`: A [`ParticularSolutionsMethodSolver{T}`](@ref) instance.
 """
-function ParticularSolutionsMethod(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}},
+function ParticularSolutionsMethodSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}},
                                     int_pts_scaling_factor::T;
                                     min_dim::Int=100, min_pts::Int=500, min_int_pts::Int=500) where {T<:Real}
     d = dim_scaling_factor
     bs = pts_scaling_factor isa T ? [pts_scaling_factor] : pts_scaling_factor
     sampler = [GaussLegendreNodes()]
-    return ParticularSolutionsMethod(d, bs, int_pts_scaling_factor, sampler, eps(T), min_dim, min_pts, min_int_pts)
+    return ParticularSolutionsMethodSolver(d, bs, int_pts_scaling_factor, sampler, eps(T), min_dim, min_pts, min_int_pts)
 end
 
 """
-    ParticularSolutionsMethod(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}, int_pts_scaling_factor::T, samplers::Vector{<:AbsSampler}; min_dim::Int = 100, min_pts::Int = 500, min_int_pts::Int = 500) where {T<:Real} → solver::ParticularSolutionsMethod{T}
+    ParticularSolutionsMethodSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}, int_pts_scaling_factor::T, samplers::Vector{<:AbsSampler}; min_dim::Int = 100, min_pts::Int = 500, min_int_pts::Int = 500) where {T<:Real} → solver::ParticularSolutionsMethodSolver{T}
 
-Constructs a [`ParticularSolutionsMethod`](@ref) with a user-supplied sampler
+Constructs a [`ParticularSolutionsMethodSolver`](@ref) with a user-supplied sampler
 for each fundamental boundary curve.
 
 ## Arguments
@@ -131,18 +131,18 @@ for each fundamental boundary curve.
 * `min_int_pts::Int = 500`: Minimum number of interior sampling points.
 
 ## Returns
-* `solver`: A [`ParticularSolutionsMethod{T}`](@ref) instance.
+* `solver`: A [`ParticularSolutionsMethodSolver{T}`](@ref) instance.
 """
-function ParticularSolutionsMethod(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}},
+function ParticularSolutionsMethodSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}},
                                     int_pts_scaling_factor::T, samplers::Vector{<:AbsSampler};
                                     min_dim::Int=100, min_pts::Int=500, min_int_pts::Int=500) where {T<:Real}
     d = dim_scaling_factor
     bs = pts_scaling_factor isa T ? [pts_scaling_factor] : pts_scaling_factor
-    return ParticularSolutionsMethod(d, bs, int_pts_scaling_factor, samplers, eps(T), min_dim, min_pts, min_int_pts)
+    return ParticularSolutionsMethodSolver(d, bs, int_pts_scaling_factor, samplers, eps(T), min_dim, min_pts, min_int_pts)
 end
 
 """
-    evaluate_points(solver::ParticularSolutionsMethod, billiard::Bi, k) where {Bi<:AbsBilliard} → pts::BoundaryPoints
+    evaluate_points(solver::ParticularSolutionsMethodSolver, billiard::Bi, k) where {Bi<:AbsBilliard} → pts::BoundaryPoints
 
 Samples the fundamental boundary and billiard interior required by the particular solutions method.
 
@@ -155,14 +155,14 @@ stored coordinate `s` is the cumulative physical arc length along the
 fundamental boundary.
 
 ## Arguments
-* `solver::ParticularSolutionsMethod`: Solver defining the boundary and interior sampling densities.
+* `solver::ParticularSolutionsMethodSolver`: Solver defining the boundary and interior sampling densities.
 * `billiard::Bi`: Billiard whose fundamental boundary and interior are sampled.
 * `k`: Wavenumber used to determine the number of sampling points.
 
 ## Returns
 * `pts::BoundaryPoints`: Boundary points with `xy`, `normal`, `s`, `ds` and `xy_int` populated.
 """
-function evaluate_points(solver::ParticularSolutionsMethod, billiard::Bi, k) where {Bi<:AbsBilliard}
+function evaluate_points(solver::ParticularSolutionsMethodSolver, billiard::Bi, k) where {Bi<:AbsBilliard}
     bs, samplers = adjust_scaling_and_samplers(solver, billiard); curves = get_boundary_curves(billiard); T = eltype(solver.pts_scaling_factor)
     Ns = _determine_bp_sizes(curves, bs, k); M = length(Ns)
     xy_all = Vector{Vector{SVector{2,T}}}(undef, M); normal_all = Vector{Vector{SVector{2,T}}}(undef, M)
@@ -180,13 +180,13 @@ function evaluate_points(solver::ParticularSolutionsMethod, billiard::Bi, k) whe
 end
 
 """
-    construct_matrices(solver::ParticularSolutionsMethod, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool = true) where {Ba<:AbsBasis} → (B::Matrix, B_int::Matrix)
+    construct_matrices(solver::ParticularSolutionsMethodSolver, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool = true) where {Ba<:AbsBasis} → (B::Matrix, B_int::Matrix)
 
 Constructs the boundary basis matrix `B` and the interior basis matrix
 `B_int` at wavenumber `k`.
 
 ## Arguments
-* `solver`: The [`ParticularSolutionsMethod`](@ref) whose matrices are constructed.
+* `solver`: The [`ParticularSolutionsMethodSolver`](@ref) whose matrices are constructed.
 * `basis`: The basis used to evaluate `B` and `B_int`.
 * `pts`: The [`BoundaryPoints`](@ref) with sampled boundary points `xy` and interior points `xy_int`.
 * `k`: The wavenumber at which the basis is evaluated.
@@ -198,7 +198,7 @@ Constructs the boundary basis matrix `B` and the interior basis matrix
 * `B`: Basis matrix evaluated at the boundary points `pts.xy`.
 * `B_int`: Basis matrix evaluated at the interior points `pts.xy_int`.
 """
-function construct_matrices(solver::ParticularSolutionsMethod, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool=true) where {Ba<:AbsBasis}
+function construct_matrices(solver::ParticularSolutionsMethodSolver, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool=true) where {Ba<:AbsBasis}
     pts_bd = pts.xy
     pts_int = pts.xy_int
     @blas_1 begin
@@ -209,7 +209,7 @@ function construct_matrices(solver::ParticularSolutionsMethod, basis::Ba, pts::B
 end
 
 """
-    solve_full(solver::ParticularSolutionsMethod, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool = true) where {Ba<:AbsBasis} → t::Real
+    solve_full(solver::ParticularSolutionsMethodSolver, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool = true) where {Ba<:AbsBasis} → t::Real
 
 Computes the particular solutions method tension at wavenumber `k` from the
 full (non rank-reduced) singular value decomposition of `B`/`B_int`.
@@ -221,7 +221,7 @@ expensive but more numerically robust than [`solve_with_rank_reduction`](@ref)
 for small-to-moderate basis dimensions.
 
 ## Arguments
-* `solver`: The [`ParticularSolutionsMethod`](@ref) used to solve the eigenvalue problem.
+* `solver`: The [`ParticularSolutionsMethodSolver`](@ref) used to solve the eigenvalue problem.
 * `basis`: The basis used to approximate the eigenstate.
 * `pts`: The [`BoundaryPoints`](@ref) with sampled boundary/interior points.
 * `k`: The wavenumber at which the tension is evaluated.
@@ -232,7 +232,7 @@ for small-to-moderate basis dimensions.
 ## Returns
 * `t`: The tension at wavenumber `k`, the smallest generalized singular value of `(B, B_int)`.
 """
-function solve_full(solver::ParticularSolutionsMethod, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool=true) where {Ba<:AbsBasis}
+function solve_full(solver::ParticularSolutionsMethodSolver, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool=true) where {Ba<:AbsBasis}
     B, B_int = construct_matrices(solver, basis, pts, k; multithreaded=multithreaded)
     @blas_multi_then_1 MAX_BLAS_THREADS solution=svdvals(B,B_int)
     return minimum(solution)
@@ -252,7 +252,7 @@ end
 end
 
 """
-    solve_with_rank_reduction(solver::ParticularSolutionsMethod, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool = true, tol::Real = 1e-10) where {Ba<:AbsBasis} → t::Real
+    solve_with_rank_reduction(solver::ParticularSolutionsMethodSolver, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool = true, tol::Real = 1e-10) where {Ba<:AbsBasis} → t::Real
 
 Computes the particular solutions method tension at wavenumber `k` using a
 rank-reduced singular value decomposition of `B`/`B_int` for improved
@@ -267,7 +267,7 @@ the smallest eigenvalue of the small `r × r` matrix `B_reduced' * B_reduced`.
 This avoids ever forming the full generalized SVD of `(B, B_int)`.
 
 ## Arguments
-* `solver`: The [`ParticularSolutionsMethod`](@ref) used to solve the eigenvalue problem.
+* `solver`: The [`ParticularSolutionsMethodSolver`](@ref) used to solve the eigenvalue problem.
 * `basis`: The basis used to approximate the eigenstate.
 * `pts`: The [`BoundaryPoints`](@ref) with sampled boundary/interior points.
 * `k`: The wavenumber at which the tension is evaluated.
@@ -279,7 +279,7 @@ This avoids ever forming the full generalized SVD of `(B, B_int)`.
 ## Returns
 * `t`: The tension at wavenumber `k`.
 """
-function solve_with_rank_reduction(solver::ParticularSolutionsMethod, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool=true, tol=1e-10) where {Ba<:AbsBasis}
+function solve_with_rank_reduction(solver::ParticularSolutionsMethodSolver, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool=true, tol=1e-10) where {Ba<:AbsBasis}
     B, C = construct_matrices(solver, basis, pts, k; multithreaded=multithreaded)
     T = eltype(B)
     @blas_multi_then_1 MAX_BLAS_THREADS begin
@@ -298,7 +298,7 @@ function solve_with_rank_reduction(solver::ParticularSolutionsMethod, basis::Ba,
 end
 
 """
-    solve(solver::ParticularSolutionsMethod, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool = true, use_rank_reduction::Bool = true, tol::Real = 1e-10) where {Ba<:AbsBasis} → t::Real
+    solve(solver::ParticularSolutionsMethodSolver, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool = true, use_rank_reduction::Bool = true, tol::Real = 1e-10) where {Ba<:AbsBasis} → t::Real
 
 Computes the particular solutions method tension at wavenumber `k` for `basis`
 on the boundary/interior points `pts`.
@@ -309,7 +309,7 @@ substantially faster at large basis dimension; set `use_rank_reduction = false`
 to instead use the more robust, full-SVD [`solve_full`](@ref).
 
 ## Arguments
-* `solver`: The [`ParticularSolutionsMethod`](@ref) used to solve the eigenvalue problem.
+* `solver`: The [`ParticularSolutionsMethodSolver`](@ref) used to solve the eigenvalue problem.
 * `basis`: The basis used to approximate the eigenstate.
 * `pts`: The [`BoundaryPoints`](@ref) with sampled boundary/interior points.
 * `k`: The wavenumber at which the tension is evaluated.
@@ -322,7 +322,7 @@ to instead use the more robust, full-SVD [`solve_full`](@ref).
 ## Returns
 * `t`: The tension at wavenumber `k`.
 """
-function solve(solver::ParticularSolutionsMethod, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool=true, use_rank_reduction::Bool=true, tol=1e-10) where {Ba<:AbsBasis}
+function solve(solver::ParticularSolutionsMethodSolver, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool=true, use_rank_reduction::Bool=true, tol=1e-10) where {Ba<:AbsBasis}
     if use_rank_reduction
         return solve_with_rank_reduction(solver, basis, pts, k; multithreaded=multithreaded, tol=tol)
     else
@@ -331,7 +331,7 @@ function solve(solver::ParticularSolutionsMethod, basis::Ba, pts::BoundaryPoints
 end
 
 """
-    solve_vect(solver::ParticularSolutionsMethod, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool = true, tol::Real = 1e-10) where {Ba<:AbsBasis} → (t::Real, x::Vector)
+    solve_vect(solver::ParticularSolutionsMethodSolver, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool = true, tol::Real = 1e-10) where {Ba<:AbsBasis} → (t::Real, x::Vector)
 
 Computes the particular solutions method tension and the corresponding
 eigenvector (expressed in the original basis) at wavenumber `k`.
@@ -346,7 +346,7 @@ coefficient vector `x` in the original basis ordering expected by
 [`BasisEigenstate`](@ref).
 
 ## Arguments
-* `solver`: The [`ParticularSolutionsMethod`](@ref) used to solve the eigenvalue problem.
+* `solver`: The [`ParticularSolutionsMethodSolver`](@ref) used to solve the eigenvalue problem.
 * `basis`: The basis used to approximate the eigenstate.
 * `pts`: The [`BoundaryPoints`](@ref) with sampled boundary/interior points.
 * `k`: The wavenumber at which the eigenstate is evaluated.
@@ -359,7 +359,7 @@ coefficient vector `x` in the original basis ordering expected by
 * `t`: The tension at wavenumber `k`.
 * `x`: The eigenvector expressed in the original basis coefficient ordering.
 """
-function solve_vect(solver::ParticularSolutionsMethod, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool=true, tol=1e-10) where {Ba<:AbsBasis}
+function solve_vect(solver::ParticularSolutionsMethodSolver, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool=true, tol=1e-10) where {Ba<:AbsBasis}
     B, C = construct_matrices(solver, basis, pts, k; multithreaded=multithreaded)
     @blas_multi_then_1 MAX_BLAS_THREADS begin
         T = eltype(B)
