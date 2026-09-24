@@ -306,18 +306,18 @@ end
 # 2. If the radius lies below the tabulated interval (`pidx==0`) or |z| remains
 #    below the Chebyshev cutoff, evaluate the special function directly.
 # 3. Otherwise evaluate the stored panel polynomial with Clenshaw's algorithm.
-@inline function eval_h(pl::ChebHankelPlanH, pidx::Int32, t::Float64, r::Float64)
-    z = pl.k*r
-    if pidx==0 || abs(z)<hankel_z_chebyshev_cutoff
+@inline function eval_h(pl::ChebHankelPlanH,pidx::Int32,t::Float64,r::Float64)
+    if pidx==0
+        z=pl.k*r; az=abs(z)
         if pl.ν==0
-            return abs(z)<hankel_z_chebyshev_cutoff_small_z ? _small_h0_series(z) : SpecialFunctions.besselh(0, pl.κ, z)
+            return az<hankel_z_chebyshev_cutoff_small_z ? _small_h0_series(z) : SpecialFunctions.besselh(0,pl.κ,z)
         elseif pl.ν==1
-            return abs(z)<hankel_z_chebyshev_cutoff_small_z ? _small_h1_series(z) : SpecialFunctions.besselh(1, pl.κ, z)
+            return az<hankel_z_chebyshev_cutoff_small_z ? _small_h1_series(z) : SpecialFunctions.besselh(1,pl.κ,z)
         else
-            return SpecialFunctions.besselh(pl.ν, pl.κ, z)
+            return SpecialFunctions.besselh(pl.ν,pl.κ,z)
         end
     end
-    return _cheb_clenshaw(pl.panels[pidx].c, t)
+    return _cheb_clenshaw(pl.panels[pidx].c,t)
 end
 
 # Scalar evaluation of J_ν(k r) at one (pidx,t) pair (J is regular at r=0, no small-z fallback needed within the plan's range).
@@ -342,20 +342,21 @@ wavenumber-dependent Hankel plans.
 ## Returns
 * `nothing`: Results are written to `out` in place.
 """
-function eval_h_multi_ks!(out::AbstractVector{ComplexF64}, plans::AbstractVector{ChebHankelPlanH}, r::Float64, pidx::Int32, t::Float64)
-    @inbounds for m in eachindex(plans)
-        plan_m = plans[m]
-        z = plan_m.k*r
-        if pidx==0 || abs(z)<hankel_z_chebyshev_cutoff
-            if plan_m.ν==0
-                out[m] = abs(z)<hankel_z_chebyshev_cutoff_small_z ? _small_h0_series(z) : SpecialFunctions.besselh(0, plan_m.κ, z)
-            elseif plan_m.ν==1
-                out[m] = abs(z)<hankel_z_chebyshev_cutoff_small_z ? _small_h1_series(z) : SpecialFunctions.besselh(1, plan_m.κ, z)
+@inline function eval_h_multi_ks!(out::AbstractVector{ComplexF64},plans::AbstractVector{ChebHankelPlanH},r::Float64,pidx::Int32,t::Float64)
+    if pidx==0
+        @inbounds for m in eachindex(plans)
+            pl=plans[m]; z=pl.k*r; az=abs(z)
+            if pl.ν==0
+                out[m]=az<hankel_z_chebyshev_cutoff_small_z ? _small_h0_series(z) : SpecialFunctions.besselh(0,pl.κ,z)
+            elseif pl.ν==1
+                out[m]=az<hankel_z_chebyshev_cutoff_small_z ? _small_h1_series(z) : SpecialFunctions.besselh(1,pl.κ,z)
             else
-                out[m] = SpecialFunctions.besselh(plan_m.ν, plan_m.κ, z)
+                out[m]=SpecialFunctions.besselh(pl.ν,pl.κ,z)
             end
-        else
-            out[m] = _cheb_clenshaw(plan_m.panels[pidx].c, t)
+        end
+    else
+        @inbounds for m in eachindex(plans)
+            out[m]=_cheb_clenshaw(plans[m].panels[pidx].c,t)
         end
     end
     return nothing
@@ -377,13 +378,20 @@ wavenumber-dependent Bessel plans.
 ## Returns
 * `nothing`: Results are written to `out` in place.
 """
-@inline function eval_j_multi_ks!(out::AbstractVector{ComplexF64}, plans::AbstractVector{ChebJPlan}, pidx::Int32, t::Float64, r::Float64)
-    @inbounds for m in eachindex(plans)
-        pl = plans[m]
-        out[m] = pidx==0 ? SpecialFunctions.besselj(pl.ν, pl.k*r) : _cheb_clenshaw(pl.panels[pidx].c, t)
+@inline function eval_j_multi_ks!(out::AbstractVector{ComplexF64},plans::AbstractVector{ChebJPlan},pidx::Int32,t::Float64,r::Float64)
+    if pidx==0
+        @inbounds for m in eachindex(plans)
+            pl=plans[m]
+            out[m]=SpecialFunctions.besselj(pl.ν,pl.k*r)
+        end
+    else
+        @inbounds for m in eachindex(plans)
+            out[m]=_cheb_clenshaw(plans[m].panels[pidx].c,t)
+        end
     end
     return nothing
 end
+
 
 """
     h0_h1_multi_ks_at_r!(h0vals::AbstractVector{ComplexF64}, h1vals::AbstractVector{ComplexF64}, plans0::AbstractVector{ChebHankelPlanH}, plans1::AbstractVector{ChebHankelPlanH}, pidx::Int32, t::Float64, r::Float64)
@@ -403,19 +411,22 @@ one fixed physical radius.
 ## Returns
 * `nothing`: Results are written to `h0vals` and `h1vals` in place.
 """
-@inline function h0_h1_multi_ks_at_r!(h0vals::AbstractVector{ComplexF64}, h1vals::AbstractVector{ComplexF64}, plans0::AbstractVector{ChebHankelPlanH}, plans1::AbstractVector{ChebHankelPlanH}, pidx::Int32, t::Float64, r::Float64)
-    @inbounds for m in eachindex(plans0)
-        z = plans0[m].k*r
-        az = abs(z)
-        if az<hankel_z_chebyshev_cutoff_small_z
-            h0vals[m] = _small_h0_series(z)
-            h1vals[m] = _small_h1_series(z)
-        elseif az<hankel_z_chebyshev_cutoff || pidx==0
-            h0vals[m] = SpecialFunctions.besselh(0, 1, z)
-            h1vals[m] = SpecialFunctions.besselh(1, 1, z)
-        else
-            h0vals[m] = _cheb_clenshaw(plans0[m].panels[pidx].c, t)
-            h1vals[m] = _cheb_clenshaw(plans1[m].panels[pidx].c, t)
+@inline function h0_h1_multi_ks_at_r!(h0vals::AbstractVector{ComplexF64},h1vals::AbstractVector{ComplexF64},plans0::AbstractVector{ChebHankelPlanH},plans1::AbstractVector{ChebHankelPlanH},pidx::Int32,t::Float64,r::Float64)
+    if pidx==0
+        @inbounds for m in eachindex(plans0)
+            z=plans0[m].k*r; az=abs(z)
+            if az<hankel_z_chebyshev_cutoff_small_z
+                h0vals[m]=_small_h0_series(z)
+                h1vals[m]=_small_h1_series(z)
+            else
+                h0vals[m]=SpecialFunctions.besselh(0,1,z)
+                h1vals[m]=SpecialFunctions.besselh(1,1,z)
+            end
+        end
+    else
+        @inbounds for m in eachindex(plans0)
+            h0vals[m]=_cheb_clenshaw(plans0[m].panels[pidx].c,t)
+            h1vals[m]=_cheb_clenshaw(plans1[m].panels[pidx].c,t)
         end
     end
     return nothing
@@ -441,11 +452,12 @@ fixed physical radius.
 ## Returns
 * `nothing`: Results are written to `h1vals` and `j1vals` in place.
 """
-@inline function h1_j1_multi_ks_at_r!(h1vals::AbstractVector{ComplexF64}, j1vals::AbstractVector{ComplexF64}, plans1::AbstractVector{ChebHankelPlanH}, plansj1::AbstractVector{ChebJPlan}, pidx_h::Int32, t_h::Float64, pidx_j::Int32, t_j::Float64, r::Float64)
+@inline function h1_j1_multi_ks_at_r!(h1vals::AbstractVector{ComplexF64},j1vals::AbstractVector{ComplexF64},plans1::AbstractVector{ChebHankelPlanH},plansj1::AbstractVector{ChebJPlan},pidx_h::Int32,t_h::Float64,pidx_j::Int32,t_j::Float64,r::Float64)
     eval_h_multi_ks!(h1vals, plans1, r, pidx_h, t_h)
     eval_j_multi_ks!(j1vals, plansj1, pidx_j, t_j, r)
     return nothing
 end
+
 
 """
     h0_h1_j0_j1_multi_ks_at_r!(h0vals::AbstractVector{ComplexF64}, h1vals::AbstractVector{ComplexF64}, j0vals::AbstractVector{ComplexF64}, j1vals::AbstractVector{ComplexF64}, plans0::AbstractVector{ChebHankelPlanH}, plans1::AbstractVector{ChebHankelPlanH}, plansj0::AbstractVector{ChebJPlan}, plansj1::AbstractVector{ChebJPlan}, pidx_h::Int32, t_h::Float64, pidx_j::Int32, t_j::Float64, r::Float64)
@@ -471,10 +483,10 @@ for all supplied wavenumbers at one fixed physical radius.
 ## Returns
 * `nothing`: Results are written to the four supplied output vectors in place.
 """
-@inline function h0_h1_j0_j1_multi_ks_at_r!(h0vals::AbstractVector{ComplexF64}, h1vals::AbstractVector{ComplexF64}, j0vals::AbstractVector{ComplexF64}, j1vals::AbstractVector{ComplexF64}, plans0::AbstractVector{ChebHankelPlanH}, plans1::AbstractVector{ChebHankelPlanH}, plansj0::AbstractVector{ChebJPlan}, plansj1::AbstractVector{ChebJPlan}, pidx_h::Int32, t_h::Float64, pidx_j::Int32, t_j::Float64, r::Float64)
+@inline function h0_h1_j0_j1_multi_ks_at_r!(h0vals::AbstractVector{ComplexF64}, h1vals::AbstractVector{ComplexF64}, j0vals::AbstractVector{ComplexF64},j1vals::AbstractVector{ComplexF64}, plans0::AbstractVector{ChebHankelPlanH}, plans1::AbstractVector{ChebHankelPlanH}, plansj0::AbstractVector{ChebJPlan},plansj1::AbstractVector{ChebJPlan}, pidx_h::Int32, t_h::Float64, pidx_j::Int32, t_j::Float64, r::Float64)
     h0_h1_multi_ks_at_r!(h0vals, h1vals, plans0, plans1, pidx_h, t_h, r)
-    eval_j_multi_ks!(j0vals, plansj0, pidx_j, t_j, r)
-    eval_j_multi_ks!(j1vals, plansj1, pidx_j, t_j, r)
+    eval_j_multi_ks!(j0vals, plansj0, pidx_j, t_j,r)
+    eval_j_multi_ks!(j1vals, plansj1, pidx_j, t_j,r)
     return nothing
 end
 
