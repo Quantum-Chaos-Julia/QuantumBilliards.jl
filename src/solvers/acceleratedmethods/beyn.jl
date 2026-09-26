@@ -67,6 +67,9 @@ order and terminates after a prescribed sequence of residual-good roots.
 * `svd_tol::T`: Numerical-rank threshold for the zeroth contour moment.
 * `res_tol::T`: Nonlinear residual threshold as a state - keep check.
 * `auto_discard_spurious::Bool`: Discard roots failing residual validation.
+* `use_taylor::Bool`: Use Fredholm matrix via Taylor expansion.
+* `taylor_degree::Int`: Taylor degree used by the analytic Taylor-Horner backend.
+* `taylor_tol::T`: Tolerance for the Taylor expansion.
 * `use_chebyshev::Bool`: Use Chebyshev-accelerated matrix construction.
 * `cheb_config::ChebyshevConfig{T}`: Chebyshev interpolation configuration.
 * `imag_k_check::Bool`: Enable global imaginary-`k` screening. In production should be true.
@@ -74,7 +77,7 @@ order and terminates after a prescribed sequence of residual-good roots.
 * `imag_k_group_size::Int`: Maximum residual-check batch size for imaginary-`k` screening. 
 * `eigenvectors::Bool`: Whether `compute_spectrum` retains the layer densities returned by the Beyn solve.
 """
-struct BeynSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
+mutable struct BeynSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
     kernel::K
     m::Int
     nq::Int
@@ -83,6 +86,9 @@ struct BeynSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
     svd_tol::T
     res_tol::T
     auto_discard_spurious::Bool
+    use_taylor::Bool
+    taylor_degree::Int
+    taylor_tol::T
     use_chebyshev::Bool
     cheb_config::ChebyshevConfig{T}
     imag_k_check::Bool
@@ -92,7 +98,7 @@ struct BeynSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
 end
 
 """
-    BeynSolver(kernel::K; m::Int=10, nq::Int=48, r::Int=48, Rmax::Real=1.0, svd_tol::Real=1e-12, res_tol::Real=1e-9, auto_discard_spurious::Bool=true, use_chebyshev::Bool=true, n_panels_h::Int=15000, M_h::Int=5, n_panels_j::Int=10000, M_j::Int=5, cheb_config::Union{Nothing,ChebyshevConfig}=nothing, imag_k_check::Bool=true, imag_k_pad::Int=20, imag_k_group_size::Int=20)
+    BeynSolver(kernel::K; m::Int=10, nq::Int=48, r::Int=48, Rmax::Real=1.0, svd_tol::Real=1e-12, res_tol::Real=1e-9, auto_discard_spurious::Bool=true, use_taylor::Bool=true, taylor_degree::Int=14, taylor_tol::Real=1e-12, use_chebyshev::Bool=true, n_panels_h::Int=15000, M_h::Int=5, n_panels_j::Int=10000, M_j::Int=5, cheb_config::Union{Nothing,ChebyshevConfig}=nothing, imag_k_check::Bool=true, imag_k_pad::Int=20, imag_k_group_size::Int=20)
 
 Construct a Beyn nonlinear eigensolver.
 
@@ -111,6 +117,9 @@ imaginary-`k` screening by default to verify the spectrum integrity.
 * `svd_tol::Real=1e-11`: Numerical-rank threshold for the zeroth contour moment.
 * `res_tol::Real=1e-8`: Nonlinear residual threshold.
 * `auto_discard_spurious::Bool=true`: Discard roots failing residual validation.
+* `use_taylor::Bool=true`: Use Fredholm matrix via Taylor expansion.
+* `taylor_degree::Int=14`: Taylor degree used by the analytic Taylor-Horner backend.
+* `taylor_tol::Real=1e-12`: Tolerance for the Taylor expansion.
 * `use_chebyshev::Bool=true`: Use Chebyshev-accelerated matrix construction.
 * `n_panels_h::Int=10000`: Hankel Chebyshev initial panel count.
 * `M_h::Int=5`: Hankel Chebyshev polynomial initial degree.
@@ -125,9 +134,9 @@ imaginary-`k` screening by default to verify the spectrum integrity.
 ## Returns
 * `BeynSolver{T,K}`: Configured Beyn solver.
 """
-function BeynSolver(kernel::K; m::Int=100, nq::Int=40, r::Int=200, Rmax::Real=0.5, svd_tol::Real=1e-11, res_tol::Real=1e-8, auto_discard_spurious::Bool=true, use_chebyshev::Bool=true, n_panels_h::Int=10000, M_h::Int=5, n_panels_j::Int=5000, M_j::Int=5, cheb_config::Union{Nothing,ChebyshevConfig}=nothing, imag_k_check::Bool=true, imag_k_pad::Int=20, imag_k_group_size::Int=20, eigenvectors::Bool=true) where {K<:SweepBIMSolver}
+function BeynSolver(kernel::K; m::Int=100, nq::Int=40, r::Int=200, Rmax::Real=0.5, svd_tol::Real=1e-11, res_tol::Real=1e-8, auto_discard_spurious::Bool=true, use_taylor::Bool=true, taylor_degree::Int=14, taylor_tol::Real=1e-12, use_chebyshev::Bool=false, n_panels_h::Int=10000, M_h::Int=5, n_panels_j::Int=5000, M_j::Int=5, cheb_config::Union{Nothing,ChebyshevConfig}=nothing, imag_k_check::Bool=true, imag_k_pad::Int=20, imag_k_group_size::Int=20, eigenvectors::Bool=true) where {K<:SweepBIMSolver}
     T = _bim_numeric_type(kernel); cfg = cheb_config === nothing ? ChebyshevConfig(T; n_panels_h, M_h, n_panels_j, M_j) : cheb_config
-    return BeynSolver{T,K}(kernel, m, nq, r, T(Rmax), T(svd_tol), T(res_tol), auto_discard_spurious, use_chebyshev, cfg, imag_k_check, imag_k_pad, imag_k_group_size, eigenvectors)
+    return BeynSolver{T,K}(kernel, m, nq, r, T(Rmax), T(svd_tol), T(res_tol), auto_discard_spurious, use_taylor, taylor_degree, T(taylor_tol), use_chebyshev, cfg, imag_k_check, imag_k_pad, imag_k_group_size, eigenvectors)
 end
 
 _bim_numeric_type(::BeynSolver{T}) where {T} = T
@@ -236,12 +245,16 @@ function _accumulate_beyn_moments!(A0, A1, X, V, Fs, zj, wj)
 end
 
 """
-    construct_matrices(solver::BeynSolver, pts::BoundaryPoints, k0, R; multithreaded::Bool=true, rng=MersenneTwister(0), cheb_config::ChebyshevConfig=solver.cheb_config)
+    construct_matrices(solver::BeynSolver, pts::BoundaryPoints, k0, R; multithreaded::Bool=true, rng=MersenneTwister(0), cheb_config::ChebyshevConfig=solver.cheb_config, taylor_degree::Int=solver.taylor_degree)
 
 Construct the zeroth and first contour moments used by Beyn's nonlinear
 eigensolver. Fredholm matrices are assembled and factorized once; if the
 zeroth moment remains rank-saturated, the probing rank is increased while
 reusing those factorizations.
+
+Matrix construction uses the analytic Taylor-Horner backend when
+`solver.use_taylor=true`, otherwise the radial-Chebyshev backend when
+`solver.use_chebyshev=true`, and direct construction otherwise.
 
 ## Arguments
 * `solver::BeynSolver`: Beyn solver.
@@ -252,16 +265,19 @@ reusing those factorizations.
 ## Keyword Arguments
 * `multithreaded::Bool=true`: Enable multithreaded matrix construction.
 * `rng=MersenneTwister(0)`: Random-number generator for probing matrices.
-* `cheb_config::ChebyshevConfig=solver.cheb_config`: Chebyshev configuration used for accelerated matrix construction.
+* `cheb_config::ChebyshevConfig=solver.cheb_config`: Chebyshev configuration used by the radial-Chebyshev backend.
+* `taylor_degree::Int=solver.taylor_degree`: Taylor degree used by the analytic Taylor-Horner backend.
 
 ## Returns
 * `A0::Matrix{Complex{T}}`: Zeroth contour moment.
 * `A1::Matrix{Complex{T}}`: First contour moment.
 """
-function construct_matrices(solver::BeynSolver, pts::BoundaryPoints, k0, R; multithreaded::Bool=true, rng=MersenneTwister(0), cheb_config::ChebyshevConfig=solver.cheb_config)
+function construct_matrices(solver::BeynSolver, pts::BoundaryPoints, k0, R; multithreaded::Bool=true, rng=MersenneTwister(0), cheb_config::ChebyshevConfig=solver.cheb_config, taylor_degree::Int=solver.taylor_degree)
     T = _bim_numeric_type(solver); N = boundary_matrix_size(solver.kernel, pts); k0c = Complex{T}(k0); Rc = T(R); nq = solver.nq
     θ = range(zero(T), 2T(pi); length=nq+1)[1:end-1]; ej = cis.(θ); zj = k0c .+ Rc.*ej; wj = (Rc/nq).*ej
-    if solver.use_chebyshev
+    if solver.use_taylor
+        Tbufs = _construct_matrices_multi_k_taylor(solver.kernel, pts, Float64(real(k0c)), Float64(Rc), nq, taylor_degree; multithreaded)
+    elseif solver.use_chebyshev
         Tbufs = _construct_matrices_multi_k_cheb(solver.kernel, pts, ComplexF64.(zj), cheb_config; multithreaded)
     else
         Tbufs = Vector{Matrix{Complex{T}}}(undef, nq)

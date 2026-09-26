@@ -245,6 +245,9 @@ function compute_spectrum(solver::BeynSolver, billiard::Bi, k1, k2; multithreade
     for i in 1:nw
         pts[i] = evaluate_points(solver, billiard, real(k0[i]))
     end
+    if solver.use_taylor
+        _tune_beyn_taylor_degree!(solver, pts, k0, R; multithreaded)
+    end
     cheb_config = solver.cheb_config
     if solver.use_chebyshev && solver.cheb_config.param_strategy!==:manual
         cheb_config = tune_cheb_config(solver.kernel, pts[end], real(k0[end])+R[end], solver.cheb_config)

@@ -203,8 +203,6 @@ triangle, to minimize memory allocations.
 * `F`: The `F = B' * W * B` matrix.
 * `Fk`: The `Fk = B' * W * dB/dk + (dB/dk)' * W * B` matrix.
 """
-
-# Your function with timing and debug info
 function construct_matrices(solver::VerginiSaracenoSolver, basis::Ba, pts::BoundaryPoints, k; 
                             multithreaded = true) where {Ba<:AbsBasis}    
     @timeit_debug "construct_matrices" begin
