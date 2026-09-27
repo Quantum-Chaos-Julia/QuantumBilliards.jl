@@ -106,6 +106,44 @@ function symmetry_sector(billiard::BilliardGeometry.AbsBilliard, choices::Pair..
     return SymmetrySector(billiard, characters)
 end
 
+"""
+    symmetry_sector(billiard::BilliardGeometry.AbsBilliard, characters::Integer...) → sector::SymmetrySector
+
+Construct a [`SymmetrySector`](@ref) for `billiard` by assigning one
+representation character to each of `billiard`'s minimal fundamental symmetry
+generators, in the order returned by
+[`get_symmetries`](@ref BilliardGeometry.get_symmetries).
+
+## Description
+This is a positional shortcut for the `GeneratorType => value` form: it pairs
+`characters[i]` with `get_symmetries(billiard)[i]`'s generator type and
+delegates to `symmetry_sector(billiard, GeneratorType => characters[i], ...)`.
+For a `D₂`-symmetric billiard, `get_symmetries` returns
+`(YAxisReflection, XAxisReflection)`, so
+`symmetry_sector(billiard, -1, +1)` assigns `χ=-1` to the `YAxisReflection`
+generator and `χ=+1` to the `XAxisReflection` generator. For a cyclic
+`Nᵗʰ`-order rotational billiard, `get_symmetries` returns the single `m=1`
+generator, so a single integer sector `s ∈ 0:N-1` selects
+`χ_s(g^m) = exp(2πi s m/N)` for every registered rotation image, exactly as
+the `NFoldRotation => s` form does.
+
+## Arguments
+* `billiard::BilliardGeometry.AbsBilliard`: Billiard whose minimal symmetry generators (via `get_symmetries`) receive the given characters.
+* `characters::Integer...`: One character per generator returned by `get_symmetries(billiard)`, in the same order.
+
+## Returns
+* `sector::SymmetrySector`: Representation sector associated with `billiard`.
+"""
+function symmetry_sector(billiard::BilliardGeometry.AbsBilliard, character1::Integer, characters::Integer...)
+    all_characters = (character1, characters...)
+    gens = BilliardGeometry.get_symmetries(billiard)
+    length(all_characters) == length(gens) || throw(ArgumentError(
+        "symmetry_sector(billiard, characters...) requires one character per " *
+        "get_symmetries(billiard) generator ($(length(gens)) expected " *
+        "$(map(typeof, gens))); received $(length(all_characters))"))
+    return symmetry_sector(billiard, (typeof(sym) => val for (sym, val) in zip(gens, all_characters))...)
+end
+
 # Verify that a sector is being resolved against the exact billiard instance
 # from which it was constructed. Symmetry IDs are assigned locally by each
 # billiard's symmetry registry, so the same integer ID may refer to unrelated

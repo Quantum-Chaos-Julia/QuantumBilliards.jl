@@ -162,6 +162,26 @@ function _fold_boundary(::Type{T}, billiard::Bi, N::Int, symmetry::NFoldRotation
     return BilliardGeometry.symmetry_index_orbits(T, billiard, N, symmetry, sector)
 end
 
+# Infer the discrete symmetry used to fold the full-boundary Fredholm operator
+# directly from `billiard`'s minimal registered symmetry generators
+# (`BilliardGeometry.get_symmetries`), given only the per-generator characters
+# supplied through a BIM solver's `sym_characters` keyword. This lets DLP/CFIE
+# constructors accept `sym_characters` alone instead of requiring an explicit
+# `symmetry` object built by hand. A lone rotation generator is returned
+# directly (so the `NFoldRotation`-specific `_fold_boundary` method applies);
+# one or more reflection generators are wrapped in `CompositeReflection`. When
+# `sym_characters` is empty, `(nothing, sym_characters)` is returned unchanged.
+function _infer_bim_symmetry(billiard::Bi, sym_characters::Tuple) where {Bi<:AbsBilliard}
+    isempty(sym_characters) && return nothing, sym_characters
+    gens = BilliardGeometry.get_symmetries(billiard)
+    isempty(gens) && throw(ArgumentError("billiard has no registered symmetries; cannot infer a symmetry from sym_characters=$sym_characters"))
+    length(gens) == length(sym_characters) || throw(ArgumentError(
+        "sym_characters must supply one character per get_symmetries(billiard) " *
+        "generator ($(length(gens)) expected: $(map(typeof, gens))); received $(length(sym_characters))"))
+    length(gens) == 1 && gens[1] isa NFoldRotation && return gens[1], sym_characters
+    return CompositeReflection(gens...), sym_characters
+end
+
 ################################################################################
 # BIM STATE CONSTRUCTION
 #
@@ -201,7 +221,7 @@ If no symmetry is active, `layer_density` must already have the same length as
 `pts`. When symmetry reduction is active, a fundamental-domain density is
 expanded using the exact [`BilliardGeometry.SymmetryOrbitMap`](@ref) defined
 by the billiard's physical-boundary reconstruction, `solver.symmetry`, and
-`solver.character`. An already full-length density is returned unchanged.
+`solver.sym_characters`. An already full-length density is returned unchanged.
 
 For a `CompositeBIMSolver`, every physical boundary component is required to
 be individually invariant under the active symmetry. Symmetries that exchange
@@ -220,7 +240,7 @@ function symmetrize_layer_density(solver::AbsBIMSolver, layer_density::AbstractV
     Nfull = length(pts)
     length(layer_density) == Nfull && return layer_density
     solver.symmetry === nothing && throw(DimensionMismatch("Boundary data has length $(length(layer_density)); expected full length $Nfull because no symmetry is active"))
-    orbits = solver isa CompositeBIMSolver ? _composite_symmetry_orbits(T, solver, pts) : _fold_boundary(T, billiard, Nfull, solver.symmetry, solver.character)
+    orbits = solver isa CompositeBIMSolver ? _composite_symmetry_orbits(T, solver, pts) : _fold_boundary(T, billiard, Nfull, solver.symmetry, solver.sym_characters)
     Nred = fundamental_size(orbits)
     length(layer_density) == Nred || throw(DimensionMismatch("Boundary data has length $(length(layer_density)); expected reduced $Nred or full $Nfull"))
     S = promote_type(N, Complex{T})
@@ -260,7 +280,7 @@ construction-derived symmetry orbit map as the Fredholm matrix.
 * `u_raw::Vector`: Unnormalized physical boundary normal derivative on the reduced boundary when symmetry is active, or the complete boundary otherwise.
 """
 function _bim_normal_derivative(solver::DLP, pts::BoundaryPoints{T}, lvec::AbstractVector, billiard::Bi) where {T<:Real,Bi<:AbsBilliard}
-    idx = solver.symmetry === nothing ? (1:length(lvec)) : _fold_boundary(T, billiard, length(pts), solver.symmetry, solver.character).fundamental_indices
+    idx = solver.symmetry === nothing ? (1:length(lvec)) : _fold_boundary(T, billiard, length(pts), solver.symmetry, solver.sym_characters).fundamental_indices
     return conj.(lvec) ./ pts.ds[idx]
 end
 

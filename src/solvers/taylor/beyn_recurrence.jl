@@ -35,7 +35,7 @@ end
 function _construct_matrices_multi_k_taylor_reduced(solver::SweepBIMSolver, pts::BoundaryPoints{Float64}, k0::Float64, R::Float64, nq::Int, p::Int; multithreaded::Bool=true)::Vector{Matrix{ComplexF64}}
     solver.symmetry === nothing && throw(ArgumentError("reduced Taylor construction requires an active symmetry"))
     cache = _taylor_cache(solver, pts)
-    orbits = solver isa CompositeBIMSolver ? _composite_symmetry_orbits(Float64, solver, pts) : _fold_boundary(Float64, solver.billiard, length(pts.xy), solver.symmetry, solver.character)
+    orbits = solver isa CompositeBIMSolver ? _composite_symmetry_orbits(Float64, solver, pts) : _fold_boundary(Float64, solver.billiard, length(pts.xy), solver.symmetry, solver.sym_characters)
     m::Int = fundamental_size(orbits)
     fund = orbits.fundamental_indices
     orbit_of = orbits.orbit_of

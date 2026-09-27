@@ -67,7 +67,7 @@ follow the physical outward-normal convention.
 ## Attributes
 * `component_solvers::CS`: Tuple containing one DLP or CFIE solver for each connected physical boundary component.
 * `symmetry::Sy`: Optional discrete symmetry shared by all component solvers.
-* `character::Ch`: Character tuple selecting the common representation of `symmetry`.
+* `sym_characters::Ch`: Character tuple selecting the common representation of `symmetry`.
 
 ## API
 [`evaluate_points`](@ref), [`boundary_matrix_size`](@ref),
@@ -77,7 +77,7 @@ follow the physical outward-normal convention.
 struct CompositeBIMSolver{T<:Real,CS<:Tuple,Sy<:Union{AbsSymmetry,Nothing},Ch<:Tuple} <: CFIE
     component_solvers::CS
     symmetry::Sy
-    character::Ch
+    sym_characters::Ch
 end
 
 """
@@ -100,10 +100,10 @@ reduction is applied to the globally coupled full-boundary operator.
 function CompositeBIMSolver(component_solvers::Vararg{SweepBIMSolver})
     isempty(component_solvers) && throw(ArgumentError("CompositeBIMSolver requires at least one component solver"))
     symmetry = component_solvers[1].symmetry
-    character = component_solvers[1].character
-    all(cs -> cs.symmetry == symmetry && cs.character == character, component_solvers) || throw(ArgumentError("All component solvers passed to CompositeBIMSolver must share the same symmetry and character"))
+    sym_characters = component_solvers[1].sym_characters
+    all(cs -> cs.symmetry == symmetry && cs.sym_characters == sym_characters, component_solvers) || throw(ArgumentError("All component solvers passed to CompositeBIMSolver must share the same symmetry and sym_characters"))
     T = _bim_numeric_type(component_solvers[1])
-    return CompositeBIMSolver{T,typeof(component_solvers),typeof(symmetry),typeof(character)}(component_solvers, symmetry, character)
+    return CompositeBIMSolver{T,typeof(component_solvers),typeof(symmetry),typeof(sym_characters)}(component_solvers, symmetry, sym_characters)
 end
 
 _bim_numeric_type(solver::CompositeBIMSolver{T}) where {T} = T
@@ -322,7 +322,7 @@ function _composite_symmetry_orbits(::Type{T}, solver::CompositeBIMSolver, pts::
     local_orbits = Vector{SymmetryOrbitMap{T}}(undef, nc)
     @inbounds for a in 1:nc
         N = offs[a+1] - offs[a]
-        local_orbits[a] = _fold_boundary(T, solver.component_solvers[a].billiard, N, solver.symmetry, solver.character)
+        local_orbits[a] = _fold_boundary(T, solver.component_solvers[a].billiard, N, solver.symmetry, solver.sym_characters)
     end
     return _combine_composite_orbits(T, local_orbits)
 end
@@ -604,7 +604,7 @@ function construct_matrices(solver::CompositeBIMSolver{T}, pts::BoundaryPoints{T
     @timeit_debug "construct_matrices" begin
         kT = _bim_widen_k(T,k)
         nc = length(solver.component_solvers); N = length(pts)
-        @debug "Composite BIM matrix construction started" N kT nc symmetry = solver.symmetry character = solver.character
+        @debug "Composite BIM matrix construction started" N kT nc symmetry = solver.symmetry sym_characters = solver.sym_characters
         offs = _composite_offsets(pts,nc)
         comp_pts = [_composite_component_slice(pts,offs[a]:offs[a+1]-1,a) for a in 1:nc]
         Gs = Vector{BoundaryGeomCache{T}}(undef, nc); Rmats = Vector{Matrix{T}}(undef,nc)

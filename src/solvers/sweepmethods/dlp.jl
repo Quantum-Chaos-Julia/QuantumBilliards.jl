@@ -69,7 +69,7 @@ full-boundary Fredholm operator to a selected symmetry sector.
 * `min_pts::Int64`: Minimum number of boundary points.
 * `grading::G`: [`BoundaryGrading`](@ref) strategy controlling the periodic boundary parametrization used by the Kress quadrature scheme.
 * `symmetry::Sy`: Optional discrete symmetry used to reduce the Fredholm operator.
-* `character::Ch`: Character tuple selecting the representation of `symmetry`.
+* `sym_characters::Ch`: Character tuple selecting the representation of `symmetry`.
 * `eps::T`: Relative numerical tolerance associated with the solver.
 
 ## API
@@ -83,12 +83,12 @@ struct DoubleLayerPotentialSolver{T<:Real,G<:BoundaryGrading,Sy<:Union{AbsSymmet
     min_pts::Int64
     grading::G
     symmetry::Sy
-    character::Ch
+    sym_characters::Ch
     eps::T
 end
 
 """
-    DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}; min_pts::Int=200, grading::BoundaryGrading=SmoothPeriodicGrading(), symmetry::Union{Nothing,AbsSymmetry}=nothing, character::Tuple=(), eps::T=T(1e-15)) where {T<:Real}
+    DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::Bi; min_pts::Int=200, grading::BoundaryGrading=SmoothPeriodicGrading(), symmetry::Union{Nothing,AbsSymmetry}=nothing, sym_characters::Tuple=(), eps::T=T(1e-15)) where {T<:Real,Bi<:AbsBilliard}
 
 Construct a double-layer potential boundary-integral solver.
 
@@ -98,6 +98,12 @@ applied: [`SmoothPeriodicGrading`](@ref) uses the original parametrization,
 while [`GlobalCornerGrading`](@ref) additionally applies a global Kress grading
 map around geometric corners.
 
+If `symmetry` is left as `nothing` and `sym_characters` is non-empty, the
+symmetry is inferred directly from `billiard`'s minimal registered generators
+([`BilliardGeometry.get_symmetries`](@ref)): `sym_characters[i]` is paired with
+the `i`-th generator, in the same order. Pass `symmetry` explicitly to select a
+different (e.g. non-minimal) symmetry representation instead.
+
 ## Arguments
 * `pts_scaling_factor::Union{T,Vector{T}}`: Boundary-point scaling factor or collection of scaling factors used to determine the discretization size.
 * `billiard::Bi`: Billiard defining the available discrete symmetries.
@@ -105,16 +111,19 @@ map around geometric corners.
 ## Keyword Arguments
 * `min_pts::Int = 200`: Minimum number of boundary sampling points.
 * `grading::BoundaryGrading = SmoothPeriodicGrading()`: Boundary parametrization strategy used with the Kress quadrature scheme.
-* `symmetry::Union{Nothing,AbsSymmetry} = nothing`: Optional discrete symmetry used to reduce the full-boundary Fredholm operator.
-* `character::Tuple = ()`: Character tuple selecting the requested representation of `symmetry`.
+* `symmetry::Union{Nothing,AbsSymmetry} = nothing`: Optional discrete symmetry used to reduce the full-boundary Fredholm operator. When `nothing`, it is inferred from `billiard` and `sym_characters`.
+* `sym_characters::Tuple = ()`: Character tuple selecting the requested representation of `symmetry`, or of the symmetry inferred from `billiard` when `symmetry` is `nothing`.
 * `eps::T = T(1e-15)`: Relative numerical tolerance associated with the solver.
 
 ## Returns
-* `solver::DoubleLayerPotentialSolver{T,typeof(grading),typeof(symmetry),typeof(billiard),typeof(character)}`: Configured DLP solver.
+* `solver::DoubleLayerPotentialSolver{T,typeof(grading),typeof(symmetry),typeof(billiard),typeof(sym_characters)}`: Configured DLP solver.
 """
-function DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::Bi; min_pts::Int=200, grading::BoundaryGrading=SmoothPeriodicGrading(), symmetry::Union{Nothing,AbsSymmetry}=nothing, character::Tuple=(), eps::T=T(1e-15)) where {T<:Real,Bi<:AbsBilliard}
+function DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::Bi; min_pts::Int=200, grading::BoundaryGrading=SmoothPeriodicGrading(), symmetry::Union{Nothing,AbsSymmetry}=nothing, sym_characters::Tuple=(), eps::T=T(1e-15)) where {T<:Real,Bi<:AbsBilliard}
     bs = pts_scaling_factor isa T ? [pts_scaling_factor] : pts_scaling_factor
-    return DoubleLayerPotentialSolver{T,typeof(grading),typeof(symmetry),typeof(billiard),typeof(character)}(bs, billiard, min_pts, grading, symmetry, character, eps)
+    if symmetry === nothing
+        symmetry, sym_characters = _infer_bim_symmetry(billiard, sym_characters)
+    end
+    return DoubleLayerPotentialSolver{T,typeof(grading),typeof(symmetry),typeof(billiard),typeof(sym_characters)}(bs, billiard, min_pts, grading, symmetry, sym_characters, eps)
 end
 
 """
@@ -125,7 +134,7 @@ Construct a double-layer potential solver in a validated symmetry sector of
 
 The symmetry generator and character are resolved from `sector` using the
 symmetry registry of `billiard`. This provides a validated alternative to
-specifying the `symmetry` and `character` keywords directly. The resulting
+specifying the `symmetry` and `sym_characters` keywords directly. The resulting
 solver discretizes the complete physical boundary with the Kress quadrature
 scheme and folds the full-boundary Fredholm operator onto the requested
 symmetry sector.
@@ -142,7 +151,7 @@ symmetry sector.
 """
 function DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}, sector::SymmetrySector; kwargs...) where {T<:Real}
     generator, character = _resolve_bim_symmetry(sector.billiard, sector)
-    return DoubleLayerPotentialSolver(pts_scaling_factor, sector.billiard; symmetry=generator, character=character, kwargs...)
+    return DoubleLayerPotentialSolver(pts_scaling_factor, sector.billiard; symmetry=generator, sym_characters=character, kwargs...)
 end
 
 _bim_numeric_type(::DoubleLayerPotentialSolver{T}) where {T} = T
@@ -441,7 +450,7 @@ algebraic symmetry reduction when a symmetry sector is active.
 function boundary_matrix_size(solver::DoubleLayerPotentialSolver, pts::BoundaryPoints)
     solver.symmetry === nothing && return boundary_matrix_size(pts)
     T = _bim_numeric_type(solver)
-    orbits = _fold_boundary(T, solver.billiard, length(pts), solver.symmetry, solver.character)
+    orbits = _fold_boundary(T, solver.billiard, length(pts), solver.symmetry, solver.sym_characters)
     return fundamental_size(orbits)
 end
 
@@ -475,7 +484,7 @@ function construct_matrices(solver::DoubleLayerPotentialSolver, pts::BoundaryPoi
         T = _bim_numeric_type(solver)
         kT = _bim_widen_k(T, k)
         N = length(pts)
-        @debug "DLP matrix construction started" N kT symmetry=solver.symmetry character=solver.character
+        @debug "DLP matrix construction started" N kT symmetry=solver.symmetry sym_characters=solver.sym_characters
         graded = _is_nontrivial_dlp_grading(pts)
         @timeit_debug "boundary_geom_cache" begin
             G = boundary_geom_cache(pts, graded)
@@ -494,7 +503,7 @@ function construct_matrices(solver::DoubleLayerPotentialSolver, pts::BoundaryPoi
             return A
         else
             @timeit_debug "symmetry_orbits" begin
-                orbits = _fold_boundary(T, solver.billiard, N, solver.symmetry, solver.character)
+                orbits = _fold_boundary(T, solver.billiard, N, solver.symmetry, solver.sym_characters)
             end
             m = fundamental_size(orbits)
             A = Matrix{Complex{T}}(undef, m, m)
