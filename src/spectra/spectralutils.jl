@@ -116,32 +116,6 @@ end
 ################################################################################
 
 """
-    compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, k1, k2, dk::Union{Real,Function}; tol::Real=1e-4, multithreaded::Bool=true, show_progress::Bool=true) → SpectralData
-
-Computes the accelerated-basis spectrum over the requested wavenumber interval
-using overlapping spectral windows.
-
-When `solver.eigenvectors=true`, each retained eigenvalue stores the
-[`BasisEigenstate`](@ref) produced by the same accelerated solve. No additional
-eigenstate solve is performed.
-
-## Arguments
-* `solver::AcceleratedBasisSolver`: Accelerated basis eigensolver.
-* `basis::AbsBasis`: Basis used to represent the eigenstates.
-* `billiard::AbsBilliard`: Billiard geometry.
-* `k1`: Lower bound of the requested wavenumber interval.
-* `k2`: Upper bound of the requested wavenumber interval.
-* `dk::Union{Real,Function}`: Spectral window spacing. A real value gives a constant spacing, while a function `dk(k)` gives a wavenumber-dependent spacing.
-
-## Keyword Arguments
-* `tol::Real=1e-4`: Additional overlap tolerance used when solving and matching neighboring spectral windows.
-* `multithreaded::Bool=true`: Enable multithreaded matrix construction and eigensolution where supported.
-* `show_progress::Bool=true`: Display a progress bar during the spectral sweep.
-
-## Returns
-* `data::SpectralData`: Merged and sorted spectrum restricted to `k1 ≤ k ≤ k2`, including stored [`BasisEigenstate`](@ref)s when `solver.eigenvectors=true`.
-"""
-"""
     compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, k1, k2, dk::Union{Real,Function}; tol::Real = 1e-4, multithreaded::Bool = true, show_progress::Bool = true) → data::SpectralData
 
 Compute the spectrum of `billiard` over the wavenumber interval `[k1, k2]`
