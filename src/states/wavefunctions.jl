@@ -220,7 +220,7 @@ function _evaluate_wavefunctions(ks::Vector{T}, us::Vector{Vector{K}}, bds::Vect
 end
 
 """
-    wavefunction(states::AbstractVector{<:BIMEigenstate{K,T}}; b::Real = 5, inside_only::Bool = true, MIN_CHUNK::Int = 4096, use_chebyshev::Bool = true, show_progress::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(T)) where {K<:Number,T<:Real}
+    wavefunction(states::AbstractVector{<:BIMEigenstate{K,T}}; b::Real = 5, inside_only::Bool = true, fundamental_domain::Bool = true, MIN_CHUNK::Int = 4096, use_chebyshev::Bool = true, show_progress::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(T)) where {K<:Number,T<:Real}
 
 Reconstruct BIM eigenstates on a common Cartesian grid.
 
@@ -230,6 +230,9 @@ Reconstruct BIM eigenstates on a common Cartesian grid.
 ## Keyword Arguments
 - `b::Real = 5`: Grid points per wavelength.
 - `inside_only::Bool = true`: Evaluate only inside the billiard.
+- `fundamental_domain::Bool = true`: Accepted for API compatibility with
+  [`wavefunction`](@ref) on generic `AbsState`, but has no effect: BIM
+  eigenstates are always reconstructed on the full billiard domain.
 - `MIN_CHUNK::Int = 4096`: Minimum spatial points per active thread.
 - `use_chebyshev::Bool = true`: Use Chebyshev-accelerated Hankel evaluation.
 - `show_progress::Bool = true`: Display reconstruction progress.
@@ -240,7 +243,7 @@ Reconstruct BIM eigenstates on a common Cartesian grid.
 - `xgrid::Vector{T}`: Cartesian x coordinates.
 - `ygrid::Vector{T}`: Cartesian y coordinates.
 """
-function wavefunction(states::AbstractVector{<:BIMEigenstate{K,T}}; b::Real = 5, inside_only::Bool = true, MIN_CHUNK::Int = 4096, use_chebyshev::Bool = true, show_progress::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(T)) where {K<:Number,T<:Real}
+function wavefunction(states::AbstractVector{<:BIMEigenstate{K,T}}; b::Real = 5, inside_only::Bool = true, fundamental_domain::Bool = true, MIN_CHUNK::Int = 4096, use_chebyshev::Bool = true, show_progress::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(T)) where {K<:Number,T<:Real}
     isempty(states) && throw(ArgumentError("states must be nonempty"))
     s0 = first(states); n = length(states); P = typeof(s0.pts)
     ks = T[real(s.k) for s in states]; bds = P[s.pts for s in states]
@@ -270,7 +273,7 @@ function wavefunction(states::AbstractVector{<:BIMEigenstate{K,T}}; b::Real = 5,
 end
 
 """
-    wavefunction(state::BIMEigenstate{K,T}; b::Real = 5, inside_only::Bool = true, MIN_CHUNK::Int = 4096, use_chebyshev::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(T)) where {K<:Number,T<:Real}
+    wavefunction(state::BIMEigenstate{K,T}; b::Real = 5, inside_only::Bool = true, fundamental_domain::Bool = true, MIN_CHUNK::Int = 4096, use_chebyshev::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(T)) where {K<:Number,T<:Real}
 
 Reconstruct one BIM eigenstate.
 
@@ -280,6 +283,9 @@ Reconstruct one BIM eigenstate.
 ## Keyword Arguments
 - `b::Real = 5`: Grid points per wavelength.
 - `inside_only::Bool = true`: Evaluate only inside the billiard.
+- `fundamental_domain::Bool = true`: Accepted for API compatibility with
+  [`wavefunction`](@ref) on generic `AbsState`, but has no effect: BIM
+  eigenstates are always reconstructed on the full billiard domain.
 - `MIN_CHUNK::Int = 4096`: Minimum spatial points per active thread.
 - `use_chebyshev::Bool = true`: Use Chebyshev-accelerated Hankel evaluation.
 - `cheb_config::ChebyshevConfig = ChebyshevConfig(T)`: Chebyshev configuration.
@@ -289,7 +295,7 @@ Reconstruct one BIM eigenstate.
 - `xgrid::Vector{T}`: Cartesian x coordinates.
 - `ygrid::Vector{T}`: Cartesian y coordinates.
 """
-function wavefunction(state::BIMEigenstate{K,T}; b::Real = 5, inside_only::Bool = true, MIN_CHUNK::Int = 4096, use_chebyshev::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(T)) where {K<:Number,T<:Real}
+function wavefunction(state::BIMEigenstate{K,T}; b::Real = 5, inside_only::Bool = true, fundamental_domain::Bool = true, MIN_CHUNK::Int = 4096, use_chebyshev::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(T)) where {K<:Number,T<:Real}
     Psi, xgrid, ygrid = wavefunction([state]; b, inside_only, MIN_CHUNK, use_chebyshev, show_progress = false, cheb_config)
     return Psi[1], xgrid, ygrid
 end
