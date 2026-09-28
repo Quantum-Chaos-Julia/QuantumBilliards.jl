@@ -333,7 +333,7 @@ function dk_matrix(cache::RealPlaneWaveTaylorCache{T}, k::T; multithreaded::Bool
 end
 
 """
-    basis_and_dk_matrices(cache::RealPlaneWaveTaylorCache{T}, k::T; multithreaded::Bool = true) where {T<:Real} → (B, dB_dk)
+    basis_and_dk_matrices(cache::RealPlaneWaveTaylorCache{T}, k::T, w::AbstractVector, nsym; multithreaded::Bool = true) where {T<:Real} → (B, dB_dk)
 
 Evaluate the complete cached real plane-wave basis and its wavenumber
 derivative simultaneously.
@@ -341,6 +341,8 @@ derivative simultaneously.
 ## Arguments
 * `cache`: [`RealPlaneWaveTaylorCache`](@ref).
 * `k`: Evaluation wavenumber.
+* `w`: Vector of quadrature weights associated with the cached points.
+* `nsym`: = one(eltype(w)) * (isnothing(basis.symmetries) ? 1 : length(basis.symmetries) + 1)
 
 ## Keyword Arguments
 * `multithreaded::Bool = true`: Whether evaluation is multithreaded across columns.
@@ -349,15 +351,24 @@ derivative simultaneously.
 * `B`: Complete basis matrix evaluated at `k`.
 * `dB_dk`: Wavenumber derivative of the complete basis matrix evaluated at `k`.
 """
-function basis_and_dk_matrices(cache::RealPlaneWaveTaylorCache{T}, k::T; multithreaded::Bool = true) where {T<:Real}
+function _weight_scaled_basis_and_dk_matrices(cache::RealPlaneWaveTaylorCache{T}, k::T, w::AbstractVector, nsym; multithreaded::Bool = true) where {T<:Real}
     M = size(cache.coeffs, 2)
     N = size(cache.coeffs, 3)
+    length(w) == M || throw(DimensionMismatch("number of weights must equal number of cached points"))
     δ = k - cache.k0
+    fw = Vector{T}(undef, M)
+    α = sqrt(T(nsym))
+    @inbounds @simd for j = 1:M
+        fw[j] = α * sqrt(T(w[j]))
+    end
     B = Matrix{T}(undef, M, N)
     dB_dk = Matrix{T}(undef, M, N)
     @use_threads multithreading=multithreaded for c = 1:N
         @inbounds @simd for j = 1:M
-            B[j, c], dB_dk[j, c] = _horner_with_derivative(cache.coeffs, j, c, δ)
+            y, dy = _horner_with_derivative(cache.coeffs, j, c, δ)
+            f = fw[j]
+            B[j, c] = y * f
+            dB_dk[j, c] = dy * f
         end
     end
     return filter_matrix!(B), filter_matrix!(dB_dk)

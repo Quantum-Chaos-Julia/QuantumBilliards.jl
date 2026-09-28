@@ -287,12 +287,11 @@ function construct_matrices(solver::VerginiSaracenoSolver, basis::Ba, pts::Bound
         @debug "Cached matrix construction started" N M k nsym
 
         @timeit_debug "basis_and_dk_matrices" begin
-            G, dG = basis_and_dk_matrices(cache, k; multithreaded)
+            G, dG = _weight_scaled_basis_and_dk_matrices(cache, k, w, nsym; multithreaded)
         end
         @debug "Cached basis matrices computed" size=size(G)
 
         @timeit_debug "compute_F" begin
-            _scale_rows_sqrtw!(G, w, nsym)
             F = Matrix{eltype(G)}(undef, N, N)
             @blas_multi MAX_BLAS_THREADS BLAS.syrk!('U', 'T', one(eltype(G)), G, zero(eltype(G)), F)
             _symmetrize_from_upper!(F)
@@ -300,7 +299,6 @@ function construct_matrices(solver::VerginiSaracenoSolver, basis::Ba, pts::Bound
         @debug "F computed" size=size(F)
 
         @timeit_debug "compute_Fk" begin
-            _scale_rows_sqrtw!(dG, w, nsym)
             Fk = Matrix{eltype(G)}(undef, N, N)
             @blas_multi_then_1 MAX_BLAS_THREADS BLAS.syr2k!('U', 'T', one(eltype(G)), G, dG, zero(eltype(G)), Fk)
             _symmetrize_from_upper!(Fk)
