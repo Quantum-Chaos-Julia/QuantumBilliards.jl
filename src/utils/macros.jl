@@ -1,5 +1,5 @@
 
-const MAX_BLAS_THREADS=Sys.CPU_THREADS
+const MAX_BLAS_THREADS = Sys.isapple() ? Sys.CPU_THREADS : max(1, Sys.CPU_THREADS ÷ 2)
 
 #expand for other types of numbers
 function set_precision(a)
