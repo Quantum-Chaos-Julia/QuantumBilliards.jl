@@ -38,6 +38,8 @@ Every concrete subtype of `AbsBasis` is expected to implement:
 """
 abstract type AbsBasis end
 
+abstract type BasisCache end
+
 """
 AbsSolver
 

@@ -141,37 +141,157 @@ eigenstate solve is performed.
 ## Returns
 * `data::SpectralData`: Merged and sorted spectrum restricted to `k1 ≤ k ≤ k2`, including stored [`BasisEigenstate`](@ref)s when `solver.eigenvectors=true`.
 """
-function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, k1, k2, dk::Union{Real,Function}; tol::Real=1e-4, multithreaded::Bool=true, show_progress::Bool=true)
-    T = promote_type(typeof(k1), typeof(k2)); k1T, k2T = T(k1), T(k2); k1T < k2T || throw(ArgumentError("require k1 < k2"))
-    centers = T[]; widths = T[]; k0 = k1T
+"""
+    compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, k1, k2, dk::Union{Real,Function}; tol::Real = 1e-4, multithreaded::Bool = true, show_progress::Bool = true) → data::SpectralData
+
+Compute the spectrum of `billiard` over the wavenumber interval `[k1, k2]`
+using an [`AcceleratedBasisSolver`](@ref).
+
+## Description
+The requested interval is divided into overlapping local spectral windows with
+scaling centers determined by `dk`. At each center the local spectrum is
+computed and overlapping results are merged with
+[`overlap_and_merge!`](@ref).
+
+For a [`CornerAdaptedFourierBessel`](@ref) basis with `use_taylor = true`,
+consecutive scaling centers are grouped into panels covered by
+`basis.taylor_radius`. A single [`CornerAdaptedTaylorCache`](@ref) is
+constructed for each panel and reused by all scaling solves in that panel.
+
+Before the spectral sweep, the configured Taylor degree and radius are checked
+at the largest scaling wavenumber against direct basis evaluation. The cached
+route is used only if both the basis matrix and its wavenumber derivative
+satisfy `basis.taylor_tol`.
+
+For each Taylor panel, the basis dimension and boundary discretization are
+determined from the largest scaling center in the panel.
+
+## Arguments
+* `solver`: [`AcceleratedBasisSolver`](@ref) used to compute the local spectra.
+* `basis`: Basis used to represent the eigenstates.
+* `billiard`: Billiard whose spectrum is computed.
+* `k1`: Lower bound of the requested wavenumber interval.
+* `k2`: Upper bound of the requested wavenumber interval.
+* `dk`: Spacing between consecutive scaling centers, either a positive constant or a function of the current center.
+
+## Keyword Arguments
+* `tol::Real = 1e-4`: Tolerance used when extending local windows and merging overlapping spectra.
+* `multithreaded::Bool = true`: Whether basis evaluations are multithreaded.
+* `show_progress::Bool = true`: Whether to display the progress bar.
+
+## Returns
+* `data`: [`SpectralData`](@ref) containing the merged spectrum and, when requested by the solver, the associated eigenstates.
+"""
+function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, k1, k2, dk::Union{Real,Function}; tol::Real = 1e-4, multithreaded::Bool = true, show_progress::Bool = true)
+    T = promote_type(typeof(k1), typeof(k2))
+    k1T, k2T = T(k1), T(k2)
+    k1T < k2T || throw(ArgumentError("require k1 < k2"))
+    centers = T[]
+    widths = T[]
+    k0 = k1T
     while k0 < k2T
-        Δk = T(dk isa Function ? dk(k0) : dk); Δk > 0 || throw(ArgumentError("dk must be positive; received dk($k0)=$Δk"))
-        push!(centers, k0); push!(widths, Δk); k0 += Δk
+        Δk = T(dk isa Function ? dk(k0) : dk)
+        Δk > 0 || throw(ArgumentError("dk must be positive; received dk($k0) = $Δk"))
+        push!(centers, k0)
+        push!(widths, Δk)
+        k0 += Δk
     end
-    ks = T[]; ts = T[]; control = Bool[]; states = AbsState[]; L = CompositeCurve(get_boundary_curves(billiard)).length
-    @maybe_showprogress show_progress for i in eachindex(centers)
-        k0, Δk = centers[i], widths[i]
-        dim = max(solver.min_dim, round(Int, L*k0*solver.dim_scaling_factor/(2*pi)))
-        basis_new = resize_basis(basis, billiard, dim, k0); pts = evaluate_points(solver, billiard, k0)
-        if solver.eigenvectors
-            ki, ti, X = solve_vectors(solver, basis_new, pts, k0, Δk+tol; multithreaded)
-            si = AbsState[BasisEigenstate(ki[j], k0, X[:,j], ti[j], solver, basis_new, billiard) for j in eachindex(ki)]
-            if i == 1
-                append!(ks, ki); append!(ts, ti); append!(control, fill(false, length(ki))); append!(states, si)
-            else
-                overlap_and_merge!(ks, ts, ki, ti, control, centers[i-1], k0; tol, states_left=states, states_right=si)
+    ks = T[]
+    ts = T[]
+    control = Bool[]
+    states = AbsState[]
+    L = CompositeCurve(get_boundary_curves(billiard)).length
+    use_taylor = basis isa CornerAdaptedFourierBessel && basis.use_taylor
+    if use_taylor
+        R = T(basis.taylor_radius)
+        R > zero(T) || throw(ArgumentError("taylor_radius must be positive"))
+        kcheck = centers[end]
+        dimcheck = max(solver.min_dim, round(Int, L * kcheck * solver.dim_scaling_factor / (2 * pi)))
+        basis_check = resize_basis(basis, billiard, dimcheck, kcheck)
+        pts_check = evaluate_points(solver, billiard, kcheck)
+        cache_check = CornerAdaptedTaylorCache(basis_check, kcheck, pts_check.xy; multithreaded)
+        keval = max(k1T, kcheck - R)
+        B, dB = basis_and_dk_matrices(cache_check, keval; multithreaded)
+        B_ref = basis_matrix(basis_check, keval, pts_check.xy; multithreaded)
+        dB_ref = dk_matrix(basis_check, keval, pts_check.xy; multithreaded)
+        err_B = norm(B - B_ref) / max(norm(B_ref), eps(T))
+        err_dB = norm(dB - dB_ref) / max(norm(dB_ref), eps(T))
+        max(err_B, err_dB) <= basis.taylor_tol || throw(ArgumentError("Taylor representation with degree $(basis.taylor_degree) and radius $(basis.taylor_radius) fails tolerance $(basis.taylor_tol) at k = $kcheck: basis error = $err_B, derivative error = $err_dB"))
+        panel_start = Int[]
+        panel_stop = Int[]
+        i = 1
+        while i <= length(centers)
+            j = searchsortedlast(centers, centers[i] + 2R)
+            j = max(i, j)
+            push!(panel_start, i)
+            push!(panel_stop, j)
+            i = j + 1
+        end
+        @maybe_showprogress show_progress for p in eachindex(panel_start)
+            i1 = panel_start[p]
+            i2 = panel_stop[p]
+            kc = (centers[i1] + centers[i2]) / 2
+            kmax = centers[i2]
+            dim = max(solver.min_dim, round(Int, L * kmax * solver.dim_scaling_factor / (2 * pi)))
+            basis_new = resize_basis(basis, billiard, dim, kmax)
+            pts = evaluate_points(solver, billiard, kmax)
+            cache = CornerAdaptedTaylorCache(basis_new, kc, pts.xy; multithreaded)
+            for i in i1:i2
+                k0, Δk = centers[i], widths[i]
+                if solver.eigenvectors
+                    ki, ti, X = solve_vectors(solver, basis_new, pts, cache, k0, Δk + tol; multithreaded)
+                    si = AbsState[BasisEigenstate(ki[j], k0, X[:, j], ti[j], solver, basis_new, billiard) for j in eachindex(ki)]
+                    if i == 1
+                        append!(ks, ki)
+                        append!(ts, ti)
+                        append!(control, fill(false, length(ki)))
+                        append!(states, si)
+                    else
+                        overlap_and_merge!(ks, ts, ki, ti, control, centers[i - 1], k0; tol, states_left = states, states_right = si)
+                    end
+                else
+                    ki, ti = solve(solver, basis_new, pts, cache, k0, Δk + tol; multithreaded)
+                    if i == 1
+                        append!(ks, ki)
+                        append!(ts, ti)
+                        append!(control, fill(false, length(ki)))
+                    else
+                        overlap_and_merge!(ks, ts, ki, ti, control, centers[i - 1], k0; tol)
+                    end
+                end
             end
-        else
-            ki, ti = solve(solver, basis_new, pts, k0, Δk+tol; multithreaded)
-            if i == 1
-                append!(ks, ki); append!(ts, ti); append!(control, fill(false, length(ki)))
+        end
+    else
+        @maybe_showprogress show_progress for i in eachindex(centers)
+            k0, Δk = centers[i], widths[i]
+            dim = max(solver.min_dim, round(Int, L * k0 * solver.dim_scaling_factor / (2 * pi)))
+            basis_new = resize_basis(basis, billiard, dim, k0)
+            pts = evaluate_points(solver, billiard, k0)
+            if solver.eigenvectors
+                ki, ti, X = solve_vectors(solver, basis_new, pts, k0, Δk + tol; multithreaded)
+                si = AbsState[BasisEigenstate(ki[j], k0, X[:, j], ti[j], solver, basis_new, billiard) for j in eachindex(ki)]
+                if i == 1
+                    append!(ks, ki)
+                    append!(ts, ti)
+                    append!(control, fill(false, length(ki)))
+                    append!(states, si)
+                else
+                    overlap_and_merge!(ks, ts, ki, ti, control, centers[i - 1], k0; tol, states_left = states, states_right = si)
+                end
             else
-                overlap_and_merge!(ks, ts, ki, ti, control, centers[i-1], k0; tol)
+                ki, ti = solve(solver, basis_new, pts, k0, Δk + tol; multithreaded)
+                if i == 1
+                    append!(ks, ki)
+                    append!(ts, ti)
+                    append!(control, fill(false, length(ki)))
+                else
+                    overlap_and_merge!(ks, ts, ki, ti, control, centers[i - 1], k0; tol)
+                end
             end
         end
     end
     keep = (k1T .<= real.(ks)) .& (real.(ks) .<= k2T)
-    return _finalize_spectrum(ks[keep], ts[keep], control[keep]; states=solver.eigenvectors ? states[keep] : nothing)
+    return _finalize_spectrum(ks[keep], ts[keep], control[keep]; states = solver.eigenvectors ? states[keep] : nothing)
 end
 
 """

@@ -203,8 +203,7 @@ triangle, to minimize memory allocations.
 * `F`: The `F = B' * W * B` matrix.
 * `Fk`: The `Fk = B' * W * dB/dk + (dB/dk)' * W * B` matrix.
 """
-function construct_matrices(solver::VerginiSaracenoSolver, basis::Ba, pts::BoundaryPoints, k; 
-                            multithreaded = true) where {Ba<:AbsBasis}    
+function construct_matrices(solver::VerginiSaracenoSolver, basis::Ba, pts::BoundaryPoints, k; multithreaded = true) where {Ba<:AbsBasis}    
     @timeit_debug "construct_matrices" begin
         xy = pts.xy
         w = pts.w_vs
@@ -244,6 +243,70 @@ function construct_matrices(solver::VerginiSaracenoSolver, basis::Ba, pts::Bound
         end
         @debug "Fk computed" size=size(Fk) 
         
+        return F, Fk
+    end
+end
+
+"""
+    construct_matrices(solver::VerginiSaracenoSolver, basis::Ba, pts::BoundaryPoints, cache::Ca, k; multithreaded::Bool = true) where {Ba<:AbsBasis,Ca<:BasisCache} → (F::Matrix, Fk::Matrix)
+
+Construct the Vergini–Saraceno matrices `F` and `Fk` using a cached
+representation of the basis.
+
+## Description
+The basis matrix `B` and its wavenumber derivative `dB/dk` are evaluated
+simultaneously from `cache` using [`basis_and_dk_matrices`](@ref). The
+Vergini–Saraceno matrices are then constructed as `F = B' * W * B` and
+`Fk = B' * W * dB/dk + (dB/dk)' * W * B`, where `W` is the diagonal
+quadrature weight matrix built from `pts.w_vs` and normalized by the number
+of basis symmetries.
+
+Both matrices are assembled with BLAS `syrk!` and `syr2k!` rank-k updates on
+the upper triangle, which is subsequently mirrored to the lower triangle.
+
+## Arguments
+* `solver`: The [`VerginiSaracenoSolver`](@ref) whose matrices are constructed.
+* `basis`: Basis associated with `cache`.
+* `pts`: [`BoundaryPoints`](@ref) containing the Vergini–Saraceno quadrature weights.
+* `cache`: [`BasisCache`](@ref) used to evaluate the basis and its wavenumber derivative.
+* `k`: Wavenumber at which the cached representation is evaluated.
+
+## Keyword Arguments
+* `multithreaded::Bool = true`: Whether the cached basis evaluation is multithreaded.
+
+## Returns
+* `F`: The `F = B' * W * B` matrix.
+* `Fk`: The `Fk = B' * W * dB/dk + (dB/dk)' * W * B` matrix.
+"""
+function construct_matrices(solver::VerginiSaracenoSolver, basis::Ba, pts::BoundaryPoints, cache::Ca, k; multithreaded::Bool = true) where {Ba<:AbsBasis,Ca<:BasisCache}
+    @timeit_debug "construct_matrices_cached" begin
+        w = pts.w_vs
+        N = basis.dim
+        M = length(pts.xy)
+        nsym = one(eltype(w)) * (isnothing(basis.symmetries) ? 1 : length(basis.symmetries) + 1)
+        @debug "Cached matrix construction started" N M k nsym
+
+        @timeit_debug "basis_and_dk_matrices" begin
+            G, dG = basis_and_dk_matrices(cache, k; multithreaded)
+        end
+        @debug "Cached basis matrices computed" size=size(G)
+
+        @timeit_debug "compute_F" begin
+            _scale_rows_sqrtw!(G, w, nsym)
+            F = Matrix{eltype(G)}(undef, N, N)
+            @blas_multi MAX_BLAS_THREADS BLAS.syrk!('U', 'T', one(eltype(G)), G, zero(eltype(G)), F)
+            _symmetrize_from_upper!(F)
+        end
+        @debug "F computed" size=size(F)
+
+        @timeit_debug "compute_Fk" begin
+            _scale_rows_sqrtw!(dG, w, nsym)
+            Fk = Matrix{eltype(G)}(undef, N, N)
+            @blas_multi_then_1 MAX_BLAS_THREADS BLAS.syr2k!('U', 'T', one(eltype(G)), G, dG, zero(eltype(G)), Fk)
+            _symmetrize_from_upper!(Fk)
+        end
+
+        @debug "Fk computed" size=size(Fk)
         return F, Fk
     end
 end
@@ -307,6 +370,48 @@ function solve(solver::VerginiSaracenoSolver, basis::Ba, pts::BoundaryPoints, k,
     @blas_multi_then_1 MAX_BLAS_THREADS mu = generalized_eigvals(Symmetric(F),Symmetric(Fk);eps=solver.eps)
     ks, ten = sm_results(mu,k)
     idx = abs.(ks.-k) .< dk
+    ks = ks[idx]
+    ten = ten[idx]
+    p = sortperm(ks)
+    return ks[p], ten[p]
+end
+
+"""
+    solve(solver::VerginiSaracenoSolver, basis::Ba, pts::BoundaryPoints, cache::Ca, k, dk; multithreaded::Bool = true) where {Ba<:AbsBasis,Ca<:BasisCache} → (ks::Vector, ten::Vector)
+
+Solve the Vergini–Saraceno generalized eigenvalue problem using a cached basis
+representation, returning all estimated wavenumbers within `dk` of `k` and
+their tensions, sorted by wavenumber.
+
+## Description
+The matrices `F` and `Fk` are constructed with the cached
+[`construct_matrices`](@ref) method, which evaluates the basis matrix and its
+wavenumber derivative from `cache`. The generalized eigenvalues `mu` are then
+computed with [`generalized_eigvals`](@ref), truncated using `solver.eps`, and
+converted to wavenumbers and tensions with [`sm_results`](@ref).
+
+Only candidates satisfying `abs(ks - k) < dk` are retained.
+
+## Arguments
+* `solver`: The [`VerginiSaracenoSolver`](@ref) used to solve the generalized eigenvalue problem.
+* `basis`: Basis associated with `cache`.
+* `pts`: The [`BoundaryPoints`](@ref) containing the Vergini–Saraceno quadrature weights.
+* `cache`: [`BasisCache`](@ref) used to evaluate the basis and its wavenumber derivative.
+* `k`: Scaling wavenumber around which the generalized eigenvalue problem is constructed.
+* `dk`: Half-width of the wavenumber window around `k` used to filter candidates.
+
+## Keyword Arguments
+* `multithreaded::Bool = true`: Whether the cached basis evaluation is multithreaded.
+
+## Returns
+* `ks`: Sorted vector of estimated wavenumbers within `dk` of `k`.
+* `ten`: Vector of tensions associated with `ks`.
+"""
+function solve(solver::VerginiSaracenoSolver, basis::Ba, pts::BoundaryPoints, cache::Ca, k, dk; multithreaded::Bool = true) where {Ba<:AbsBasis,Ca<:BasisCache}
+    F, Fk = construct_matrices(solver, basis, pts, cache, k; multithreaded)
+    @blas_multi_then_1 MAX_BLAS_THREADS mu = generalized_eigvals(Symmetric(F), Symmetric(Fk); eps = solver.eps)
+    ks, ten = sm_results(mu, k)
+    idx = abs.(ks .- k) .< dk
     ks = ks[idx]
     ten = ten[idx]
     p = sortperm(ks)
@@ -387,5 +492,55 @@ function solve_vectors(solver::VerginiSaracenoSolver, basis::Ba, pts::BoundaryPo
     X = (sqrt.(ten))' .* X
     p = sortperm(ks)
     return  ks[p], ten[p], X[:,p]
+end
+
+"""
+    solve_vectors(solver::VerginiSaracenoSolver, basis::Ba, pts::BoundaryPoints, cache::Ca, k, dk; multithreaded::Bool = true) where {Ba<:AbsBasis,Ca<:BasisCache} → (ks::Vector, ten::Vector, X::Matrix)
+
+Solve the Vergini–Saraceno generalized eigenvalue problem using a cached basis
+representation, returning the estimated wavenumbers, tensions and eigenvectors
+for all candidates within `dk` of `k`, sorted by wavenumber.
+
+## Description
+The matrices `F` and `Fk` are constructed with the cached
+[`construct_matrices`](@ref) method, which evaluates the basis matrix and its
+wavenumber derivative from `cache`. The generalized eigenproblem is solved with
+[`generalized_eigen`](@ref), truncated using `solver.eps`, to obtain the
+generalized eigenvalues `mu`, reduced eigenvectors `Z` and change-of-basis
+matrix `C`.
+
+The generalized eigenvalues are converted to wavenumbers and tensions with
+[`sm_results`](@ref), and only candidates satisfying `abs(ks - k) < dk` are
+retained. The corresponding eigenvectors are transformed back into the
+original basis as `X = C * Z` and rescaled by `sqrt.(ten)`.
+
+## Arguments
+* `solver`: The [`VerginiSaracenoSolver`](@ref) used to solve the generalized eigenvalue problem.
+* `basis`: Basis associated with `cache`.
+* `pts`: The [`BoundaryPoints`](@ref) containing the Vergini–Saraceno quadrature weights.
+* `cache`: [`BasisCache`](@ref) used to evaluate the basis and its wavenumber derivative.
+* `k`: Scaling wavenumber around which the generalized eigenvalue problem is constructed.
+* `dk`: Half-width of the wavenumber window around `k` used to filter candidates.
+
+## Keyword Arguments
+* `multithreaded::Bool = true`: Whether the cached basis evaluation is multithreaded.
+
+## Returns
+* `ks`: Sorted vector of estimated wavenumbers within `dk` of `k`.
+* `ten`: Vector of tensions associated with `ks`.
+* `X`: Matrix whose columns are the retained eigenvectors expressed in the original basis and scaled by `sqrt.(ten)`.
+"""
+function solve_vectors(solver::VerginiSaracenoSolver, basis::Ba, pts::BoundaryPoints, cache::Ca, k, dk; multithreaded::Bool = true) where {Ba<:AbsBasis,Ca<:BasisCache}
+    F, Fk = construct_matrices(solver, basis, pts, cache, k; multithreaded)
+    @blas_multi_then_1 MAX_BLAS_THREADS mu, Z, C = generalized_eigen(Symmetric(F), Symmetric(Fk); eps = solver.eps)
+    ks, ten = sm_results(mu, k)
+    idx = abs.(ks .- k) .< dk
+    ks = ks[idx]
+    ten = ten[idx]
+    Z = Z[:, idx]
+    X = C * Z
+    X = sqrt.(ten)' .* X
+    p = sortperm(ks)
+    return ks[p], ten[p], X[:, p]
 end
 

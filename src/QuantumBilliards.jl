@@ -23,6 +23,13 @@ include("utils/macros.jl")
 export use_threads, blas_multi, blas_1, blas_multi_then_1, try_MKL!
 include("utils/billiardutils.jl")
 export make_triangle_and_basis, adapt_basis
+include("solvers/boundarypoints.jl")
+export BoundaryPoints
+export boundary_s, component_offsets, points_in_billiard
+include("solvers/boundarygeomcache.jl")
+export BoundaryPanelArrays, BoundaryGeomCache, boundary_geom_cache, component_normals
+export flatten_boundary_components, flatten_boundary_ds
+include("solvers/taylor/recurrence_core.jl")
 
 include("states/symmetry/symmetrysector.jl")
 export SymmetrySector, symmetry_sector
@@ -30,15 +37,10 @@ export SymmetrySector, symmetry_sector
 include("basis/planewaves/realplanewaves.jl")
 export RealPlaneWaves
 include("basis/fourierbessel/corneradapted.jl")
+include("basis/fourierbessel/corneradapted_recurrence.jl")
 export CornerAdaptedFourierBessel
 export resize_basis, basis_fun, dk_fun, gradient, basis_and_gradient 
 
-include("solvers/boundarypoints.jl")
-export BoundaryPoints
-export boundary_s, component_offsets, points_in_billiard
-include("solvers/boundarygeomcache.jl")
-export BoundaryPanelArrays, BoundaryGeomCache, boundary_geom_cache, component_normals
-export flatten_boundary_components, flatten_boundary_ds
 include("solvers/decompositions.jl")
 include("solvers/matrixconstructors.jl")
 export basis_matrix, basis_and_gradient_matrices, dk_matrix
@@ -53,8 +55,7 @@ include("solvers/sweepmethods/cfie.jl")
 include("solvers/sweepmethods/compositebim.jl")
 include("solvers/sweepmethods/sweepmethods.jl")
 include("solvers/acceleratedmethods/chebyshevconfig.jl")
-include("solvers/taylor/recurrences.jl")
-include("solvers/taylor/beyn_recurrence.jl")
+include("solvers/taylor/bim_kernels_recurrence.jl")
 include("solvers/acceleratedmethods/verginisaraceno.jl")
 include("solvers/acceleratedmethods/ebim.jl")
 include("solvers/acceleratedmethods/beyn.jl")
