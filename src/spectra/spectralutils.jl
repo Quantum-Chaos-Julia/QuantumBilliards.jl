@@ -572,7 +572,8 @@ function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::F
     isempty(kreal) && return SpectralData(T[], T[])
     kout = T[]
     tout = T[]
-    overlap_and_merge_ebim!(kout, tout, kreal, tvals; tol = tol, spacing_frac = spacing_frac, tolmax = tolmax, local_window = local_window)
+    control = Bool[]
+    overlap_and_merge_ebim!(kout, tout, kreal, tvals, control; tol = T(tol), spacing_frac = T(spacing_frac), tolmax = T(tolmax), local_window = local_window)
     return SpectralData(kout, tout)
 end
 
