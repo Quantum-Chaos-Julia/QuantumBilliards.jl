@@ -173,13 +173,8 @@ end
 # `sym_characters` is empty, `(nothing, sym_characters)` is returned unchanged.
 function _infer_bim_symmetry(billiard::Bi, sym_characters::Tuple) where {Bi<:AbsBilliard}
     isempty(sym_characters) && return nothing, sym_characters
-    gens = BilliardGeometry.get_symmetries(billiard)
-    isempty(gens) && throw(ArgumentError("billiard has no registered symmetries; cannot infer a symmetry from sym_characters=$sym_characters"))
-    length(gens) == length(sym_characters) || throw(ArgumentError(
-        "sym_characters must supply one character per get_symmetries(billiard) " *
-        "generator ($(length(gens)) expected: $(map(typeof, gens))); received $(length(sym_characters))"))
-    length(gens) == 1 && gens[1] isa NFoldRotation && return gens[1], sym_characters
-    return CompositeReflection(gens...), sym_characters
+    sector = symmetry_sector(billiard, sym_characters...)
+    return _resolve_bim_symmetry(billiard, sector)
 end
 
 ################################################################################

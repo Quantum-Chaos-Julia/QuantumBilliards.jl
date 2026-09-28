@@ -1,3 +1,12 @@
+# Whether `symmetries` includes a registered XAxisReflection/YAxisReflection
+# generator, shared by all three `apply_symmetries_to_*` unfolding functions
+# below (each branches into the same has_x/has_y/both/neither cases).
+_reflection_case(symmetries) = (any(s -> s isa BilliardGeometry.XAxisReflection, symmetries), any(s -> s isa BilliardGeometry.YAxisReflection, symmetries))
+
+# Index into `symmetries` (or a same-length parallel array, e.g.
+# `sym_qnumbers`) of the entry associated with reflection type `S`.
+_reflection_index(::Type{S}, symmetries) where {S<:BilliardGeometry.AbsReflection} = findfirst(s -> s isa S, symmetries)
+
 """
     apply_symmetries_to_wavefunction(Psi, x_grid::AbstractVector, y_grid::AbstractVector, symmetries::Vector{<:BilliardGeometry.AbsReflection}, sym_qnumbers::Vector{T}) where {T<:Real} → (full_Psi, full_x, full_y)
 
@@ -33,9 +42,8 @@ are returned unchanged.
 * `full_y::Vector`: Unfolded `y` coordinates.
 """
 function apply_symmetries_to_wavefunction(Psi, x_grid, y_grid, symmetries::Vector{<:BilliardGeometry.AbsReflection}, sym_qnumbers::Vector{T}) where T<:Real
-    has_x = any(s -> s isa BilliardGeometry.XAxisReflection, symmetries)
-    has_y = any(s -> s isa BilliardGeometry.YAxisReflection, symmetries)
-    get_qnum(::Type{S}) where S = sym_qnumbers[findfirst(s -> s isa S, symmetries)]
+    has_x, has_y = _reflection_case(symmetries)
+    get_qnum(::Type{S}) where S = sym_qnumbers[_reflection_index(S, symmetries)]
     if has_x && has_y
         pX = get_qnum(BilliardGeometry.XAxisReflection)
         pY = get_qnum(BilliardGeometry.YAxisReflection)
@@ -97,25 +105,30 @@ function apply_symmetries_to_boundary_function(u::AbstractVector{U}, symmetries:
     isempty(symmetries) && return u
     base_u = copy(u)
     full_u = copy(u)
-    has_x = any(s -> s isa BilliardGeometry.XAxisReflection, symmetries)
-    has_y = any(s -> s isa BilliardGeometry.YAxisReflection, symmetries)
+    has_x, has_y = _reflection_case(symmetries)
+    get_qnum(::Type{S}) where S = sym_qnumbers[_reflection_index(S, symmetries)]
+    # Reversed exactly when the generator itself reverses boundary traversal
+    # orientation (see BilliardGeometry.orientation_reversing); a fresh
+    # `S(0)` instance is equivalent to any registered instance of `S` since
+    # orientation reversal is a type-level fact, independent of sym_id.
+    maybe_reverse(::Type{S}, v) where {S<:BilliardGeometry.AbsReflection} = BilliardGeometry.orientation_reversing(S(0)) ? reverse(v) : v
     if has_x && has_y
-        pY = sym_qnumbers[findfirst(s -> s isa BilliardGeometry.YAxisReflection, symmetries)]
-        pX = sym_qnumbers[findfirst(s -> s isa BilliardGeometry.XAxisReflection, symmetries)]
+        pY = get_qnum(BilliardGeometry.YAxisReflection)
+        pX = get_qnum(BilliardGeometry.XAxisReflection)
         # CCW order must match apply_symmetries_to_boundary_points exactly:
-        # Q1(base) → Q2(Y-reflect, reversed) → Q3(XY-reflect) → Q4(X-reflect, reversed)
-        uY  =  pY      .* reverse(base_u)  # Q2: reversed
-        uXY = (pX * pY) .*        base_u   # Q3: not reversed
-        uX  =  pX      .* reverse(base_u)  # Q4: reversed
+        # Q1(base) → Q2(Y-reflect) → Q3(XY-reflect) → Q4(X-reflect)
+        uY  =  pY       .* maybe_reverse(BilliardGeometry.YAxisReflection,  base_u)
+        uXY = (pX * pY) .* maybe_reverse(BilliardGeometry.XYAxisReflection, base_u)
+        uX  =  pX       .* maybe_reverse(BilliardGeometry.XAxisReflection,  base_u)
         append!(full_u, uY)
         append!(full_u, uXY)
         append!(full_u, uX)
     elseif has_y
-        pY = sym_qnumbers[findfirst(s -> s isa BilliardGeometry.YAxisReflection, symmetries)]
-        append!(full_u, pY .* reverse(base_u))
+        pY = get_qnum(BilliardGeometry.YAxisReflection)
+        append!(full_u, pY .* maybe_reverse(BilliardGeometry.YAxisReflection, base_u))
     elseif has_x
-        pX = sym_qnumbers[findfirst(s -> s isa BilliardGeometry.XAxisReflection, symmetries)]
-        append!(full_u, pX .* reverse(base_u))
+        pX = get_qnum(BilliardGeometry.XAxisReflection)
+        append!(full_u, pX .* maybe_reverse(BilliardGeometry.XAxisReflection, base_u))
     end
     return full_u
 end
@@ -155,8 +168,7 @@ function apply_symmetries_to_boundary_points(pts::BoundaryPoints{T}, symmetries:
     bxy    = pts.xy
     bn     = pts.normal
     bds    = pts.ds
-    has_x = any(s -> s isa BilliardGeometry.XAxisReflection, symmetries)
-    has_y = any(s -> s isa BilliardGeometry.YAxisReflection, symmetries)
+    has_x, has_y = _reflection_case(symmetries)
     copies = 1 + has_x + has_y + (has_x & has_y)
     full_xy     = copy(bxy)
     full_normal = copy(bn)
@@ -164,11 +176,11 @@ function apply_symmetries_to_boundary_points(pts::BoundaryPoints{T}, symmetries:
     sizehint!(full_xy,     length(bxy) * copies)
     sizehint!(full_normal, length(bn)  * copies)
     sizehint!(full_ds,     length(bds) * copies)
-    get_sym(::Type{S}) where S = symmetries[findfirst(s -> s isa S, symmetries)]
-    @inline function push_reflection!(sym::BilliardGeometry.AbsReflection, reverse_orientation::Bool)
+    get_sym(::Type{S}) where S = symmetries[_reflection_index(S, symmetries)]
+    @inline function push_reflection!(sym::BilliardGeometry.AbsReflection)
         rxy = apply_symmetry(sym, bxy)
         rn  = apply_symmetry(sym, bn)
-        if reverse_orientation
+        if BilliardGeometry.orientation_reversing(sym)
             append!(full_xy,     reverse(rxy))
             append!(full_normal, reverse(rn))
             append!(full_ds,     reverse(bds))
@@ -181,15 +193,15 @@ function apply_symmetries_to_boundary_points(pts::BoundaryPoints{T}, symmetries:
     end
     if has_x && has_y
         # CCW order: Q1(base) → Q2(Y-reflect) → Q3(XY-reflect) → Q4(X-reflect)
-        push_reflection!(get_sym(BilliardGeometry.YAxisReflection),  true)  # Q1→Q2: reverse
-        push_reflection!(get_sym(BilliardGeometry.XYAxisReflection), false) # Q2→Q3: preserve
-        push_reflection!(get_sym(BilliardGeometry.XAxisReflection),  true)  # Q3→Q4: reverse
+        push_reflection!(get_sym(BilliardGeometry.YAxisReflection))  # Q1→Q2: reverse
+        push_reflection!(get_sym(BilliardGeometry.XYAxisReflection)) # Q2→Q3: preserve
+        push_reflection!(get_sym(BilliardGeometry.XAxisReflection))  # Q3→Q4: reverse
     elseif has_y
         # CCW order: Q1(base) → Q2(Y-reflect, reversed)
-        push_reflection!(get_sym(BilliardGeometry.YAxisReflection), true)
+        push_reflection!(get_sym(BilliardGeometry.YAxisReflection))
     elseif has_x
         # CCW order: Q1(base) → Q4(X-reflect, reversed)
-        push_reflection!(get_sym(BilliardGeometry.XAxisReflection), true)
+        push_reflection!(get_sym(BilliardGeometry.XAxisReflection))
     end
     full_s = cumsum(full_ds)
     return BoundaryPoints(full_xy; normal=full_normal, s=full_s, ds=full_ds)

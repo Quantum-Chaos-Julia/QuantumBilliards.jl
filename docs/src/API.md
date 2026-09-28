@@ -92,6 +92,8 @@ husimi_function
 pad_limits
 rectify_grid
 apply_symmetries_to_wavefunction
+apply_symmetries_to_boundary_function
+apply_symmetries_to_boundary_points
 regularize!
 _rellich
 antisym_vec

@@ -115,7 +115,7 @@ corner. This follows the corner-adapted approach of Betcke & Trefethen,
 * `dim`: Number of basis functions.
 * `corner_angle`: Opening angle of the corner.
 * `nu`: Angular order constant, with term order equal to `nu * i` for basis index `i`.
-* `symmetries`: Optional vector of symmetries applied to the basis, or `nothing`.
+* `symmetries`: Optional vector of reflection symmetries applied to the basis, or `nothing`.
 * `rotation_angle_discontinuity`: Angle at which the local angular coordinate wraps, used to avoid branch-cut artifacts.
 
 ## API
@@ -131,7 +131,7 @@ struct CornerAdaptedFourierBessel{T,Sy} <: AbsBasis where  {T<:Real,Sy<:Union{Ab
     dim::Int64 #using concrete type
     corner_angle::T
     nu::T #order constant, order=nu*i
-    symmetries::Union{Vector{Any},Nothing}
+    symmetries::Union{Vector{BilliardGeometry.AbsReflection},Nothing}
     rotation_angle_discontinuity::T
 end
 
@@ -167,7 +167,7 @@ function CornerAdaptedFourierBessel(dim::Int64,corner_angle::T,origin::SVector{2
 end
 
 """
-    CornerAdaptedFourierBessel(dim::Int64, corner_angle::T, cs::CoordinateSystem, symmetry::Union{Vector{Any},Nothing}; rotation_angle_discontinuity = zero(T)) where {T<:Real} → basis::CornerAdaptedFourierBessel
+    CornerAdaptedFourierBessel(dim::Int64, corner_angle::T, cs::CoordinateSystem, symmetry::Union{Vector{<:BilliardGeometry.AbsReflection},Nothing}; rotation_angle_discontinuity = zero(T)) where {T<:Real} → basis::CornerAdaptedFourierBessel
 
 Construct a [`CornerAdaptedFourierBessel`](@ref) basis of dimension `dim`
 adapted to a corner with opening angle `corner_angle`, using an existing
@@ -185,13 +185,13 @@ coordinate system `cs` and attaching the given `symmetry`.
 ## Returns
 *  `basis` : A [`CornerAdaptedFourierBessel`](@ref) basis using the given coordinate system and symmetries.
 """
-function CornerAdaptedFourierBessel(dim::Int64,corner_angle::T,cs::CoordinateSystem,symmetry::Union{Vector{Any},Nothing};rotation_angle_discontinuity=zero(T)) where {T<:Real}
+function CornerAdaptedFourierBessel(dim::Int64,corner_angle::T,cs::CoordinateSystem,symmetry::Union{Vector{<:BilliardGeometry.AbsReflection},Nothing};rotation_angle_discontinuity=zero(T)) where {T<:Real}
     nu=pi/corner_angle
     return CornerAdaptedFourierBessel{T,Nothing}(cs,dim,corner_angle,nu,symmetry,rotation_angle_discontinuity)
 end
 
 """
-    CornerAdaptedFourierBessel(dim::Int64, corner_angle::T, origin::SVector{2,T}, rot_angle::T, symmetry::Union{Vector{Any},Nothing}; rotation_angle_discontinuity = zero(T)) where {T<:Real} → basis::CornerAdaptedFourierBessel
+    CornerAdaptedFourierBessel(dim::Int64, corner_angle::T, origin::SVector{2,T}, rot_angle::T, symmetry::Union{Vector{<:BilliardGeometry.AbsReflection},Nothing}; rotation_angle_discontinuity = zero(T)) where {T<:Real} → basis::CornerAdaptedFourierBessel
 
 Construct a [`CornerAdaptedFourierBessel`](@ref) basis of dimension `dim`
 adapted to a corner with opening angle `corner_angle`, located at `origin` and
@@ -210,7 +210,7 @@ rotated by `rot_angle`, attaching the given `symmetry`.
 ## Returns
 *  `basis` : A [`CornerAdaptedFourierBessel`](@ref) basis with the given origin, rotation, and symmetries.
 """
-function CornerAdaptedFourierBessel(dim::Int64,corner_angle::T,origin::SVector{2,T},rot_angle::T,symmetry::Union{Vector{Any},Nothing};rotation_angle_discontinuity=zero(T)) where {T<:Real}
+function CornerAdaptedFourierBessel(dim::Int64,corner_angle::T,origin::SVector{2,T},rot_angle::T,symmetry::Union{Vector{<:BilliardGeometry.AbsReflection},Nothing};rotation_angle_discontinuity=zero(T)) where {T<:Real}
     cs=PolarCS(origin,rot_angle)
     nu=pi/corner_angle
     return CornerAdaptedFourierBessel{T,Nothing}(cs,dim,corner_angle,nu,symmetry,rotation_angle_discontinuity)

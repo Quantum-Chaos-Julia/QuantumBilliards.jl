@@ -95,6 +95,7 @@ registered by the billiard raises an `ArgumentError`.
 * `sector::SymmetrySector`: Representation sector associated with `billiard`.
 """
 function symmetry_sector(billiard::BilliardGeometry.AbsBilliard, choices::Pair...)
+    allunique(first.(choices)) || throw(ArgumentError("symmetry_sector received duplicate generator types among choices; each GeneratorType may appear at most once"))
     characters = Dict{Int,ComplexF64}()
     for (GenType, val) in choices
         matches = filter(s -> s isa GenType, billiard.symmetries)

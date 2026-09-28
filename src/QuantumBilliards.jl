@@ -92,6 +92,7 @@ export BasisEigenstate, BasisState
 export compute_eigenstate
 export BIMEigenstate
 include("states/symmetry/reflections.jl")
+export apply_symmetries_to_wavefunction, apply_symmetries_to_boundary_function, apply_symmetries_to_boundary_points
 include("states/wavefunctions.jl")
 include("states/boundaryfunctions.jl")
 include("states/husimifunctions.jl")
