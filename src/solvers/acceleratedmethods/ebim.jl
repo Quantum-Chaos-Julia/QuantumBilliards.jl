@@ -550,7 +550,11 @@ For a panel centered at `k0`,
 
 the entries are stored as
 
-    coeffs[l+1,i,j] = (Aₗ)ᵢⱼ = Aᵢⱼ⁽ˡ⁾(k0)/l!.
+    coeffs[i,j,l+1] = (Aₗ)ᵢⱼ = Aᵢⱼ⁽ˡ⁾(k0)/l!.
+
+The first two dimensions therefore form a contiguous coefficient matrix for
+each Taylor order. This layout is optimized for repeated matrix-valued Horner
+evaluation during an EBIM spectrum sweep.
 
 Only one panel is required during a panel-wise spectrum sweep.
 
@@ -558,9 +562,6 @@ Only one panel is required during a panel-wise spectrum sweep.
 * `k0::Float64`: Taylor expansion center.
 * `degree::Int`: Taylor polynomial degree.
 * `coeffs::Array{ComplexF64,3}`: Normalized Fredholm Taylor coefficients.
-
-## Returns
-* `EBIMTaylorCache`: Cached polynomial representation of one Fredholm panel.
 """
 struct EBIMTaylorCache
     k0::Float64
@@ -569,7 +570,7 @@ struct EBIMTaylorCache
 end
 
 """
-    EBIMTaylorCache(solver::SweepBIMSolver, pts::BoundaryPoints{Float64}, k0::Float64, p::Int; multithreaded::Bool=true) -> EBIMTaylorCache
+    EBIMTaylorCache(solver::SweepBIMSolver, pts::BoundaryPoints{Float64}, k0::Float64, p::Int; multithreaded::Bool=true)
 
 Construct one cached Fredholm Taylor panel.
 
@@ -578,12 +579,13 @@ directly from [`_fredholm_taylor!`](@ref). For a symmetry-reduced problem, the
 raw kernel coefficients are folded over each source orbit before the Fredholm
 identity is added.
 
-The coefficient tensor is stored with Taylor degree as the first dimension,
+The coefficient tensor is stored as
 
-    coeffs[l+1,i,j] = Aᵢⱼ⁽ˡ⁾(k0)/l!,
+    coeffs[i,j,l+1] = Aᵢⱼ⁽ˡ⁾(k0)/l!,
 
-so all coefficients belonging to one matrix entry are contiguous in the
-first dimension and can be consumed efficiently by Horner's recurrence.
+so each coefficient matrix `coeffs[:,:,l+1]` occupies one contiguous block of
+memory. This favors repeated matrix-valued Horner evaluation over the one-time
+panel construction.
 
 ## Arguments
 * `solver::SweepBIMSolver`: BIM solver defining the Fredholm operator.
@@ -601,41 +603,41 @@ function EBIMTaylorCache(solver::SweepBIMSolver, pts::BoundaryPoints{Float64}, k
     p >= 2 || throw(ArgumentError("EBIM Taylor degree must be at least 2"))
     cache = _taylor_cache(solver, pts)
     if solver.symmetry === nothing
-        N::Int = length(pts)
-        coeffs = Array{ComplexF64,3}(undef, p + 1, N, N)
-        work::Vector{TaylorWorkspace} = [TaylorWorkspace(p) for _ = 1:Threads.maxthreadid()]
+        N = length(pts)
+        coeffs = Array{ComplexF64,3}(undef, N, N, p + 1)
+        work = [TaylorWorkspace(p) for _ = 1:Threads.maxthreadid()]
         @use_threads multithreading=multithreaded for j = 1:N
-            w::TaylorWorkspace = work[Threads.threadid()]
+            w = work[Threads.threadid()]
             @inbounds for i = 1:N
-                a::Vector{ComplexF64} = _fredholm_taylor!(cache, w, k0, p, i, j)
+                a = _fredholm_taylor!(cache, w, k0, p, i, j)
                 @simd for l = 1:p + 1
-                    coeffs[l, i, j] = a[l]
+                    coeffs[i, j, l] = a[l]
                 end
             end
         end
         return EBIMTaylorCache(k0, p, coeffs)
     end
     orbits = solver isa CompositeBIMSolver ? _composite_symmetry_orbits(Float64, solver, pts) : _fold_boundary(Float64, solver.billiard, length(pts.xy), solver.symmetry, solver.sym_characters)
-    m::Int = fundamental_size(orbits)
+    m = fundamental_size(orbits)
     fund = orbits.fundamental_indices
     orbit_of = orbits.orbit_of
     phase = orbits.phase
-    images::Vector{Vector{Int}} = [Int[] for _ = 1:m]
+    images = [Int[] for _ = 1:m]
     @inbounds for j = eachindex(orbit_of)
         push!(images[orbit_of[j]], j)
     end
-    coeffs = Array{ComplexF64,3}(undef, p + 1, m, m)
-    work::Vector{TaylorWorkspace} = [TaylorWorkspace(p) for _ = 1:Threads.maxthreadid()]
+    coeffs = Array{ComplexF64,3}(undef, m, m, p + 1)
+    work = [TaylorWorkspace(p) for _ = 1:Threads.maxthreadid()]
     @use_threads multithreading=multithreaded for bcol = 1:m
-        w::TaylorWorkspace = work[Threads.threadid()]
-        imgs::Vector{Int} = images[bcol]
-        gj::Int = imgs[1]
+        w = work[Threads.threadid()]
+        imgs = images[bcol]
+        gj = imgs[1]
         χ = phase[gj]
         @inbounds for arow = 1:m
-            gi::Int = fund[arow]
-            a::Vector{ComplexF64} = _kernel_taylor!(cache, w, k0, p, gi, gj)
+            gi = fund[arow]
+            a = _kernel_taylor!(cache, w, k0, p, gi, gj)
             @simd for l = 1:p + 1
-                coeffs[l, arow, bcol] = -χ * a[l]
+                coeffs[arow, bcol, l] = -χ * a[l]
             end
         end
         @inbounds for ii = 2:length(imgs)
@@ -645,59 +647,85 @@ function EBIMTaylorCache(solver::SweepBIMSolver, pts::BoundaryPoints{Float64}, k
                 gi = fund[arow]
                 a = _kernel_taylor!(cache, w, k0, p, gi, gj)
                 @simd for l = 1:p + 1
-                    coeffs[l, arow, bcol] -= χ * a[l]
+                    coeffs[arow, bcol, l] -= χ * a[l]
                 end
             end
         end
-        coeffs[1, bcol, bcol] += 1.0
+        coeffs[bcol, bcol, 1] += 1.0
     end
     return EBIMTaylorCache(k0, p, coeffs)
 end
 
-function _construct_matrices!(solver::ExpandedBIMSolver, A::Matrix{ComplexF64}, dA::Matrix{ComplexF64}, ddA::Matrix{ComplexF64}, cache::EBIMTaylorCache, k::Real; multithreaded::Bool = true)
-    N::Int = size(cache.coeffs, 2)
-    δ::Float64 = Float64(k) - cache.k0
-    abs(δ) <= solver.taylor_radius || throw(ArgumentError("wavenumber $k lies outside the Taylor radius $(solver.taylor_radius) about $(cache.k0)"))
-    C = cache.coeffs
-    @use_threads multithreading=multithreaded for j = 1:N
-        @inbounds for i = 1:N
-            v, dv, ddv = _horner_with_12_derivatives(C, i, j, δ)
-            A[i, j] = v
-            dA[i, j] = dv
-            ddA[i, j] = ddv
-        end
-    end
-    return A, dA, ddA
-end
-
 """
-    construct_matrices(solver::ExpandedBIMSolver, cache::EBIMTaylorCache, k::Real; multithreaded::Bool=true)
+    _construct_matrices!(solver::ExpandedBIMSolver, A::Matrix{ComplexF64}, dA::Matrix{ComplexF64}, ddA::Matrix{ComplexF64}, cache::EBIMTaylorCache, k::Real)
 
-Evaluate `A(k)`, `A'(k)`, and `A''(k)` from a cached Taylor panel.
+Evaluate `A(k)`, `A'(k)`, and `A''(k)` in place from a cached Taylor panel.
 
-This allocating convenience method is intended for individual evaluations.
-Spectrum sweeps use [`construct_matrices!`](@ref) with persistent matrix
-buffers.
+All three matrices are evaluated simultaneously by matrix-valued Horner
+recurrence. Since each Taylor coefficient matrix occupies one contiguous block
+of `cache.coeffs`, the recurrence streams linearly through memory.
 
 ## Arguments
 * `solver::ExpandedBIMSolver`: EBIM solver.
-* `cache::EBIMTaylorCache`: Taylor panel.
-* `k`: Evaluation wavenumber.
-
-## Keyword Arguments
-* `multithreaded::Bool = true`: Enable multithreaded Horner evaluation.
+* `A::Matrix{ComplexF64}`: Output Fredholm matrix.
+* `dA::Matrix{ComplexF64}`: Output first derivative.
+* `ddA::Matrix{ComplexF64}`: Output second derivative.
+* `cache::EBIMTaylorCache`: Cached Taylor panel.
+* `k::Real`: Evaluation wavenumber.
 
 ## Returns
 * `A::Matrix{ComplexF64}`: Fredholm matrix.
 * `dA::Matrix{ComplexF64}`: First derivative.
 * `ddA::Matrix{ComplexF64}`: Second derivative.
 """
-function construct_matrices(solver::ExpandedBIMSolver, cache::EBIMTaylorCache, k; multithreaded::Bool = true)
-    N::Int = size(cache.coeffs, 2)
+function _construct_matrices!(solver::ExpandedBIMSolver, A::Matrix{ComplexF64}, dA::Matrix{ComplexF64}, ddA::Matrix{ComplexF64}, cache::EBIMTaylorCache, k::Real)
+    δ = Float64(k) - cache.k0
+    abs(δ) <= solver.taylor_radius || throw(ArgumentError("wavenumber $k lies outside the Taylor radius $(solver.taylor_radius) about $(cache.k0)"))
+    C = cache.coeffs
+    p = cache.degree
+    n2 = length(A)
+    off = p * n2
+    @inbounds @simd for q = 1:n2
+        A[q] = C[off + q]
+        dA[q] = 0.0
+        ddA[q] = 0.0
+    end
+    @inbounds for l = p:-1:1
+        off = (l - 1) * n2
+        @simd for q = 1:n2
+            ddA[q] = ddA[q] * δ + 2 * dA[q]
+            dA[q] = dA[q] * δ + A[q]
+            A[q] = A[q] * δ + C[off + q]
+        end
+    end
+    return A, dA, ddA
+end
+
+"""
+    construct_matrices(solver::ExpandedBIMSolver, cache::EBIMTaylorCache, k::Real)
+
+Evaluate `A(k)`, `A'(k)`, and `A''(k)` from a cached Taylor panel.
+
+This allocating convenience method is intended for individual evaluations.
+Spectrum sweeps reuse persistent matrix buffers through
+[`_construct_matrices!`](@ref).
+
+## Arguments
+* `solver::ExpandedBIMSolver`: EBIM solver.
+* `cache::EBIMTaylorCache`: Taylor panel.
+* `k::Real`: Evaluation wavenumber.
+
+## Returns
+* `A::Matrix{ComplexF64}`: Fredholm matrix.
+* `dA::Matrix{ComplexF64}`: First derivative.
+* `ddA::Matrix{ComplexF64}`: Second derivative.
+"""
+function construct_matrices(solver::ExpandedBIMSolver, cache::EBIMTaylorCache, k::Real)
+    N = size(cache.coeffs, 1)
     A = Matrix{ComplexF64}(undef, N, N)
     dA = similar(A)
     ddA = similar(A)
-    return _construct_matrices!(solver, A, dA, ddA, cache, k; multithreaded)
+    return _construct_matrices!(solver, A, dA, ddA, cache, k)
 end
 
 """
@@ -828,14 +856,14 @@ Compute local EBIM candidates from a cached Taylor panel.
 * `nlevels::Int`: Minimum number of local candidates.
 
 ## Keyword Arguments
-* `multithreaded::Bool = true`: Enable multithreaded Horner evaluation.
+* `multithreaded::Bool = true`: Enable multithreaded Horner evaluation. Left for compatibility with the direct construction interface.
 
 ## Returns
 * `ks::Vector`: Local EBIM eigenvalue estimates.
 * `ts::Vector`: Magnitudes of the corresponding corrections.
 """
 function solve(solver::ExpandedBIMSolver, cache::EBIMTaylorCache, k, nlevels::Int; multithreaded::Bool = true)
-    A, dA, ddA = construct_matrices(solver, cache, k; multithreaded)
+    A, dA, ddA = construct_matrices(solver, cache, k)
     return _solve(solver, A, dA, ddA, k, nlevels)
 end
 
