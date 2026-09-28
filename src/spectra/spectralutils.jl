@@ -530,7 +530,8 @@ function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::F
         p = solver.taylor_degree
         np = length(centers)
         panel_start = 1
-        @maybe_showprogress show_progress while panel_start <= np
+        progress = show_progress ? Progress(np; desc = "EBIM spectrum: ") : nothing
+        while panel_start <= np
             panel_stop = panel_start
             panel_limit = centers[panel_start] + 2R
             while panel_stop < np && centers[panel_stop + 1] <= panel_limit
@@ -540,13 +541,13 @@ function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::F
             kmax_panel = min(k2T, kc + R)
             pts = evaluate_points(solver, billiard, kmax_panel)
             cache = EBIMTaylorCache(solver.kernel, pts, Float64(kc), p; multithreaded)
-            N = size(cache.coeffs, 2)
+            N = size(cache.coeffs, 1)
             A = Matrix{ComplexF64}(undef, N, N)
             dA = similar(A)
             ddA = similar(A)
             @inbounds for i = panel_start:panel_stop
                 ki = centers[i]
-                _construct_matrices!(solver, A, dA, ddA, cache, ki; multithreaded)
+                _construct_matrices!(solver, A, dA, ddA, cache, ki)
                 ksi, tsi = _solve(solver, A, dA, ddA, ki, nlevels[i])
                 for q = eachindex(ksi)
                     if abs(real(ksi[q]) - ki) <= dks[i]
@@ -555,6 +556,7 @@ function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::F
                     end
                 end
             end
+            show_progress && update!(progress, panel_stop)
             panel_start = panel_stop + 1
         end
     end
