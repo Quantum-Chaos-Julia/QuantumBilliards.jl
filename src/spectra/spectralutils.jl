@@ -488,7 +488,7 @@ directly at every expansion center.
 * `show_progress::Bool = true`: Display the spectrum-sweep progress indicator.
 
 ## Returns
-* `data::SpectralData`: Merged EBIM spectrum and associated correction magnitudes.
+* `data::SpectralData`: Merged and sorted EBIM spectrum with correction magnitudes and merge-control flags.
 """
 function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::Function = (k -> 0.05), tol = 1e-5, spacing_frac = 0.02, tolmax = 5e-3, local_window::Int = 4, multithreaded::Bool = true, show_progress::Bool = true) where {Bi<:AbsBilliard}
     T = _bim_numeric_type(solver)
@@ -509,7 +509,6 @@ function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::F
         push!(nlevels, max(1, nweyl))
         k += Δk
     end
-    isempty(centers) && return SpectralData(T[], T[])
     ks = Complex{T}[]
     ts = T[]
     if !solver.use_taylor
@@ -527,6 +526,7 @@ function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::F
     else
         T === Float64 || throw(ArgumentError("analytic EBIM Taylor acceleration currently requires Float64"))
         R = T(solver.taylor_radius)
+        R > zero(T) || throw(ArgumentError("taylor_radius must be positive"))
         p = solver.taylor_degree
         np = length(centers)
         panel_start = 1
@@ -560,21 +560,16 @@ function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::F
             panel_start = panel_stop + 1
         end
     end
-    isempty(ks) && return SpectralData(T[], T[])
-    order = sortperm(real.(ks))
-    ks = ks[order]
-    ts = ts[order]
-    kreal = T.(real.(ks))
-    tvals = T.(ts)
-    keep = (kreal .>= k1T) .& (kreal .<= k2T)
-    kreal = kreal[keep]
-    tvals = tvals[keep]
-    isempty(kreal) && return SpectralData(T[], T[])
-    kout = T[]
+    isempty(ks) && throw(ArgumentError("compute_spectrum found no candidates in the requested range"))
+    keep = (k1T .<= real.(ks)) .& (real.(ks) .<= k2T)
+    ks = ks[keep]
+    ts = ts[keep]
+    isempty(ks) && throw(ArgumentError("compute_spectrum found no candidates in the requested range"))
+    kout = Complex{T}[]
     tout = T[]
     control = Bool[]
-    overlap_and_merge_ebim!(kout, tout, kreal, tvals, control; tol = T(tol), spacing_frac = T(spacing_frac), tolmax = T(tolmax), local_window = local_window)
-    return SpectralData(kout, tout)
+    overlap_and_merge_ebim!(kout, tout, ks, ts, control; tol = T(tol), spacing_frac = T(spacing_frac), tolmax = T(tolmax), local_window = local_window)
+    return _finalize_spectrum(kout, tout, control)
 end
 
 """
@@ -602,10 +597,10 @@ approximately to Weyl-law state indices `N1` through `N2`.
 ## Returns
 * `data::SpectralData`: Merged and sorted complex spectrum over the corresponding Weyl-law wavenumber range.
 """
-function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, N1::Int, N2::Int; dk::Function=(k->0.05*k^(-1/3)), tol=1e-5, spacing_frac=0.02, tolmax=5e-3, local_window::Int=4, seg_reuse_frac=0.95, multithreaded::Bool=true, show_progress::Bool=true) where {Bi<:AbsBilliard}
-    fundamental = solver.kernel.symmetry!==nothing
+function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, N1::Int, N2::Int; dk::Function = (k -> 0.05 * k^(-1/3)), tol = 1e-5, spacing_frac = 0.02, tolmax = 5e-3, local_window::Int = 4, multithreaded::Bool = true, show_progress::Bool = true) where {Bi<:AbsBilliard}
+    fundamental = solver.kernel.symmetry !== nothing
     k1, k2 = k_range_for_states(billiard, N1, N2; fundamental)
-    return compute_spectrum(solver, billiard, k1, k2; dk, tol, spacing_frac, tolmax, local_window, seg_reuse_frac, multithreaded, show_progress)
+    return compute_spectrum(solver, billiard, k1, k2; dk, tol, spacing_frac, tolmax, local_window, multithreaded, show_progress)
 end
 
 ################################################################################
