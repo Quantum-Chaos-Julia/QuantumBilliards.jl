@@ -175,7 +175,7 @@ function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billi
     control = Bool[]
     states = AbsState[]
     L = CompositeCurve(get_boundary_curves(billiard)).length
-    use_taylor = basis isa CornerAdaptedFourierBessel && basis.use_taylor
+    use_taylor = (basis isa CornerAdaptedFourierBessel || basis isa RealPlaneWaves) && basis.use_taylor
     if use_taylor
         R = T(basis.taylor_radius)
         R > zero(T) || throw(ArgumentError("taylor_radius must be positive"))
@@ -183,20 +183,19 @@ function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billi
         dimcheck = max(solver.min_dim, round(Int, L * kcheck * solver.dim_scaling_factor / (2 * pi)))
         basis_check = resize_basis(basis, billiard, dimcheck, kcheck)
         pts_check = evaluate_points(solver, billiard, kcheck)
-        cache_check = CornerAdaptedTaylorCache(basis_check, kcheck, pts_check.xy; multithreaded)
+        cache_check = basis_cache(basis_check, kcheck, pts_check.xy; multithreaded)
         keval = max(k1T, kcheck - R)
         B, dB = basis_and_dk_matrices(cache_check, keval; multithreaded)
         B_ref = basis_matrix(basis_check, keval, pts_check.xy; multithreaded)
         dB_ref = dk_matrix(basis_check, keval, pts_check.xy; multithreaded)
         err_B = norm(B - B_ref) / max(norm(B_ref), eps(T))
         err_dB = norm(dB - dB_ref) / max(norm(dB_ref), eps(T))
-        max(err_B, err_dB) <= basis.taylor_tol || throw(ArgumentError("Taylor representation with degree $(basis.taylor_degree) and radius $(basis.taylor_radius) fails tolerance $(basis.taylor_tol) at k = $kcheck: basis error = $err_B, derivative error = $err_dB"))
+        max(err_B, err_dB) <= basis.taylor_tol || throw(ArgumentError("Taylor representation with degree $(basis.taylor_degree) and radius $(basis.taylor_radius) fails tolerance $(basis.taylor_tol) for expansion center k0 = $kcheck at evaluation point k = $keval: basis error = $err_B, derivative error = $err_dB"))
         panel_start = Int[]
         panel_stop = Int[]
         i = 1
         while i <= length(centers)
-            j = searchsortedlast(centers, centers[i] + 2R)
-            j = max(i, j)
+            j = max(i, searchsortedlast(centers, centers[i] + 2R))
             push!(panel_start, i)
             push!(panel_stop, j)
             i = j + 1
@@ -209,7 +208,7 @@ function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billi
             dim = max(solver.min_dim, round(Int, L * kmax * solver.dim_scaling_factor / (2 * pi)))
             basis_new = resize_basis(basis, billiard, dim, kmax)
             pts = evaluate_points(solver, billiard, kmax)
-            cache = CornerAdaptedTaylorCache(basis_new, kc, pts.xy; multithreaded)
+            cache = basis_cache(basis_new, kc, pts.xy; multithreaded)
             for i in i1:i2
                 k0, Δk = centers[i], widths[i]
                 if solver.eigenvectors

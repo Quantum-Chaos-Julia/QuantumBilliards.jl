@@ -35,6 +35,7 @@ include("states/symmetry/symmetrysector.jl")
 export SymmetrySector, symmetry_sector
 
 include("basis/planewaves/realplanewaves.jl")
+include("basis/planewaves/realplanewaves_recurrence.jl")
 export RealPlaneWaves
 include("basis/fourierbessel/corneradapted.jl")
 include("basis/fourierbessel/corneradapted_recurrence.jl")

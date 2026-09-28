@@ -1,41 +1,43 @@
 """
-RealPlaneWaves{T,Sa} <: AbsBasis
+    RealPlaneWaves{T,Sa} <: AbsBasis
 
 `RealPlaneWaves` is a concrete basis type representing real plane waves with
-optional reflection symmetries.
+optional reflection symmetries and optional Taylor acceleration in the
+wavenumber.
 
 ## Description
 Each basis function has the separable form
 
-```math
-f(x,y) = F_x(kx)\\,F_y(ky),
-```
+`f(x,y) = F_x(kx) F_y(ky)`,
 
-where \$F_x,F_y \\in \\{\\cos,\\sin\\}\$ are selected per basis function by the
-`parity_x` and `parity_y` fields (`+1` selects `cos`, `-1` selects `sin`), and
-the propagation direction is set by `angles` (quadrant ordering
-`(+x,+y), (+x,-y), (-x,+y), (-x,-y)`).
+where `F_x,F_y ∈ {cos,sin}` are selected per basis function by the `parity_x`
+and `parity_y` fields (`+1` selects `cos`, `-1` selects `sin`), and the
+propagation direction is set by `angles`.
 
 Each entry of `symmetries` has a corresponding quantum number at the same
 index in `sym_qnumbers`. When both an x- and a y-axis reflection are present,
 the symmetry order is `[YAxisReflection, XYAxisReflection, XAxisReflection]`
-with quantum numbers `[sym_x, sym_x*sym_y, sym_y]`. The quantum numbers
-restrict which quadrants/parities are used:
-- No symmetries: all 4 quadrants, 4 patterns `(cos,cos), (cos,sin), (sin,cos), (sin,sin)`.
-- X-axis reflection (`sym_y`): 2 quadrants with fixed y-parity; `sym_y = +1` gives `(cos,cos), (sin,cos)` (upper half-plane, y>0), `sym_y = -1` gives `(cos,sin), (sin,sin)` (lower half-plane, y<0).
-- Y-axis reflection (`sym_x`): 2 quadrants with fixed x-parity; `sym_x = +1` gives `(cos,cos), (cos,sin)` (right half-plane, x>0), `sym_x = -1` gives `(sin,cos), (sin,sin)` (left half-plane, x<0).
-- XY-axis reflection (both `sym_x` and `sym_y`): 1 quadrant, selected by `(sym_y, sym_x)`: `(+1,+1) → (cos,cos)` (quadrant I), `(+1,-1) → (sin,cos)` (quadrant II), `(-1,+1) → (cos,sin)` (quadrant IV), `(-1,-1) → (sin,sin)` (quadrant III).
+with quantum numbers `[sym_x, sym_x*sym_y, sym_y]`.
+
+When `use_taylor = true`, compatible accelerated solvers may construct a
+Taylor representation of the basis about a reference wavenumber. The
+polynomial degree, reuse radius, and requested accuracy are controlled by
+`taylor_degree`, `taylor_radius`, and `taylor_tol`, respectively.
 
 ## Attributes
-* `dim`: Number of distinct sampled angles (the effective basis dimension is `dim` times the number of parity patterns).
+* `dim`: Effective number of basis functions.
 * `symmetries`: Reflection symmetries applied to the basis, or `nothing`.
 * `sym_qnumbers`: Quantum number for each entry of `symmetries`, or `nothing`.
 * `angle_arc`: Angular range over which directions are sampled.
 * `angle_shift`: Angular offset applied to the sampled directions.
 * `angles`: Propagation angles of the plane waves.
-* `parity_x`: Parity selector for the `x` factor of each basis function (`+1` = `cos`, `-1` = `sin`).
-* `parity_y`: Parity selector for the `y` factor of each basis function (`+1` = `cos`, `-1` = `sin`).
+* `parity_x`: Parity selector for the x factor (`+1` = `cos`, `-1` = `sin`).
+* `parity_y`: Parity selector for the y factor (`+1` = `cos`, `-1` = `sin`).
 * `sampler`: Sampling strategy used to sample the angles.
+* `use_taylor`: Whether compatible accelerated solvers may use Taylor acceleration.
+* `taylor_degree`: Degree of the Taylor expansion.
+* `taylor_radius`: Maximum distance from a Taylor expansion center over which the cache is reused.
+* `taylor_tol`: Required accuracy of the Taylor representation.
 
 ## API
 The following functions can be evaluated for this type:
@@ -43,17 +45,23 @@ The following functions can be evaluated for this type:
 - [`basis_fun`](@ref)
 - [`gradient`](@ref)
 - [`basis_and_gradient`](@ref)
+- [`dk_fun`](@ref)
+- [`RealPlaneWaveTaylorCache`](@ref)
 """
-struct RealPlaneWaves{T,Sa} <: AbsBasis where {T<:Real, Sa<:AbsSampler}
+struct RealPlaneWaves{T,Sa} <: AbsBasis where {T<:Real,Sa<:AbsSampler}
     dim::Int64
-    symmetries::Union{Vector{BilliardGeometry.AbsReflection}, Nothing}
-    sym_qnumbers::Union{Vector{T}, Nothing}
+    symmetries::Union{Vector{BilliardGeometry.AbsReflection},Nothing}
+    sym_qnumbers::Union{Vector{T},Nothing}
     angle_arc::T
     angle_shift::T
     angles::Vector{T}
     parity_x::Vector{Int64}
     parity_y::Vector{Int64}
     sampler::Sa
+    use_taylor::Bool
+    taylor_degree::Int
+    taylor_radius::T
+    taylor_tol::T
 end
 
 """
@@ -132,50 +140,58 @@ end
 @inline infer_quantum_numbers(::Nothing) = nothing
 
 """
-    RealPlaneWaves(dim::Int, symmetries::Union{Vector{BG},Nothing}, sym_qnumbers::Union{Vector{T},Nothing}; angle_arc = π, angle_shift = 0.0, sampler = LinearNodes()) where {T<:Real, BG<:BilliardGeometry.AbsReflection} → basis::RealPlaneWaves
+    RealPlaneWaves(dim::Int, symmetries::Union{Vector{BG},Nothing}, sym_qnumbers::Union{Vector{T},Nothing}; angle_arc = π, angle_shift = 0.0, sampler = LinearNodes(), use_taylor::Bool = true, taylor_degree::Int = 16, taylor_radius::Real = 0.5, taylor_tol::Real = 1e-11) where {T<:Real,BG<:BilliardGeometry.AbsReflection} → basis::RealPlaneWaves
 
-Construct a [`RealPlaneWaves`](@ref) basis of dimension `dim` for the given
-`symmetries` and their quantum numbers `sym_qnumbers`.
+Construct a [`RealPlaneWaves`](@ref) basis for the given reflection symmetries
+and quantum numbers.
 
 ## Arguments
 * `dim`: Number of distinct angles to sample.
 * `symmetries`: Reflection symmetries, or `nothing` for no symmetry restriction.
-* `sym_qnumbers`: Quantum number for each entry of `symmetries` (must have the same length), or `nothing`.
+* `sym_qnumbers`: Quantum number for each entry of `symmetries`, or `nothing`.
 
-## Keyword arguments
-*  `angle_arc::Real = π` : Angular range over which directions are sampled.
-*  `angle_shift::Real = 0.0` : Angular offset applied to the sampled directions.
-*  `sampler::AbsSampler = LinearNodes()` : Sampling strategy used to sample the angles.
+## Keyword Arguments
+* `angle_arc::Real = π`: Angular range over which directions are sampled.
+* `angle_shift::Real = 0.0`: Angular offset applied to the sampled directions.
+* `sampler::AbsSampler = LinearNodes()`: Sampling strategy used to sample the angles.
+* `use_taylor::Bool = true`: Whether compatible accelerated solvers may use Taylor acceleration.
+* `taylor_degree::Int = 16`: Degree of the Taylor expansion.
+* `taylor_radius::Real = 0.5`: Maximum distance from a Taylor expansion center over which the cache is reused.
+* `taylor_tol::Real = 1e-11`: Required accuracy of the Taylor representation.
 
 ## Returns
-*  `basis` : A [`RealPlaneWaves`](@ref) basis with the given symmetries and quantum numbers.
+* `basis`: A [`RealPlaneWaves`](@ref) basis with the requested configuration.
 """
-function RealPlaneWaves(dim::Int, symmetries::Union{Vector{BG}, Nothing}, sym_qnumbers::Union{Vector{T}, Nothing}; angle_arc=Float64(π), angle_shift=0.0, sampler=LinearNodes()) where {T<:Real, BG<:BilliardGeometry.AbsReflection}
-    # Validate that symmetries and sym_qnumbers have matching lengths
+function RealPlaneWaves(dim::Int, symmetries::Union{Vector{BG},Nothing}, sym_qnumbers::Union{Vector{<:Real},Nothing}; angle_arc = Float64(π), angle_shift = 0.0, sampler = LinearNodes(), use_taylor::Bool = true, taylor_degree::Int = 16, taylor_radius::Real = 0.5, taylor_tol::Real = 1e-11) where {BG<:BilliardGeometry.AbsReflection}
+    taylor_degree >= 1 || throw(ArgumentError("taylor_degree must be at least 1"))
+    taylor_radius > 0 || throw(ArgumentError("taylor_radius must be positive"))
+    taylor_tol > 0 || throw(ArgumentError("taylor_tol must be positive"))
     if !isnothing(symmetries) && !isnothing(sym_qnumbers)
-        @assert length(symmetries) == length(sym_qnumbers) "symmetries and sym_qnumbers must have the same length"
+        length(symmetries) == length(sym_qnumbers) || throw(ArgumentError("symmetries and sym_qnumbers must have the same length"))
     end
-    # Get parity pattern from symmetries and quantum numbers
     par_x, par_y = parity_pattern(symmetries, sym_qnumbers)
     pl = length(par_x)
     eff_dim = dim * pl
-    # Sample angles from the sampler
-    t, dt = sample_points(sampler, dim)
-    angles = Vector{eltype(t)}(undef, eff_dim)
+    t, _ = sample_points(sampler, dim)
+    TT = promote_type(eltype(t), typeof(angle_arc), typeof(angle_shift), typeof(taylor_radius), typeof(taylor_tol))
+    arc = TT(angle_arc)
+    shift = TT(angle_shift)
+    angles = Vector{TT}(undef, eff_dim)
     parity_x = Vector{Int}(undef, eff_dim)
     parity_y = Vector{Int}(undef, eff_dim)
-    @inbounds for i in 1:dim
-        angle = t[i] * angle_arc + angle_shift
-        base_idx = (i-1) * pl
-        for j in 1:pl
+    @inbounds for i = 1:dim
+        angle = TT(t[i]) * arc + shift
+        base_idx = (i - 1) * pl
+        for j = 1:pl
             idx = base_idx + j
             angles[idx] = angle
             parity_x[idx] = par_x[j]
             parity_y[idx] = par_y[j]
         end
     end
+    qnumbers = isnothing(sym_qnumbers) ? nothing : TT.(sym_qnumbers)
     Sa = typeof(sampler)
-    return RealPlaneWaves{eltype(angles),Sa}(eff_dim, symmetries, sym_qnumbers, angle_arc, angle_shift, angles, parity_x, parity_y, sampler)
+    return RealPlaneWaves{TT,Sa}(eff_dim, symmetries, qnumbers, arc, shift, angles, parity_x, parity_y, sampler, use_taylor, taylor_degree, TT(taylor_radius), TT(taylor_tol))
 end
 
 """
@@ -206,13 +222,18 @@ caller only ever chooses characters for the two axis reflections.
 *  `angle_arc::Union{Real,Nothing} = nothing` : Angular range to sample; auto-adjusted based on the symmetries if not given.
 *  `angle_shift::Union{Real,Nothing} = nothing` : Angular offset; auto-adjusted based on the symmetries if not given.
 *  `sampler::AbsSampler = LinearNodes()` : Sampling strategy used to sample the angles.
+* `use_taylor::Bool = true`: Whether compatible accelerated solvers may use Taylor acceleration.
+* `taylor_degree::Int = 16`: Degree of the Taylor expansion.
+* `taylor_radius::Real = 0.5`: Maximum distance from a Taylor expansion center over which the cache is reused.
+* `taylor_tol::Real = 1e-11`: Required accuracy of the Taylor representation.
 
 ## Returns
 *  `basis` : A [`RealPlaneWaves`](@ref) basis whose symmetries/quantum numbers are derived from `billiard` and `sector`.
 """
 function RealPlaneWaves(dim::Int, billiard::BilliardGeometry.AbsBilliard, sector::SymmetrySector;
                        angle_arc::Union{Real,Nothing}=nothing, angle_shift::Union{Real,Nothing}=nothing,
-                       sampler=LinearNodes())
+                       sampler=LinearNodes(), use_taylor::Bool=true, taylor_degree::Int=16,
+                       taylor_radius::Real=0.5, taylor_tol::Real=1e-11)
     _check_sector_billiard(billiard, sector)
     x_sym = findfirst(s -> s isa BilliardGeometry.XAxisReflection && haskey(sector.characters, s.sym_id), billiard.symmetries)
     y_sym = findfirst(s -> s isa BilliardGeometry.YAxisReflection && haskey(sector.characters, s.sym_id), billiard.symmetries)
@@ -229,7 +250,9 @@ function RealPlaneWaves(dim::Int, billiard::BilliardGeometry.AbsBilliard, sector
         "NFoldRotation generator) that RealPlaneWaves has no representation " *
         "for, instead of silently building the unrestricted basis."))
 
-    return RealPlaneWaves(dim; sym_x, sym_y, angle_arc, angle_shift, sampler)
+    return RealPlaneWaves(dim; sym_x, sym_y, angle_arc, angle_shift, sampler,
+                          use_taylor=use_taylor, taylor_degree=taylor_degree,
+                          taylor_radius=taylor_radius, taylor_tol=taylor_tol)
 end
 
 
@@ -259,13 +282,18 @@ When both symmetries are present, the symmetry order is
 *  `angle_arc::Union{Real,Nothing} = nothing` : Angular range to sample; auto-adjusted based on the symmetries if not given.
 *  `angle_shift::Union{Real,Nothing} = nothing` : Angular offset; auto-adjusted based on the symmetries if not given.
 *  `sampler::AbsSampler = LinearNodes()` : Sampling strategy used to sample the angles.
+* `use_taylor::Bool = true`: Whether compatible accelerated solvers may use Taylor acceleration.
+* `taylor_degree::Int = 16`: Degree of the Taylor expansion.
+* `taylor_radius::Real = 0.5`: Maximum distance from a Taylor expansion center over which the cache is reused.
+* `taylor_tol::Real = 1e-11`: Required accuracy of the Taylor representation.
 
 ## Returns
 *  `basis` : A [`RealPlaneWaves`](@ref) basis with symmetries and quantum numbers derived from `sym_x` and `sym_y`.
 """
 function RealPlaneWaves(dim::Int; sym_x::Union{Int,Nothing}=nothing, sym_y::Union{Int,Nothing}=nothing,
                        angle_arc::Union{Real,Nothing}=nothing, angle_shift::Union{Real,Nothing}=nothing, 
-                       sampler=LinearNodes())
+                       sampler=LinearNodes(), use_taylor::Bool=true, taylor_degree::Int=16,
+                       taylor_radius::Real=0.5, taylor_tol::Real=1e-11)
     # Build symmetries vector and quantum numbers based on sym_x and sym_y
     # Automatically adjust angle_arc and angle_shift based on symmetries if not provided
     
@@ -308,7 +336,9 @@ function RealPlaneWaves(dim::Int; sym_x::Union{Int,Nothing}=nothing, sym_y::Unio
     
     # Call the main constructor
     return RealPlaneWaves(dim, symmetries, sym_qnumbers; 
-                         angle_arc=arc, angle_shift=shift, sampler=sampler)
+                         angle_arc=arc, angle_shift=shift, sampler=sampler,
+                         use_taylor=use_taylor, taylor_degree=taylor_degree,
+                         taylor_radius=taylor_radius, taylor_tol=taylor_tol)
 end
 
 """
@@ -326,13 +356,21 @@ Construct a [`RealPlaneWaves`](@ref) basis of dimension `dim` for the given
 *  `angle_arc::Real = π` : Angular range over which directions are sampled.
 *  `angle_shift::Real = 0.0` : Angular offset applied to the sampled directions.
 *  `sampler::AbsSampler = LinearNodes()` : Sampling strategy used to sample the angles.
+*  `use_taylor::Bool = true` : Whether to use the Taylor expansion for evaluating the basis functions.
+*  `taylor_degree::Int = 16` : Degree of the Taylor expansion.
+*  `taylor_radius::Real = 0.5`: Maximum distance from a Taylor expansion center over which the cache is reused.
+*  `taylor_tol::Real = 1e-11` : Tolerance for the Taylor expansion.
 
 ## Returns
 *  `basis` : A [`RealPlaneWaves`](@ref) basis with the given symmetries and default (`+1`) quantum numbers.
 """
-function RealPlaneWaves(dim::Int, symmetries::Union{Vector{BG}, Nothing}; angle_arc=Float64(π), angle_shift=0.0, sampler=LinearNodes()) where {BG<:BilliardGeometry.AbsReflection}
+function RealPlaneWaves(dim::Int, symmetries::Union{Vector{BG}, Nothing}; angle_arc=Float64(π), angle_shift=0.0, sampler=LinearNodes(),
+                        use_taylor::Bool=true, taylor_degree::Int=16,
+                        taylor_radius::Real=0.5, taylor_tol::Real=1e-11) where {BG<:BilliardGeometry.AbsReflection}
     sym_qnumbers = infer_quantum_numbers(symmetries)
-    return RealPlaneWaves(dim, symmetries, sym_qnumbers; angle_arc=angle_arc, angle_shift=angle_shift, sampler=sampler)
+    return RealPlaneWaves(dim, symmetries, sym_qnumbers; angle_arc=angle_arc, angle_shift=angle_shift, sampler=sampler,
+                          use_taylor=use_taylor, taylor_degree=taylor_degree,
+                          taylor_radius=taylor_radius, taylor_tol=taylor_tol)
 end
 
 """
@@ -351,7 +389,9 @@ symmetries, quantum numbers, and sampling parameters.
 *  `basis_new` : A new [`RealPlaneWaves`](@ref) basis of dimension `dim` with the same symmetries, quantum numbers, angular range/offset, and sampler as `basis`.
 """
 @inline function resize_basis(basis::RealPlaneWaves, billiard::AbsBilliard, dim::Int, k)
-    return RealPlaneWaves(dim, basis.symmetries, basis.sym_qnumbers; angle_arc=basis.angle_arc, angle_shift=basis.angle_shift, sampler=basis.sampler)
+    return RealPlaneWaves(dim, basis.symmetries, basis.sym_qnumbers; angle_arc=basis.angle_arc, angle_shift=basis.angle_shift, sampler=basis.sampler,
+                          use_taylor=basis.use_taylor, taylor_degree=basis.taylor_degree,
+                          taylor_radius=basis.taylor_radius, taylor_tol=basis.taylor_tol)
 end
 
 # Helper functions for cos/sin pattern

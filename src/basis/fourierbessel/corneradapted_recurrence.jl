@@ -163,6 +163,27 @@ function CornerAdaptedTaylorCache(basis::CornerAdaptedFourierBessel{T}, k0::T, p
     return CornerAdaptedTaylorCache(k0, p, r, coeffs, sin_mφ, sinφ, cosφ, cos_mφ)
 end
 
+"""
+    basis_cache(basis::CornerAdaptedFourierBessel, k0, pts; multithreaded::Bool = true) → cache::CornerAdaptedTaylorCache
+
+Construct the Taylor cache associated with a [`CornerAdaptedFourierBessel`](@ref) basis.
+
+## Arguments
+* `basis`: Basis for which the cache is constructed.
+* `k0`: Reference wavenumber of the Taylor expansion.
+* `pts`: Points at which the basis is represented.
+
+## Keyword Arguments
+* `multithreaded::Bool = true`: Whether cache construction is multithreaded.
+
+## Returns
+* `cache`: [`CornerAdaptedTaylorCache`](@ref) associated with `basis`.
+"""
+@inline function basis_cache(basis::CornerAdaptedFourierBessel, k0, pts; multithreaded::Bool = true)
+    return CornerAdaptedTaylorCache(basis, k0, pts; multithreaded)
+end
+
+
 ################################################################################
 # BASIS MATRIX
 ################################################################################
