@@ -119,6 +119,20 @@ end
     return v, dv, ddv
 end
 
+# Evaluate the Taylor coefficients C[:, i, j] and their first two derivatives
+# simultaneously by Horner's rule at a real point δ.
+@inline function _horner_with_12_derivatives(C::Array{ComplexF64,3}, i::Int, j::Int, δ::Real)
+    v::ComplexF64 = C[end, i, j]
+    dv::ComplexF64 = zero(ComplexF64)
+    ddv::ComplexF64 = zero(ComplexF64)
+    @inbounds for l = size(C, 1) - 1:-1:1
+        ddv = ddv * δ + 2 * dv
+        dv = dv * δ + v
+        v = v * δ + C[l, i, j]
+    end
+    return v, dv, ddv
+end
+
 """
     power_to_cheb(p::Int, Δ::Float64) -> Matrix{Float64}
 

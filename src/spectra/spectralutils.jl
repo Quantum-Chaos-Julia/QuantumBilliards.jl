@@ -457,82 +457,121 @@ end
 end
 
 """
-    compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::Function = k -> 0.05*k^(-1/3), tol = 1e-5, spacing_frac = 0.02, tolmax = 5e-3, local_window::Int = 4, seg_reuse_frac = 0.95, multithreaded::Bool = true, show_progress::Bool = true) where {Bi<:AbsBilliard}
+    compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::Function=(k -> 0.05), tol=1e-5, spacing_frac=0.02, tolmax=5e-3, local_window::Int=4, multithreaded::Bool=true, show_progress::Bool=true) where {Bi<:AbsBilliard}
 
-Compute the spectrum of `billiard` on `[k1,k2]` with the expanded BIM solver.
+Compute the EBIM spectrum in `[k1,k2]`.
 
-Expansion centers are separated by `dk(k)`. At each center, the number of
-local generalized eigenpairs is estimated from the Weyl count over
-`[k-dk(k),k+dk(k)]`, so neighboring local spectra overlap by approximately
-50%. Boundary discretizations are reused over neighboring expansion centers
-according to `seg_reuse_frac`, while overlapping corrected spectra are merged
-by [`overlap_and_merge_ebim!`](@ref).
+Local EBIM expansion centers are separated according to `dk(k)`. At each
+center, the number of requested local eigenvalues is estimated from the Weyl
+law. Candidates are retained within the corresponding local spectral window
+and duplicate estimates from overlapping windows are merged.
 
-`ExpandedBIMSolver` computes eigenvalues and tensions only; no eigenvectors or
-eigenstates are constructed.
+If `solver.use_taylor` is enabled, consecutive EBIM centers spanning at most
+`2solver.taylor_radius` are grouped into Taylor panels. One analytic Fredholm
+Taylor expansion is constructed at the midpoint of each panel and reused for
+all EBIM centers in that panel. Otherwise, `A`, `A'`, and `A''` are assembled
+directly at every expansion center.
 
 ## Arguments
-* `solver::ExpandedBIMSolver`: Expanded BIM eigensolver.
-* `billiard::Bi`: Billiard whose spectrum is computed.
+* `solver::ExpandedBIMSolver`: EBIM solver.
+* `billiard::Bi`: Billiard geometry.
 * `k1`: Lower wavenumber bound.
 * `k2`: Upper wavenumber bound.
 
 ## Keyword Arguments
-* `dk::Function = k -> 0.05`: Spacing between consecutive EBIM expansion centers. Best practice is this to scale as `k^(-1/3)`.
-* `tol = 1e-5`: Eigenvalue merging tolerance.
-* `spacing_frac = 0.02`: Local-spacing fraction used for merging nearby eigenvalues.
-* `tolmax = 5e-3`: Maximum merging tolerance.
-* `local_window::Int = 4`: Number of neighboring levels used to estimate the local spacing.
-* `seg_reuse_frac = 0.95`: Controls reuse of one boundary discretization over neighboring expansion centers.
-* `multithreaded::Bool = true`: Whether matrix construction is multithreaded.
-* `show_progress::Bool = true`: Whether to display a progress bar.
+* `dk::Function = (k -> 0.05)`: Local EBIM spectral half-width and center spacing.
+* `tol = 1e-5`: Absolute tolerance used when merging duplicate eigenvalues.
+* `spacing_frac = 0.02`: Local-spacing fraction used by duplicate detection.
+* `tolmax = 5e-3`: Maximum duplicate-merging tolerance.
+* `local_window::Int = 4`: Number of neighboring spacings used by the local duplicate criterion.
+* `multithreaded::Bool = true`: Enable multithreaded matrix construction.
+* `show_progress::Bool = true`: Display the spectrum-sweep progress indicator.
 
 ## Returns
-* `data::SpectralData`: Finalized eigenvalues, tensions, and control flags without eigenstates.
+* `data::SpectralData`: Merged EBIM spectrum and associated correction magnitudes.
 """
-function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::Function=(k -> 0.05), tol=1e-5, spacing_frac=0.02, tolmax=5e-3, local_window::Int=4, seg_reuse_frac=0.95, multithreaded::Bool=true, show_progress::Bool=true) where {Bi<:AbsBilliard}
-    T = _bim_numeric_type(solver); k1T, k2T = T(k1), T(k2); tolT, spacingT, tolmaxT, reuseT = T(tol), T(spacing_frac), T(tolmax), T(seg_reuse_frac)
-    k1T < k2T || throw(ArgumentError("require k1 < k2")); 0 < reuseT <= 1 || throw(ArgumentError("seg_reuse_frac must satisfy 0 < seg_reuse_frac <= 1"))
-    fundamental = solver.kernel.symmetry!==nothing
-    ks_grid = T[]; dks = T[]; nlevels = Int[]; k = k1T
-    while k < k2T
-        Δk = T(dk(k)); Δk > 0 || throw(ArgumentError("dk(k) must be positive; received dk($k) = $Δk"))
-        m = weyl_window_count(billiard, k-Δk, 2Δk; fundamental)
-        push!(ks_grid, k); push!(dks, Δk); push!(nlevels, max(1, ceil(Int, m)))
+function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::Function = (k -> 0.05), tol = 1e-5, spacing_frac = 0.02, tolmax = 5e-3, local_window::Int = 4, multithreaded::Bool = true, show_progress::Bool = true) where {Bi<:AbsBilliard}
+    T = _bim_numeric_type(solver)
+    k1T = T(k1)
+    k2T = T(k2)
+    k1T < k2T || throw(ArgumentError("require k1 < k2"))
+    fundamental = solver.kernel.symmetry !== nothing
+    centers = T[]
+    dks = T[]
+    nlevels = Int[]
+    k = k1T
+    while k <= k2T
+        Δk = T(dk(k))
+        Δk > zero(T) || throw(ArgumentError("dk(k) must be positive"))
+        push!(centers, k)
+        push!(dks, Δk)
+        nweyl = ceil(Int, weyl_window_count(billiard, k - Δk, 2 * Δk; fundamental))
+        push!(nlevels, max(1, nweyl))
         k += Δk
     end
-    n = length(ks_grid); n > 0 || throw(ArgumentError("Spectrum interval [$k1,$k2] contains no expansion centers"))
-    ks_corr = Vector{Vector{Complex{T}}}(undef, n); ts_corr = Vector{Vector{T}}(undef, n)
-    pts = evaluate_points(solver, billiard, ks_grid[1])
-    cheb_config = solver.cheb_config
-    if solver.use_chebyshev && solver.cheb_config.param_strategy!==:manual
-        pts_max = evaluate_points(solver, billiard, ks_grid[end])
-        cheb_config = tune_ebim_cheb_config(solver.kernel, pts_max, ks_grid[end], solver.cheb_config)
-    end
-    progress = show_progress ? Progress(n) : nothing
-    seg_first = 1
-    while seg_first <= n
-        seg_last = seg_first
-        while seg_last < n && ks_grid[seg_last + 1] <= ks_grid[seg_first] / reuseT
-            seg_last += 1
+    isempty(centers) && return SpectralData(T[], T[])
+    ks = Complex{T}[]
+    ts = T[]
+    if !solver.use_taylor
+        @maybe_showprogress show_progress for i = eachindex(centers)
+            ki = centers[i]
+            pts = evaluate_points(solver, billiard, ki)
+            ksi, tsi = solve(solver, pts, ki, nlevels[i]; multithreaded)
+            @inbounds for q = eachindex(ksi)
+                if abs(real(ksi[q]) - ki) <= dks[i]
+                    push!(ks, ksi[q])
+                    push!(ts, tsi[q])
+                end
+            end
         end
-        seg_last != seg_first && (pts = evaluate_points(solver, billiard, ks_grid[seg_last]))
-        cache = EBIMCache(solver.kernel, pts)
-        solver.use_chebyshev && prepare_ebim_cheb_cache!(cache, @view(ks_grid[seg_first:seg_last]), cheb_config; multithreaded)
-        for i in seg_first:seg_last
-            ki, ti = solve(solver, pts, ks_grid[i], nlevels[i]; multithreaded, cheb_config, cache)
-            keep = abs.(real.(ki) .- ks_grid[i]) .<= dks[i]
-            ks_corr[i] = ki[keep]; ts_corr[i] = ti[keep]
-            show_progress && next!(progress)
+    else
+        T === Float64 || throw(ArgumentError("analytic EBIM Taylor acceleration currently requires Float64"))
+        R = T(solver.taylor_radius)
+        p = solver.taylor_degree
+        np = length(centers)
+        panel_start = 1
+        @maybe_showprogress show_progress while panel_start <= np
+            panel_stop = panel_start
+            panel_limit = centers[panel_start] + 2R
+            while panel_stop < np && centers[panel_stop + 1] <= panel_limit
+                panel_stop += 1
+            end
+            kc = T(0.5) * (centers[panel_start] + centers[panel_stop])
+            kmax_panel = min(k2T, kc + R)
+            pts = evaluate_points(solver, billiard, kmax_panel)
+            cache = EBIMTaylorCache(solver.kernel, pts, Float64(kc), p; multithreaded)
+            N = size(cache.coeffs, 2)
+            A = Matrix{ComplexF64}(undef, N, N)
+            dA = similar(A)
+            ddA = similar(A)
+            @inbounds for i = panel_start:panel_stop
+                ki = centers[i]
+                _construct_matrices!(solver, A, dA, ddA, cache, ki; multithreaded)
+                ksi, tsi = _solve(solver, A, dA, ddA, ki, nlevels[i])
+                for q = eachindex(ksi)
+                    if abs(real(ksi[q]) - ki) <= dks[i]
+                        push!(ks, ksi[q])
+                        push!(ts, tsi[q])
+                    end
+                end
+            end
+            panel_start = panel_stop + 1
         end
-        seg_first = seg_last + 1
     end
-    ks = Complex{T}[]; ts = T[]; control = Bool[]
-    for i in eachindex(ks_corr)
-        overlap_and_merge_ebim!(ks, ts, ks_corr[i], ts_corr[i], control; tol=tolT, spacing_frac=spacingT, tolmax=tolmaxT, local_window)
-    end
-    keep = (k1T.<=real.(ks)).&(real.(ks).<=k2T)
-    return _finalize_spectrum(ks[keep], ts[keep], control[keep])
+    isempty(ks) && return SpectralData(T[], T[])
+    order = sortperm(real.(ks))
+    ks = ks[order]
+    ts = ts[order]
+    kreal = T.(real.(ks))
+    tvals = T.(ts)
+    keep = (kreal .>= k1T) .& (kreal .<= k2T)
+    kreal = kreal[keep]
+    tvals = tvals[keep]
+    isempty(kreal) && return SpectralData(T[], T[])
+    kout = T[]
+    tout = T[]
+    overlap_and_merge_ebim!(kout, tout, kreal, tvals; tol = tol, spacing_frac = spacing_frac, tolmax = tolmax, local_window = local_window)
+    return SpectralData(kout, tout)
 end
 
 """
