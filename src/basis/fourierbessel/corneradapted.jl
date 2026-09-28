@@ -129,6 +129,7 @@ angular data required for Cartesian spatial-gradient evaluation.
 * `use_taylor`: Whether compatible accelerated solvers may use the analytic Taylor representation of the basis.
 * `taylor_degree`: Degree of the analytic Taylor expansion in the wavenumber.
 * `taylor_radius`: Maximum distance from a Taylor expansion center over which the cached representation is reused.
+* `taylor_tol`: Tolerance used to determine the validity of the Taylor expansion.
 * `gradients`: Whether Taylor caches additionally store data required for Cartesian spatial-gradient evaluation.
 
 ## API
@@ -150,6 +151,7 @@ struct CornerAdaptedFourierBessel{T,Sy} <: AbsBasis where {T<:Real,Sy<:Union{Abs
     use_taylor::Bool
     taylor_degree::Int
     taylor_radius::T
+    taylor_tol::T
     gradients::Bool
 end
 
@@ -181,16 +183,17 @@ data can be enabled with `gradients`.
 * `use_taylor::Bool = true`: Whether compatible accelerated solvers may use the analytic Taylor representation of the basis.
 * `taylor_degree::Int = 16`: Degree of the analytic Taylor expansion in the wavenumber.
 * `taylor_radius::T = T(0.5)`: Maximum distance from a Taylor expansion center over which the cached representation is reused.
+* `taylor_tol::T = T(1e-11)`: Tolerance used to determine the validity of the Taylor expansion.
 * `gradients::Bool = false`: Whether Taylor caches additionally store data required for Cartesian spatial-gradient evaluation.
 
 ## Returns
 * `basis`: A [`CornerAdaptedFourierBessel`](@ref) basis with no attached symmetries.
 """
-function CornerAdaptedFourierBessel(dim::Int64, corner_angle::T, origin::SVector{2,T}, rot_angle::T; rotation_angle_discontinuity = zero(T), use_taylor::Bool = true, taylor_degree::Int = 16, taylor_radius::T = T(0.5), gradients::Bool = false) where {T<:Real}
+function CornerAdaptedFourierBessel(dim::Int64, corner_angle::T, origin::SVector{2,T}, rot_angle::T; rotation_angle_discontinuity = zero(T), use_taylor::Bool = true, taylor_degree::Int = 16, taylor_radius::T = T(0.5), taylor_tol::T = T(1e-11), gradients::Bool = false) where {T<:Real}
     taylor_degree >= 1 || throw(ArgumentError("taylor_degree must be at least 1"))
     cs = PolarCS(origin, rot_angle)
     nu = T(pi) / corner_angle
-    return CornerAdaptedFourierBessel{T,Nothing}(cs, dim, corner_angle, nu, nothing, rotation_angle_discontinuity, use_taylor, taylor_degree, taylor_radius, gradients)
+    return CornerAdaptedFourierBessel{T,Nothing}(cs, dim, corner_angle, nu, nothing, rotation_angle_discontinuity, use_taylor, taylor_degree, taylor_radius, taylor_tol, gradients)
 end
 
 """
@@ -221,19 +224,20 @@ data can be enabled with `gradients`.
 * `use_taylor::Bool = true`: Whether compatible accelerated solvers may use the analytic Taylor representation of the basis.
 * `taylor_degree::Int = 16`: Degree of the analytic Taylor expansion in the wavenumber.
 * `taylor_radius::T = T(0.5)`: Maximum distance from a Taylor expansion center over which the cached representation is reused.
+* `taylor_tol::T = T(1e-11)`: Tolerance used to determine the validity of the Taylor expansion.
 * `gradients::Bool = false`: Whether Taylor caches additionally store data required for Cartesian spatial-gradient evaluation.
 
 ## Returns
 * `basis`: A [`CornerAdaptedFourierBessel`](@ref) basis using the supplied coordinate system and symmetries.
 """
-function CornerAdaptedFourierBessel(dim::Int64, corner_angle::T, cs::CoordinateSystem, symmetry::Union{Vector{<:BilliardGeometry.AbsReflection},Nothing}; rotation_angle_discontinuity = zero(T), use_taylor::Bool = true, taylor_degree::Int = 16, taylor_radius::T = T(0.5), gradients::Bool = false) where {T<:Real}
+function CornerAdaptedFourierBessel(dim::Int64, corner_angle::T, cs::CoordinateSystem, symmetry::Union{Vector{<:BilliardGeometry.AbsReflection},Nothing}; rotation_angle_discontinuity = zero(T), use_taylor::Bool = true, taylor_degree::Int = 16, taylor_radius::T = T(0.5), taylor_tol::T = T(1e-11), gradients::Bool = false) where {T<:Real}
     taylor_degree >= 1 || throw(ArgumentError("taylor_degree must be at least 1"))
     nu = T(pi) / corner_angle
-    return CornerAdaptedFourierBessel{T,Nothing}(cs, dim, corner_angle, nu, symmetry, rotation_angle_discontinuity, use_taylor, taylor_degree, taylor_radius, gradients)
+    return CornerAdaptedFourierBessel{T,Nothing}(cs, dim, corner_angle, nu, symmetry, rotation_angle_discontinuity, use_taylor, taylor_degree, taylor_radius, taylor_tol, gradients)
 end
 
 """
-    CornerAdaptedFourierBessel(dim::Int64, corner_angle::T, origin::SVector{2,T}, rot_angle::T, symmetry::Union{Vector{<:BilliardGeometry.AbsReflection},Nothing}; rotation_angle_discontinuity = zero(T), use_taylor::Bool = true, taylor_degree::Int = 16, taylor_radius::T = T(0.5), gradients::Bool = false) where {T<:Real} → basis::CornerAdaptedFourierBessel
+    CornerAdaptedFourierBessel(dim::Int64, corner_angle::T, origin::SVector{2,T}, rot_angle::T, symmetry::Union{Vector{<:BilliardGeometry.AbsReflection},Nothing}; rotation_angle_discontinuity = zero(T), use_taylor::Bool = true, taylor_degree::Int = 16, taylor_radius::T = T(0.5), taylor_tol::T = T(1e-11), gradients::Bool = false) where {T<:Real} → basis::CornerAdaptedFourierBessel
 
 Construct a [`CornerAdaptedFourierBessel`](@ref) basis of dimension `dim`
 adapted to a corner with opening angle `corner_angle`, located at `origin` and
@@ -261,16 +265,17 @@ data can be enabled with `gradients`.
 * `use_taylor::Bool = true`: Whether compatible accelerated solvers may use the analytic Taylor representation of the basis.
 * `taylor_degree::Int = 16`: Degree of the analytic Taylor expansion in the wavenumber.
 * `taylor_radius::T = T(0.5)`: Maximum distance from a Taylor expansion center over which the cached representation is reused.
+* `taylor_tol::T = T(1e-11)`: Tolerance used to determine the validity of the Taylor expansion.
 * `gradients::Bool = false`: Whether Taylor caches additionally store data required for Cartesian spatial-gradient evaluation.
 
 ## Returns
 * `basis`: A [`CornerAdaptedFourierBessel`](@ref) basis with the specified origin, rotation and symmetries.
 """
-function CornerAdaptedFourierBessel(dim::Int64, corner_angle::T, origin::SVector{2,T}, rot_angle::T, symmetry::Union{Vector{<:BilliardGeometry.AbsReflection},Nothing}; rotation_angle_discontinuity = zero(T), use_taylor::Bool = true, taylor_degree::Int = 16, taylor_radius::T = T(0.5), gradients::Bool = false) where {T<:Real}
+function CornerAdaptedFourierBessel(dim::Int64, corner_angle::T, origin::SVector{2,T}, rot_angle::T, symmetry::Union{Vector{<:BilliardGeometry.AbsReflection},Nothing}; rotation_angle_discontinuity = zero(T), use_taylor::Bool = true, taylor_degree::Int = 16, taylor_radius::T = T(0.5), taylor_tol::T = T(1e-11), gradients::Bool = false) where {T<:Real}
     taylor_degree >= 1 || throw(ArgumentError("taylor_degree must be at least 1"))
     cs = PolarCS(origin, rot_angle)
     nu = T(pi) / corner_angle
-    return CornerAdaptedFourierBessel{T,Nothing}(cs, dim, corner_angle, nu, symmetry, rotation_angle_discontinuity, use_taylor, taylor_degree, taylor_radius, gradients)
+    return CornerAdaptedFourierBessel{T,Nothing}(cs, dim, corner_angle, nu, symmetry, rotation_angle_discontinuity, use_taylor, taylor_degree, taylor_radius, taylor_tol, gradients)
 end
 
 """
@@ -284,7 +289,7 @@ Convert a [`CornerAdaptedFourierBessel`](@ref) basis to use `Float32` precision.
 ## Returns
 *  `basis32` : A new basis with `dim`, `corner_angle`, and coordinate system fields converted to `Float32`.
 """
-toFloat32(basis::CornerAdaptedFourierBessel) = CornerAdaptedFourierBessel(basis.dim, Float32(basis.corner_angle), Float32.(basis.cs.origin), Float32(basis.cs.rot_angle), basis.symmetries; rotation_angle_discontinuity = Float32(basis.rotation_angle_discontinuity), use_taylor = basis.use_taylor, taylor_degree = basis.taylor_degree, taylor_radius = Float32(basis.taylor_radius), gradients = basis.gradients)
+toFloat32(basis::CornerAdaptedFourierBessel) = CornerAdaptedFourierBessel(basis.dim, Float32(basis.corner_angle), Float32.(basis.cs.origin), Float32(basis.cs.rot_angle), basis.symmetries; rotation_angle_discontinuity = Float32(basis.rotation_angle_discontinuity), use_taylor = basis.use_taylor, taylor_degree = basis.taylor_degree, taylor_radius = Float32(basis.taylor_radius), taylor_tol = Float32(basis.taylor_tol), gradients = basis.gradients)
 
 """
     resize_basis(basis::CornerAdaptedFourierBessel, billiard::Bi, dim::Int, k) where {Bi<:AbsBilliard} → basis_new::CornerAdaptedFourierBessel
@@ -305,7 +310,7 @@ function resize_basis(basis::CornerAdaptedFourierBessel, billiard::Bi, dim::Int,
     if basis.dim == dim
         return basis
     else
-        return CornerAdaptedFourierBessel(dim, basis.corner_angle, basis.cs, basis.symmetries; rotation_angle_discontinuity = basis.rotation_angle_discontinuity, use_taylor = basis.use_taylor, taylor_degree = basis.taylor_degree, taylor_radius = basis.taylor_radius, gradients = basis.gradients)
+        return CornerAdaptedFourierBessel(dim, basis.corner_angle, basis.cs, basis.symmetries; rotation_angle_discontinuity = basis.rotation_angle_discontinuity, use_taylor = basis.use_taylor, taylor_degree = basis.taylor_degree, taylor_radius = basis.taylor_radius, taylor_tol = basis.taylor_tol, gradients = basis.gradients)
     end
 end
 
