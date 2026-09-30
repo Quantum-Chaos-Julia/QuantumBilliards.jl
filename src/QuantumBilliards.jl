@@ -83,7 +83,8 @@ export boundary_matrix_size
 export weyl_window_width, plan_weyl_windows, beyn_disks_from_windows, beyn_buffer_matrices
 
 include("spectra/spectralutils.jl")
-export SpectralData, compute_spectrum, merge_spectra, overlap_and_merge!, overlap_and_merge_ebim!
+export SpectralData, compute_spectrum, overlap_and_merge!, overlap_and_merge_ebim!
+export k_range
 include("spectra/unfolding.jl")
 export weyl_law, state_at_k, spectral_density, k_range_for_states
 

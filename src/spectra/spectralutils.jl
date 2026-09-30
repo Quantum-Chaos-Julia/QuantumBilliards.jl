@@ -1,51 +1,127 @@
 """
-    SpectralData{K,T,S}
+    SpectralData{T,Bi,So,S}
 
-Stores a computed spectrum together with its imaginary wavenumbers, quality
-measures, merge-control flags and, optionally, the corresponding eigenstates.
+Stores a computed spectrum, together with the `billiard`/`solver` context it
+was computed from, quality measures, merge-control flags and, optionally, the
+corresponding eigenstates.
 
 ## Attributes
-* `k::Vector{K}`: Retained wavenumbers. Real or complex according to the solver.
-* `im_k::Vector{T}`: Imaginary part of each retained wavenumber.
+* `billiard::Bi`: Billiard the spectrum was computed on.
+* `solver::So`: Solver used to compute the spectrum.
+* `k::Vector{T}`: Retained real wavenumbers.
+* `k_im::Vector{T}`: Imaginary part / numerical residual of each retained wavenumber. This is a
+  numerical leakage diagnostic from boundary-integral root-finding, not a
+  physical imaginary wavenumber — this codebase has no leaky/open-billiard
+  resonance support.
 * `ten::Vector{T}`: Primary tension or residual associated with each wavenumber.
 * `control::Vector{Bool}`: Merge or validation-control flag associated with each wavenumber.
-* `k_min::T`: Minimum retained real wavenumber.
-* `k_max::T`: Maximum retained real wavenumber.
-* `ten2::Union{Nothing,Vector{T}}`: Optional secondary tension or residual measure.
 * `states::S`: Corresponding eigenstates as a concrete `Vector{<:AbsState}`, or `nothing`.
 """
-struct SpectralData{K<:Number,T<:Real,S<:Union{Nothing,Vector{<:AbsState}}}
-    k::Vector{K}
-    im_k::Vector{T}
+struct SpectralData{T<:Real,Bi<:AbsBilliard,So,S<:Union{Nothing,Vector{<:AbsState}}}
+    billiard::Bi
+    solver::So
+    k::Vector{T}
+    k_im::Vector{T}
     ten::Vector{T}
     control::Vector{Bool}
-    k_min::T
-    k_max::T
-    ten2::Union{Nothing,Vector{T}}
     states::S
 end
 
 """
-    SpectralData(k::Vector{K}, ten::Vector{T}, control::Vector{Bool}; ten2::Union{Nothing,Vector{T}}=nothing, states::S=nothing) where {K<:Number,T<:Real,S<:Union{Nothing,Vector{<:AbsState}}}
+    SpectralData(billiard::Bi, solver::So, k::Vector{K}, ten::Vector{T}, control::Vector{Bool}; states::S=nothing) where {Bi<:AbsBilliard,So,K<:Number,T<:Real,S<:Union{Nothing,Vector{<:AbsState}}}
 
-Constructs [`SpectralData`](@ref), caching the imaginary parts and minimum and
-maximum retained real wavenumbers.
+Constructs [`SpectralData`](@ref), splitting `k` into its real part and its
+imaginary residual `k_im`.
 
 ## Arguments
-* `k::Vector{K}`: Retained wavenumbers.
+* `billiard::Bi`: Billiard the spectrum was computed on.
+* `solver::So`: Solver used to compute the spectrum.
+* `k::Vector{K}`: Retained wavenumbers, real or complex according to the solver.
 * `ten::Vector{T}`: Primary tension or residual associated with each wavenumber.
 * `control::Vector{Bool}`: Merge or validation-control flags.
 
 ## Keyword Arguments
-* `ten2::Union{Nothing,Vector{T}}=nothing`: Optional secondary tension or residual measure.
 * `states::S=nothing`: Corresponding eigenstates, or `nothing`.
 
 ## Returns
-* `data::SpectralData{K,T,S}`: Constructed spectral data.
+* `data::SpectralData{T,Bi,So,S}`: Constructed spectral data.
 """
-function SpectralData(k::Vector{K}, ten::Vector{T}, control::Vector{Bool}; ten2::Union{Nothing,Vector{T}}=nothing, states::S=nothing) where {K<:Number,T<:Real,S<:Union{Nothing,Vector{<:AbsState}}}
-    im_k = T.(imag.(k)); imin = argmin(real.(k)); imax = argmax(real.(k))
-    return SpectralData{K,T,S}(k, im_k, ten, control, real(k[imin]), real(k[imax]), ten2, states)
+function SpectralData(billiard::Bi, solver::So, k::Vector{K}, ten::Vector{T}, control::Vector{Bool}; states::S=nothing) where {Bi<:AbsBilliard,So,K<:Number,T<:Real,S<:Union{Nothing,Vector{<:AbsState}}}
+    return SpectralData{T,Bi,So,S}(billiard, solver, T.(real.(k)), T.(imag.(k)), ten, control, states)
+end
+
+Base.length(data::SpectralData) = length(data.k)
+Base.iterate(data::SpectralData, state::Int=1) = state>length(data) ? nothing : (data[state], state+1)
+
+function Base.getindex(data::SpectralData{T,Bi,So}, i::Integer) where {T,Bi,So}
+    states = data.states===nothing ? nothing : [data.states[i]]
+    return SpectralData{T,Bi,So,typeof(states)}(data.billiard, data.solver, [data.k[i]], [data.k_im[i]], [data.ten[i]], [data.control[i]], states)
+end
+
+function Base.getindex(data::SpectralData{T,Bi,So}, idx::AbstractVector) where {T,Bi,So}
+    states = data.states===nothing ? nothing : data.states[idx]
+    return SpectralData{T,Bi,So,typeof(states)}(data.billiard, data.solver, data.k[idx], data.k_im[idx], data.ten[idx], data.control[idx], states)
+end
+
+"""
+    k_range(data::SpectralData, kmin::Real, kmax::Real) → SpectralData
+
+Returns the subset of `data` with `kmin <= k <= kmax`.
+"""
+function k_range(data::SpectralData, kmin::Real, kmax::Real)
+    idx = findall(k -> kmin<=k<=kmax, data.k)
+    return data[idx]
+end
+
+function Base.filter(f::Function, data::SpectralData)
+    idx = findall(i -> f(data[i]), eachindex(data.k))
+    return data[idx]
+end
+
+"""
+    append!(data1::SpectralData, data2::SpectralData; tol::Real=1e-3) → data1
+
+Merges `data2` into `data1` in place, requiring `data1.billiard===data2.billiard`
+(object identity) and `typeof(data1.solver)===typeof(data2.solver)` (same
+concrete solver algorithm/type, not byte-identical parameters). Reuses
+[`overlap_and_merge_ebim!`](@ref) for an [`ExpandedBIMSolver`](@ref) and
+[`overlap_and_merge!`](@ref) otherwise, mirroring the merge strategy each
+solver's own `compute_spectrum` already uses.
+"""
+function Base.append!(data1::SpectralData{T}, data2::SpectralData; tol::Real=1e-3) where {T<:Real}
+    data1.billiard===data2.billiard || throw(ArgumentError("append!(::SpectralData,::SpectralData) requires both spectra to share the same billiard instance"))
+    typeof(data1.solver)===typeof(data2.solver) || throw(ArgumentError("append!(::SpectralData,::SpectralData) requires both spectra to use the same solver type"))
+    isempty(data2.k) && return data1
+    if isempty(data1.k)
+        append!(data1.k, data2.k); append!(data1.k_im, data2.k_im); append!(data1.ten, data2.ten); append!(data1.control, data2.control)
+        data1.states!==nothing && data2.states!==nothing && append!(data1.states, data2.states)
+        return data1
+    end
+    k1c = Complex.(data1.k, data1.k_im); k2c = Complex.(data2.k, data2.k_im)
+    if data1.solver isa ExpandedBIMSolver
+        overlap_and_merge_ebim!(k1c, data1.ten, k2c, data2.ten, data1.control; tol=T(tol), states_left=data1.states, states_right=data2.states)
+    else
+        kl, kr = data1.k[end], data2.k[1]
+        overlap_and_merge!(k1c, data1.ten, k2c, data2.ten, data1.control, kl, kr; tol, states_left=data1.states, states_right=data2.states)
+    end
+    empty!(data1.k); append!(data1.k, real.(k1c)); empty!(data1.k_im); append!(data1.k_im, imag.(k1c))
+    p = sortperm(data1.k)
+    permute!(data1.k, p); permute!(data1.k_im, p); permute!(data1.ten, p); permute!(data1.control, p)
+    data1.states!==nothing && permute!(data1.states, p)
+    return data1
+end
+
+"""
+    vcat(data1::SpectralData, data2::SpectralData; tol::Real=1e-3) → SpectralData
+
+Non-mutating counterpart to [`append!(::SpectralData,::SpectralData)`](@ref):
+copies `data1` and merges `data2` into the copy.
+"""
+function Base.vcat(data1::SpectralData, data2::SpectralData; tol::Real=1e-3)
+    states = data1.states===nothing ? nothing : copy(data1.states)
+    merged = SpectralData(data1.billiard, data1.solver, copy(data1.k), copy(data1.k_im), copy(data1.ten), copy(data1.control), states)
+    append!(merged, data2; tol)
+    return merged
 end
 
 ################################################################################
@@ -53,10 +129,10 @@ end
 ################################################################################
 
 # Sort all aligned spectral quantities by Re(k).
-function _finalize_spectrum(ks::Vector{K}, ts::Vector{T}, control::Vector{Bool}; ten2::Union{Nothing,Vector{T}}=nothing, states::S=nothing) where {K<:Number,T<:Real,S<:Union{Nothing,Vector{<:AbsState}}}
+function _finalize_spectrum(billiard::Bi, solver::So, ks::Vector{K}, ts::Vector{T}, control::Vector{Bool}; states::S=nothing) where {Bi<:AbsBilliard,So,K<:Number,T<:Real,S<:Union{Nothing,Vector{<:AbsState}}}
     isempty(ks) && throw(ArgumentError("compute_spectrum found no candidates in the requested range"))
     p = sortperm(ks; by=real)
-    return SpectralData(ks[p], ts[p], control[p]; ten2=ten2===nothing ? nothing : ten2[p], states=states===nothing ? nothing : states[p])
+    return SpectralData(billiard, solver, ks[p], ts[p], control[p]; states=states===nothing ? nothing : states[p])
 end
 
 # Test whether two real-wavenumber uncertainty intervals overlap.
@@ -217,7 +293,7 @@ function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billi
                 k0, Δk = centers[i], widths[i]
                 if solver.eigenvectors
                     ki, ti, X = solve_vectors(solver, basis_new, pts, cache, k0, Δk + tol; multithreaded)
-                    si = AbsState[BasisEigenstate(ki[j], k0, X[:, j], ti[j], solver, basis_new, billiard) for j in eachindex(ki)]
+                    si = AbsState[BasisEigenstate(ki[j], k0, X[:, j], ti[j], basis_new) for j in eachindex(ki)]
                     if i == 1
                         append!(ks, ki)
                         append!(ts, ti)
@@ -246,7 +322,7 @@ function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billi
             pts = evaluate_points(solver, billiard, k0)
             if solver.eigenvectors
                 ki, ti, X = solve_vectors(solver, basis_new, pts, k0, Δk + tol; multithreaded)
-                si = AbsState[BasisEigenstate(ki[j], k0, X[:, j], ti[j], solver, basis_new, billiard) for j in eachindex(ki)]
+                si = AbsState[BasisEigenstate(ki[j], k0, X[:, j], ti[j], basis_new) for j in eachindex(ki)]
                 if i == 1
                     append!(ks, ki)
                     append!(ts, ti)
@@ -268,7 +344,7 @@ function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billi
         end
     end
     keep = (k1T .<= real.(ks)) .& (real.(ks) .<= k2T)
-    return _finalize_spectrum(ks[keep], ts[keep], control[keep]; states = solver.eigenvectors ? states[keep] : nothing)
+    return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], control[keep]; states = solver.eigenvectors ? states[keep] : nothing)
 end
 
 """
@@ -356,16 +432,16 @@ function compute_spectrum(solver::BeynSolver, billiard::Bi, k1, k2; multithreade
             @maybe_showprogress show_progress for i in 1:nw
                 ks_win[i], ts_win[i], X_win[i] = solve_vectors(solver, pts[i], k0[i], 2R[i]; multithreaded, cheb_config)
             end
-            states_win = [[BIMEigenstate(ks_win[i][j], symmetrize_layer_density(solver.kernel, X_win[i][:,j], pts[i], billiard), ts_win[i][j], solver.kernel, billiard, pts[i]) for j in eachindex(ks_win[i])] for i in 1:nw]
+            states_win = [[BIMEigenstate(ks_win[i][j], symmetrize_layer_density(solver.kernel, X_win[i][:,j], pts[i], billiard), ts_win[i][j], pts[i]) for j in eachindex(ks_win[i])] for i in 1:nw]
             ks = reduce(vcat, ks_win); ts = reduce(vcat, ts_win); states = reduce(vcat, states_win)
             keep = (T(k1).<=real.(ks)).&(real.(ks).<=T(k2))
-            return _finalize_spectrum(ks[keep], ts[keep], fill(false, count(keep)); states=states[keep])
+            return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], fill(false, count(keep)); states=states[keep])
         end
         @maybe_showprogress show_progress for i in 1:nw
             ks_win[i], ts_win[i] = solve(solver, pts[i], k0[i], 2R[i]; multithreaded, cheb_config)
         end
         ks = reduce(vcat, ks_win); ts = reduce(vcat, ts_win); keep = (T(k1).<=real.(ks)).&(real.(ks).<=T(k2))
-        return _finalize_spectrum(ks[keep], ts[keep], fill(false, count(keep)))
+        return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], fill(false, count(keep)))
     end
     ks_win = Vector{Vector{Complex{T}}}(undef, nw); X_win = Vector{Matrix{Complex{T}}}(undef, nw)
     @maybe_showprogress show_progress for i in 1:nw
@@ -380,9 +456,9 @@ function compute_spectrum(solver::BeynSolver, billiard::Bi, k1, k2; multithreade
             ks[p] = ks_win[i][j]; control[p] = isnan(residuals[i][q]); ts[p] = control[p] ? abs(imag(ks[p])) : residuals[i][q]
             push!(entries, (i,j))
         end
-        states = [BIMEigenstate(ks[q], symmetrize_layer_density(solver.kernel, X_win[i][:,j], pts[i], billiard), ts[q], solver.kernel, billiard, pts[i]) for (q,(i,j)) in enumerate(entries)]
+        states = [BIMEigenstate(ks[q], symmetrize_layer_density(solver.kernel, X_win[i][:,j], pts[i], billiard), ts[q], pts[i]) for (q,(i,j)) in enumerate(entries)]
         keep = (T(k1).<=real.(ks)).&(real.(ks).<=T(k2))
-        return _finalize_spectrum(ks[keep], ts[keep], control[keep]; states=states[keep])
+        return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], control[keep]; states=states[keep])
     end
     p = 0
     for i in 1:nw, q in eachindex(idx_keep[i])
@@ -390,7 +466,7 @@ function compute_spectrum(solver::BeynSolver, billiard::Bi, k1, k2; multithreade
         ks[p] = ks_win[i][j]; control[p] = isnan(residuals[i][q]); ts[p] = control[p] ? abs(imag(ks[p])) : residuals[i][q]
     end
     keep = (T(k1).<=real.(ks)).&(real.(ks).<=T(k2))
-    return _finalize_spectrum(ks[keep], ts[keep], control[keep])
+    return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], control[keep])
 end
 
 """
@@ -573,7 +649,7 @@ function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::F
     tout = T[]
     control = Bool[]
     overlap_and_merge_ebim!(kout, tout, ks, ts, control; tol = T(tol), spacing_frac = T(spacing_frac), tolmax = T(tolmax), local_window = local_window)
-    return _finalize_spectrum(kout, tout, control)
+    return _finalize_spectrum(billiard, solver, kout, tout, control)
 end
 
 """
@@ -678,12 +754,12 @@ function compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; multithreade
                 a<=x && (i==length(intervals) ? x<=k2T : x<b) && k1T<=x
             end, eachindex(ki))
             isempty(keep) && continue
-            si = [BIMEigenstate(ki[j], symmetrize_layer_density(solver.kernel, X[:,j], pts, billiard), ti[j], solver.kernel, billiard, pts) for j in keep]
+            si = [BIMEigenstate(ki[j], symmetrize_layer_density(solver.kernel, X[:,j], pts, billiard), ti[j], pts) for j in keep]
             states===nothing ? (states = si) : append!(states, si)
             append!(ks, Complex{T}.(ki[keep])); append!(ts, T.(ti[keep]))
         end
         states===nothing && throw(ArgumentError("compute_spectrum found no candidates in the requested range"))
-        return _finalize_spectrum(ks, ts, fill(false, length(ks)); states)
+        return _finalize_spectrum(billiard, solver, ks, ts, fill(false, length(ks)); states)
     end
     @maybe_showprogress show_progress for i in eachindex(intervals)
         a, b = intervals[i]; k0 = (a+b)/2; dk = b-a; pts = evaluate_points(solver, billiard, k0)
@@ -694,7 +770,7 @@ function compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; multithreade
         end, eachindex(ki))
         append!(ks, Complex{T}.(ki[keep])); append!(ts, T.(ti[keep]))
     end
-    return _finalize_spectrum(ks, ts, fill(false, length(ks)))
+    return _finalize_spectrum(billiard, solver, ks, ts, fill(false, length(ks)))
 end
 
 """

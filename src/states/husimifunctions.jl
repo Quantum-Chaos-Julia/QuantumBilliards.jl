@@ -328,16 +328,19 @@ end
 ################################################################################
 
 """
-    husimi_function(state::BIMEigenstate{K,T,S,Bi}; c::Real=10.0, w::Real=7.0, full_p::Bool=false) where {K,T<:Real,S<:SweepBIMSolver,Bi}
+    husimi_function(state::BIMEigenstate, billiard::AbsBilliard, solver::AbsBIMSolver; c::Real=10.0, w::Real=7.0, full_p::Bool=false)
 
 Compute the Poincare-Husimi function of a BIM eigenstate.
 
 If the physical boundary normal derivative `state.u` is available, it is used
 directly. Otherwise it is reconstructed at `state.k` with [`solve_state`](@ref)
-using the boundary discretization stored in `state.pts`.
+using the boundary discretization stored in `state.pts`, dispatching on
+[`_bim_kernel`](@ref)`(solver)`.
 
 ## Arguments
 * `state::BIMEigenstate`: BIM eigenstate.
+* `billiard::AbsBilliard`: Billiard the state was computed on.
+* `solver::AbsBIMSolver`: Solver the state was computed with.
 
 ## Keyword Arguments
 * `c::Real=10.0`: Phase-space sampling density.
@@ -349,13 +352,13 @@ using the boundary discretization stored in `state.pts`.
 * `qs::Vector{T}`: Boundary-position grid.
 * `ps::Vector{T}`: Full signed momentum grid.
 """
-function husimi_function(state::BIMEigenstate{K,T,S,Bi}; c::Real=10.0, w::Real=7.0, full_p::Bool=false) where {K,T<:Real,S<:SweepBIMSolver,Bi}
+function husimi_function(state::BIMEigenstate{K,T}, billiard::AbsBilliard, solver::AbsBIMSolver; c::Real=10.0, w::Real=7.0, full_p::Bool=false) where {K,T<:Real}
     k=T(real(state.k))
     u=state.u
     if u===nothing
-        _,_,u,_=solve_state(state.solver,state.pts,k,state.billiard)
+        _,_,u,_=solve_state(_bim_kernel(solver),state.pts,k,billiard)
     end
-    L=T(sum(crv.length for crv in full_boundary(state.billiard)))
+    L=T(sum(crv.length for crv in full_boundary(billiard)))
     return husimi_function(k,state.pts.s,state.pts.ds,u,L;c=c,w=w,full_p=full_p)
 end
 
@@ -379,11 +382,11 @@ Compute the Poincare-Husimi function of a basis eigenstate.
 * `qs::Vector{T}`: Boundary-position grid.
 * `ps::Vector{T}`: Full signed momentum grid.
 """
-function husimi_function(state::S; b::Real=5.0, c::Real=10.0, w::Real=7.0, multithreaded::Bool=true, full_p::Bool=false) where {S<:AbsState}
-    u,pts,_ = _basis_boundary_function_pts(state;b=b,multithreaded=multithreaded)
+function husimi_function(state::S, billiard::AbsBilliard; b::Real=5.0, c::Real=10.0, w::Real=7.0, multithreaded::Bool=true, full_p::Bool=false) where {S<:AbsState}
+    u,pts,_ = _basis_boundary_function_pts(state, billiard;b=b,multithreaded=multithreaded)
     T = eltype(pts.ds)
     k = T(real(state.k))
-    L = T(sum(crv.length for crv in full_boundary(state.billiard)))
+    L = T(sum(crv.length for crv in full_boundary(billiard)))
     return husimi_function(k,pts.s,pts.ds,u,L;c=c,w=w,full_p=full_p)
 end
 
@@ -392,7 +395,7 @@ end
 ################################################################################
 
 """
-    husimi_function(states::AbstractVector{<:BIMEigenstate{K,T,S,Bi}}; c::Real=10.0, w::Real=7.0, full_p::Bool=false) where {K,T<:Real,S<:SweepBIMSolver,Bi}
+    husimi_function(states::AbstractVector{<:BIMEigenstate{K,T}}, billiard::AbsBilliard, solver::AbsBIMSolver; c::Real=10.0, w::Real=7.0, full_p::Bool=false) where {K,T<:Real}
 
 Compute Poincare-Husimi functions for several BIM eigenstates.
 
@@ -400,6 +403,8 @@ Each state uses its natural automatically generated phase-space grid.
 
 ## Arguments
 * `states::AbstractVector{<:BIMEigenstate}`: BIM eigenstates.
+* `billiard::AbsBilliard`: Billiard the states were computed on.
+* `solver::AbsBIMSolver`: Solver the states were computed with.
 
 ## Keyword Arguments
 * `c::Real=10.0`: Phase-space sampling density.
@@ -411,7 +416,7 @@ Each state uses its natural automatically generated phase-space grid.
 * `ps::Vector{Vector{T}}`: Corresponding momentum grids.
 * `qs::Vector{Vector{T}}`: Corresponding boundary-position grids.
 """
-function husimi_function(states::AbstractVector{<:BIMEigenstate{K,T,S,Bi}};c::Real=10.0,w::Real=7.0,full_p::Bool=false) where {K,T<:Real,S<:SweepBIMSolver,Bi}
+function husimi_function(states::AbstractVector{<:BIMEigenstate{K,T}}, billiard::AbsBilliard, solver::AbsBIMSolver;c::Real=10.0,w::Real=7.0,full_p::Bool=false) where {K,T<:Real}
     n = length(states)
     Hs = Vector{Matrix{T}}(undef,n)
     ps_return = Vector{Vector{T}}(undef,n)
@@ -421,7 +426,7 @@ function husimi_function(states::AbstractVector{<:BIMEigenstate{K,T,S,Bi}};c::Re
     progress_lock = ReentrantLock()
     Threads.@threads for i in eachindex(states)
         try
-            H,qs,ps = husimi_function(states[i];c=c,w=w,full_p=full_p)
+            H,qs,ps = husimi_function(states[i],billiard,solver;c=c,w=w,full_p=full_p)
             Hs[i] = H; ps_return[i] = ps; qs_return[i] = qs
         catch e
             @debug "Poincare-Husimi fail at k=$(states[i].k)" exception=(e,catch_backtrace())
@@ -454,7 +459,7 @@ Compute Poincare-Husimi functions for several basis eigenstates.
 * `ps::Vector{Vector{T}}`: Corresponding momentum grids.
 * `qs::Vector{Vector{T}}`: Corresponding boundary-position grids.
 """
-function husimi_function(states::AbstractVector{S}; b::Real=5.0, c::Real=10.0, w::Real=7.0, multithreaded::Bool=true, full_p::Bool=false) where {S<:AbsState}
+function husimi_function(states::AbstractVector{S}, billiard::AbsBilliard; b::Real=5.0, c::Real=10.0, w::Real=7.0, multithreaded::Bool=true, full_p::Bool=false) where {S<:AbsState}
     n = length(states)
     T = typeof(real(first(states).k))
     Hs = Vector{Matrix{T}}(undef,n)
@@ -464,7 +469,7 @@ function husimi_function(states::AbstractVector{S}; b::Real=5.0, c::Real=10.0, w
     pbar = Progress(n;desc="Constructing Poincare-Husimi matrices, N=$n")
     @inbounds for i in eachindex(states)
         try
-            H,qs,ps = husimi_function(states[i];b=b,c=c,w=w,multithreaded=multithreaded,full_p=full_p)
+            H,qs,ps = husimi_function(states[i],billiard;b=b,c=c,w=w,multithreaded=multithreaded,full_p=full_p)
             Hs[i] = H; ps_return[i] = ps; qs_return[i] = qs
         catch e
             @debug "Poincare-Husimi fail at k=$(states[i].k)" exception=(e,catch_backtrace())
@@ -473,4 +478,34 @@ function husimi_function(states::AbstractVector{S}; b::Real=5.0, c::Real=10.0, w
         next!(pbar)
     end
     return Hs[ok],ps_return[ok],qs_return[ok]
+end
+
+################################################################################
+# SpectralData API
+################################################################################
+
+_husimi_function_data(states::AbstractVector{<:BIMEigenstate}, billiard::AbsBilliard, solver; kwargs...) = husimi_function(states, billiard, solver; kwargs...)
+_husimi_function_data(states::AbstractVector{<:BasisEigenstate}, billiard::AbsBilliard, solver; kwargs...) = husimi_function(states, billiard; kwargs...)
+
+_husimi_function_state(state::BIMEigenstate, billiard::AbsBilliard, solver; kwargs...) = husimi_function(state, billiard, solver; kwargs...)
+_husimi_function_state(state::BasisEigenstate, billiard::AbsBilliard, solver; kwargs...) = husimi_function(state, billiard; kwargs...)
+
+"""
+    husimi_function(data::SpectralData; kwargs...) → (Hs, ps, qs)
+
+Compute the Poincare-Husimi function of every eigenstate stored in `data`.
+"""
+function husimi_function(data::SpectralData; kwargs...)
+    data.states === nothing && throw(ArgumentError("data has no stored eigenstates"))
+    return _husimi_function_data(data.states, data.billiard, data.solver; kwargs...)
+end
+
+"""
+    husimi_function(data::SpectralData, i::Integer; kwargs...) → (H, qs, ps)
+
+Compute the Poincare-Husimi function of the `i`-th eigenstate stored in `data`.
+"""
+function husimi_function(data::SpectralData, i::Integer; kwargs...)
+    data.states === nothing && throw(ArgumentError("data has no stored eigenstates"))
+    return _husimi_function_state(data.states[i], data.billiard, data.solver; kwargs...)
 end
