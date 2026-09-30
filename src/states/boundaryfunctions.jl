@@ -120,7 +120,7 @@ function _basis_boundary_function_pts(state::S, billiard::AbsBilliard; b=5.0, mu
         crv_lengths = [crv.length for crv in boundary]
         sampler = FourierNodes([2,3,5],crv_lengths) 
         L = CompositeCurve(boundary).length
-        N = max(round(Int, k*L*b/(2*pi)), 512)
+        N = _debroglie_grid_size(k, L, b)
         pts = boundary_coords(billiard, sampler, N)
         dX, dY = gradient_matrices(new_basis, k_basis, pts.xy; multithreaded)
         nx = getindex.(pts.normal,1)
@@ -175,6 +175,35 @@ time, not resampled or re-solved per call.
 """
 function boundary_function(state::BIMEigenstate; b=5.0, multithreaded=true)
     return state.u, state.pts.s, state.bnd_norm
+end
+
+# Disambiguates `boundary_function(bim_state, billiard)` from the generic
+# `S<:AbsState` method above, which would otherwise silently match and fail
+# on fields (`k_basis`, `basis`) BIMEigenstate doesn't have. No `solver` is
+# available here to recompute a missing `state.u`, so this simply forwards
+# to the 1-arg read of the precomputed fields.
+boundary_function(state::BIMEigenstate, billiard::AbsBilliard; b=5.0, multithreaded=true) = boundary_function(state; b, multithreaded)
+
+"""
+    boundary_function(state::BIMEigenstate, billiard::AbsBilliard, solver::AbsBIMSolver; b::Real = 5.0, multithreaded::Bool = true) → (u::Vector, s::Vector, norm::Real)
+
+Returns the Rellich-normalized boundary normal derivative of a
+[`BIMEigenstate`](@ref), recomputing it via [`solve_state`](@ref) when the
+state's precomputed `u` is unavailable (e.g. states produced by an
+accelerated BIM solver that only retained a layer density, see
+[`compute_eigenstate`](@ref)). When `state.u !== nothing`, this is identical
+to [`boundary_function(state::BIMEigenstate)`](@ref).
+
+## Keyword arguments
+*  `b::Real = 5.0` : Unused when `state.u !== nothing`; accepted for interface compatibility.
+*  `multithreaded::Bool = true` : Unused when `state.u !== nothing`; accepted for interface compatibility.
+"""
+function boundary_function(state::BIMEigenstate, billiard::AbsBilliard, solver::AbsBIMSolver; b=5.0, multithreaded=true)
+    u = state.u; norm = state.bnd_norm
+    if u === nothing
+        _, _, u, norm = solve_state(_bim_kernel(solver), state.pts, state.k, billiard)
+    end
+    return u, state.pts.s, norm
 end
 
 """
@@ -325,13 +354,33 @@ function momentum_function(state::BIMEigenstate; b=5.0, multithreaded=true)
     return momentum_function(state.u, state.pts.s, state.pts.ds)
 end
 
+# Disambiguates `momentum_function(bim_state, billiard)` from the generic
+# `S<:AbsState` method below (which would call the uniform-arclength-only
+# `momentum_function(u,s)` FFT path, incorrect for BIM's generally
+# non-uniform arc-length grid). No `solver` is available here to recompute a
+# missing `state.u`, so this forwards to the 1-arg non-uniform-arclength-aware form.
+momentum_function(state::BIMEigenstate, billiard::AbsBilliard; b=5.0, multithreaded=true) = momentum_function(state; b, multithreaded)
+
+"""
+    momentum_function(state::BIMEigenstate, billiard::AbsBilliard, solver::AbsBIMSolver; b::Real = 5.0, multithreaded::Bool = true) → (power::Vector, ks::Vector)
+
+Computes the momentum-space representation of a [`BIMEigenstate`](@ref) via
+[`boundary_function(state, billiard, solver)`](@ref), recomputing `u` when
+unavailable on `state` (see that method), then applying the non-uniform-
+arc-length-aware [`momentum_function(u, s, ds)`](@ref momentum_function).
+"""
+function momentum_function(state::BIMEigenstate, billiard::AbsBilliard, solver::AbsBIMSolver; b=5.0, multithreaded=true)
+    u, s, _ = boundary_function(state, billiard, solver; b, multithreaded)
+    return momentum_function(u, s, state.pts.ds)
+end
+
 ################################################################################
 # SpectralData API
 ################################################################################
 
-_boundary_function_state(state::BIMEigenstate, billiard::AbsBilliard, solver; kwargs...) = boundary_function(state; kwargs...)
+_boundary_function_state(state::BIMEigenstate, billiard::AbsBilliard, solver; kwargs...) = boundary_function(state, billiard, solver; kwargs...)
 _boundary_function_state(state::BasisEigenstate, billiard::AbsBilliard, solver; kwargs...) = boundary_function(state, billiard; kwargs...)
-_momentum_function_state(state::BIMEigenstate, billiard::AbsBilliard, solver; kwargs...) = momentum_function(state; kwargs...)
+_momentum_function_state(state::BIMEigenstate, billiard::AbsBilliard, solver; kwargs...) = momentum_function(state, billiard, solver; kwargs...)
 _momentum_function_state(state::BasisEigenstate, billiard::AbsBilliard, solver; kwargs...) = momentum_function(state, billiard; kwargs...)
 
 """
@@ -340,8 +389,8 @@ _momentum_function_state(state::BasisEigenstate, billiard::AbsBilliard, solver; 
 Compute the boundary normal derivative of the `i`-th eigenstate stored in `data`.
 """
 function boundary_function(data::SpectralData, i::Integer; kwargs...)
-    data.states === nothing && throw(ArgumentError("data has no stored eigenstates"))
-    return _boundary_function_state(data.states[i], data.billiard, data.solver; kwargs...)
+    states = _require_states(data)
+    return _boundary_function_state(states[i], data.billiard, data.solver; kwargs...)
 end
 
 """
@@ -351,8 +400,8 @@ Compute the boundary normal derivative of every eigenstate stored in `data`,
 returning a vector of `(u, s, norm)` results.
 """
 function boundary_function(data::SpectralData; kwargs...)
-    data.states === nothing && throw(ArgumentError("data has no stored eigenstates"))
-    return [boundary_function(data, i; kwargs...) for i in eachindex(data.states)]
+    states = _require_states(data)
+    return [boundary_function(data, i; kwargs...) for i in eachindex(states)]
 end
 
 """
@@ -361,8 +410,8 @@ end
 Compute the momentum-space representation of the `i`-th eigenstate stored in `data`.
 """
 function momentum_function(data::SpectralData, i::Integer; kwargs...)
-    data.states === nothing && throw(ArgumentError("data has no stored eigenstates"))
-    return _momentum_function_state(data.states[i], data.billiard, data.solver; kwargs...)
+    states = _require_states(data)
+    return _momentum_function_state(states[i], data.billiard, data.solver; kwargs...)
 end
 
 """
@@ -371,6 +420,6 @@ end
 Compute the momentum-space representation of every eigenstate stored in `data`.
 """
 function momentum_function(data::SpectralData; kwargs...)
-    data.states === nothing && throw(ArgumentError("data has no stored eigenstates"))
-    return [momentum_function(data, i; kwargs...) for i in eachindex(data.states)]
+    states = _require_states(data)
+    return [momentum_function(data, i; kwargs...) for i in eachindex(states)]
 end

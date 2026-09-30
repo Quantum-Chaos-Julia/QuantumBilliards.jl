@@ -496,8 +496,8 @@ _husimi_function_state(state::BasisEigenstate, billiard::AbsBilliard, solver; kw
 Compute the Poincare-Husimi function of every eigenstate stored in `data`.
 """
 function husimi_function(data::SpectralData; kwargs...)
-    data.states === nothing && throw(ArgumentError("data has no stored eigenstates"))
-    return _husimi_function_data(data.states, data.billiard, data.solver; kwargs...)
+    states = _require_states(data)
+    return _husimi_function_data(states, data.billiard, data.solver; kwargs...)
 end
 
 """
@@ -506,6 +506,6 @@ end
 Compute the Poincare-Husimi function of the `i`-th eigenstate stored in `data`.
 """
 function husimi_function(data::SpectralData, i::Integer; kwargs...)
-    data.states === nothing && throw(ArgumentError("data has no stored eigenstates"))
-    return _husimi_function_state(data.states[i], data.billiard, data.solver; kwargs...)
+    states = _require_states(data)
+    return _husimi_function_state(states[i], data.billiard, data.solver; kwargs...)
 end

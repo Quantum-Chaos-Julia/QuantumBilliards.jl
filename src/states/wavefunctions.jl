@@ -24,6 +24,10 @@ function pad_limits(xlim, ylim; padding::Real = 0.01)
     return (xlim[1] - padding, xlim[2] + padding), (ylim[1] - padding, ylim[2] + padding)
 end
 
+# Number of grid points needed to sample a length `d` at `b` points per de
+# Broglie wavelength `2π/k`, floored at a minimum of 512 points.
+_debroglie_grid_size(k::Real, d::Real, b::Real) = max(round(Int, k * d * b / (2 * pi)), 512)
+
 function rectify_grid(grid::AbstractVector{T}) where {T<:Real}
     if grid[1] <= zero(T) <= grid[end]
         idx = argmin(abs.(grid))
@@ -34,7 +38,8 @@ function rectify_grid(grid::AbstractVector{T}) where {T<:Real}
 end
 
 function boundary_limits(curves; grd::Int = 1000, padding::Real = 0.01)
-    x_bnd = Vector{Any}(); y_bnd = Vector{Any}()
+    T = typeof(first(curves).length)
+    x_bnd = Vector{T}(); y_bnd = Vector{T}()
     for crv in curves
         L = crv.length
         N_bnd = max(512, round(Int, grd / L))
@@ -394,7 +399,7 @@ function wavefunction(state::S, billiard::AbsBilliard; b = 5.0, inside_only = tr
         L = CompositeCurve(get_boundary_curves(billiard)).length
         xlim, ylim = boundary_limits(get_boundary_curves(billiard); grd = max(1000, round(Int, k * L * b / (2 * pi))))
         dx = xlim[2] - xlim[1]; dy = ylim[2] - ylim[1]
-        nx = max(round(Int, k * dx * b / (2 * pi)), 512); ny = max(round(Int, k * dy * b / (2 * pi)), 512)
+        nx = _debroglie_grid_size(k, dx, b); ny = _debroglie_grid_size(k, dy, b)
         x_grid::Vector{type} = collect(type, range(xlim..., nx)); y_grid::Vector{type} = collect(type, range(ylim..., ny))
         if ~isnothing(symmetries)
             has_x = any(s -> s isa BilliardGeometry.XAxisReflection, symmetries)
@@ -452,8 +457,8 @@ is returned. `kwargs` are forwarded to the underlying single-/batched-state
 `wavefunction` method.
 """
 function wavefunction(data::SpectralData; kwargs...)
-    data.states === nothing && throw(ArgumentError("data has no stored eigenstates"))
-    return _wavefunction_data(data.states, data.billiard, data.solver; kwargs...)
+    states = _require_states(data)
+    return _wavefunction_data(states, data.billiard, data.solver; kwargs...)
 end
 
 """
@@ -464,8 +469,8 @@ unwrapped `(Psi::Matrix, x, y)` shape as calling `wavefunction` on a single
 state directly.
 """
 function wavefunction(data::SpectralData, i::Integer; kwargs...)
-    data.states === nothing && throw(ArgumentError("data has no stored eigenstates"))
-    return _wavefunction_state(data.states[i], data.billiard, data.solver; kwargs...)
+    states = _require_states(data)
+    return _wavefunction_state(states[i], data.billiard, data.solver; kwargs...)
 end
 
 """
@@ -489,7 +494,7 @@ function wavefunction(state::BasisState; xlim = (-2.0, 2.0), ylim = (-2.0, 2.0),
     let k = state.k, basis = state.basis
         type = eltype(state.vec)
         dx = xlim[2] - xlim[1]; dy = ylim[2] - ylim[1]
-        nx = max(round(Int, k * dx * b / (2 * pi)), 512); ny = max(round(Int, k * dy * b / (2 * pi)), 512)
+        nx = _debroglie_grid_size(k, dx, b); ny = _debroglie_grid_size(k, dy, b)
         x_grid::Vector{type} = collect(type, range(xlim..., nx)); y_grid::Vector{type} = collect(type, range(ylim..., ny))
         pts_grid = [SVector(x, y) for y in y_grid for x in x_grid]
         Psi::Vector{type} = basis_fun(basis, state.idx, k, pts_grid)

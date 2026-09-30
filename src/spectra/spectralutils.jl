@@ -78,6 +78,11 @@ function Base.filter(f::Function, data::SpectralData)
     return data[idx]
 end
 
+# Return `data.states`, or throw a clear error if no eigenstates are stored.
+# Shared by the `wavefunction`/`boundary_function`/`momentum_function`/
+# `husimi_function` SpectralData wrappers in states/*.jl.
+_require_states(data::SpectralData) = data.states === nothing ? throw(ArgumentError("data has no stored eigenstates")) : data.states
+
 """
     append!(data1::SpectralData, data2::SpectralData; tol::Real=1e-3) → data1
 
