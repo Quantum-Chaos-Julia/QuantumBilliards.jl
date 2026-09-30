@@ -52,15 +52,38 @@ function boundary_limits(curves; grd::Int = 1000, padding::Real = 0.01)
     return pad_limits(xlim, ylim; padding)
 end
 
-function _wavefunction_grid(k::T, billiard::Bi, b::T; inside_only::Bool = true) where {T<:Real,Bi<:AbsBilliard}
+# `is_inside(billiard, ·)` only tests membership in the fundamental-domain
+# sector. A BIM eigenstate's density is already expanded onto the *complete*
+# physical boundary by `symmetrize_layer_density`/`solve_state`, so masking
+# the reconstruction grid against the fundamental domain alone would wrongly
+# clip away the correctly-computed symmetry-image sectors. This checks
+# membership in the union of the fundamental domain and every registered
+# symmetry image instead, matching `full_boundary`'s reconstruction.
+@inline function _is_inside_full(billiard::Bi, pt::SVector{2,T}) where {T<:Real,Bi<:AbsBilliard}
+    BilliardGeometry.is_inside(billiard, pt) && return true
+    @inbounds for sym in billiard.symmetries
+        BilliardGeometry.is_inside(billiard, BilliardGeometry.apply_symmetry(sym, pt)) && return true
+    end
+    return false
+end
+
+# `fundamental_domain = true` masks against `billiard`'s fundamental domain
+# alone (matching `plot_boundary!`'s fundamental-domain outline and
+# `BasisEigenstate`'s reduced-grid convention); `fundamental_domain = false`
+# masks against the complete physical domain via `_is_inside_full`. Only
+# affects masking, not the grid extent: the reconstruction grid always spans
+# the full physical boundary's bounding box, since `vec`/`u` are already
+# expanded onto the complete boundary regardless of this flag.
+function _wavefunction_grid(k::T, billiard::Bi, b::T; inside_only::Bool = true, fundamental_domain::Bool = true) where {T<:Real,Bi<:AbsBilliard}
     xlim, ylim = boundary_limits(full_boundary(billiard)); dx = T(2pi) / (b * k)
     nx = max(512, ceil(Int, (xlim[2] - xlim[1]) / dx) + 1); ny = max(512, ceil(Int, (ylim[2] - ylim[1]) / dx) + 1)
     xgrid = collect(range(T(xlim[1]), T(xlim[2]), length = nx)); ygrid = collect(range(T(ylim[1]), T(ylim[2]), length = ny))
     pts = vec([SVector{2,T}(x, y) for x in xgrid, y in ygrid])
     if inside_only
         mask = BitVector(undef, length(pts))
+        inside = fundamental_domain ? BilliardGeometry.is_inside : _is_inside_full
         Threads.@threads for i in eachindex(pts)
-            mask[i] = BilliardGeometry.is_inside(billiard, pts[i])
+            mask[i] = inside(billiard, pts[i])
         end
         indices = findall(mask)
     else
@@ -242,9 +265,12 @@ Reconstruct BIM eigenstates on a common Cartesian grid.
 ## Keyword Arguments
 - `b::Real = 5`: Grid points per wavelength.
 - `inside_only::Bool = true`: Evaluate only inside the billiard.
-- `fundamental_domain::Bool = true`: Accepted for API compatibility with
-  [`wavefunction`](@ref) on generic `AbsState`, but has no effect: BIM
-  eigenstates are always reconstructed on the full billiard domain.
+- `fundamental_domain::Bool = true`: When `inside_only = true`, mask against
+  `billiard`'s fundamental domain alone rather than the complete physical
+  domain (the reconstruction itself always uses the complete physical
+  boundary density regardless of this flag, since `vec`/`u` are already
+  expanded onto it). Matches [`plot_boundary!`](@ref)'s fundamental-domain
+  outline convention. Has no effect when `inside_only = false`.
 - `MIN_CHUNK::Int = 4096`: Minimum spatial points per active thread.
 - `use_chebyshev::Bool = true`: Use Chebyshev-accelerated Hankel evaluation.
 - `show_progress::Bool = true`: Display reconstruction progress.
@@ -264,7 +290,7 @@ function wavefunction(states::AbstractVector{<:BIMEigenstate{K,T}}, billiard::Ab
     density || all(s.u !== nothing for s in states) || error("states must provide the same boundary representation")
     us = density ? Vector{K}[s.vec::Vector{K} for s in states] : Vector{K}[s.u::Vector{K} for s in states]
     bval = T(b)
-    xgrid, ygrid, pts, indices, nx, ny = _wavefunction_grid(maximum(ks), billiard, bval; inside_only)
+    xgrid, ygrid, pts, indices, nx, ny = _wavefunction_grid(maximum(ks), billiard, bval; inside_only, fundamental_domain)
     if density
         if use_chebyshev
             plans, ϕ = _density_kernel(kernel, ks, bds, xgrid, ygrid, cheb_config)
@@ -298,9 +324,12 @@ Reconstruct one BIM eigenstate.
 ## Keyword Arguments
 - `b::Real = 5`: Grid points per wavelength.
 - `inside_only::Bool = true`: Evaluate only inside the billiard.
-- `fundamental_domain::Bool = true`: Accepted for API compatibility with
-  [`wavefunction`](@ref) on generic `AbsState`, but has no effect: BIM
-  eigenstates are always reconstructed on the full billiard domain.
+- `fundamental_domain::Bool = true`: When `inside_only = true`, mask against
+  `billiard`'s fundamental domain alone rather than the complete physical
+  domain (the reconstruction itself always uses the complete physical
+  boundary density regardless of this flag, since `vec`/`u` are already
+  expanded onto it). Matches [`plot_boundary!`](@ref)'s fundamental-domain
+  outline convention. Has no effect when `inside_only = false`.
 - `MIN_CHUNK::Int = 4096`: Minimum spatial points per active thread.
 - `use_chebyshev::Bool = true`: Use Chebyshev-accelerated Hankel evaluation.
 - `cheb_config::ChebyshevConfig = ChebyshevConfig(T)`: Chebyshev configuration.
@@ -311,7 +340,7 @@ Reconstruct one BIM eigenstate.
 - `ygrid::Vector{T}`: Cartesian y coordinates.
 """
 function wavefunction(state::BIMEigenstate{K,T}, billiard::AbsBilliard, solver::AbsBIMSolver; b::Real = 5, inside_only::Bool = true, fundamental_domain::Bool = true, MIN_CHUNK::Int = 4096, use_chebyshev::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(T)) where {K<:Number,T<:Real}
-    Psi, xgrid, ygrid = wavefunction([state], billiard, solver; b, inside_only, MIN_CHUNK, use_chebyshev, show_progress = false, cheb_config)
+    Psi, xgrid, ygrid = wavefunction([state], billiard, solver; b, inside_only, fundamental_domain, MIN_CHUNK, use_chebyshev, show_progress = false, cheb_config)
     return Psi[1], xgrid, ygrid
 end
 
