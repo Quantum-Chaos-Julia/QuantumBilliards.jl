@@ -67,15 +67,17 @@ end
     return false
 end
 
-# `fundamental_domain = true` masks against `billiard`'s fundamental domain
-# alone (matching `plot_boundary!`'s fundamental-domain outline and
-# `BasisEigenstate`'s reduced-grid convention); `fundamental_domain = false`
-# masks against the complete physical domain via `_is_inside_full`. Only
-# affects masking, not the grid extent: the reconstruction grid always spans
-# the full physical boundary's bounding box, since `vec`/`u` are already
-# expanded onto the complete boundary regardless of this flag.
+# `fundamental_domain = true` restricts both the grid extent and the mask to
+# `billiard`'s fundamental domain alone (matching `plot_boundary!`'s
+# fundamental-domain outline and `BasisEigenstate`'s reduced-grid convention);
+# `fundamental_domain = false` spans and masks against the complete physical
+# domain instead, via `full_boundary`/`_is_inside_full`. `vec`/`u` are already
+# expanded onto the complete boundary regardless of this flag, so density
+# evaluation remains correct even when the grid is restricted to the
+# fundamental domain.
 function _wavefunction_grid(k::T, billiard::Bi, b::T; inside_only::Bool = true, fundamental_domain::Bool = true) where {T<:Real,Bi<:AbsBilliard}
-    xlim, ylim = boundary_limits(full_boundary(billiard)); dx = T(2pi) / (b * k)
+    curves = fundamental_domain ? get_boundary_curves(billiard) : full_boundary(billiard)
+    xlim, ylim = boundary_limits(curves); dx = T(2pi) / (b * k)
     nx = max(512, ceil(Int, (xlim[2] - xlim[1]) / dx) + 1); ny = max(512, ceil(Int, (ylim[2] - ylim[1]) / dx) + 1)
     xgrid = collect(range(T(xlim[1]), T(xlim[2]), length = nx)); ygrid = collect(range(T(ylim[1]), T(ylim[2]), length = ny))
     pts = vec([SVector{2,T}(x, y) for x in xgrid, y in ygrid])
@@ -265,12 +267,12 @@ Reconstruct BIM eigenstates on a common Cartesian grid.
 ## Keyword Arguments
 - `b::Real = 5`: Grid points per wavelength.
 - `inside_only::Bool = true`: Evaluate only inside the billiard.
-- `fundamental_domain::Bool = true`: When `inside_only = true`, mask against
-  `billiard`'s fundamental domain alone rather than the complete physical
-  domain (the reconstruction itself always uses the complete physical
-  boundary density regardless of this flag, since `vec`/`u` are already
-  expanded onto it). Matches [`plot_boundary!`](@ref)'s fundamental-domain
-  outline convention. Has no effect when `inside_only = false`.
+- `fundamental_domain::Bool = true`: Restrict the reconstruction grid extent
+  and (when `inside_only = true`) the mask to `billiard`'s fundamental
+  domain alone, rather than the complete physical domain. `vec`/`u` are
+  already expanded onto the complete boundary regardless of this flag, so
+  density evaluation on the restricted grid remains correct. Matches
+  [`plot_boundary!`](@ref)'s fundamental-domain outline convention.
 - `MIN_CHUNK::Int = 4096`: Minimum spatial points per active thread.
 - `use_chebyshev::Bool = true`: Use Chebyshev-accelerated Hankel evaluation.
 - `show_progress::Bool = true`: Display reconstruction progress.
@@ -324,12 +326,12 @@ Reconstruct one BIM eigenstate.
 ## Keyword Arguments
 - `b::Real = 5`: Grid points per wavelength.
 - `inside_only::Bool = true`: Evaluate only inside the billiard.
-- `fundamental_domain::Bool = true`: When `inside_only = true`, mask against
-  `billiard`'s fundamental domain alone rather than the complete physical
-  domain (the reconstruction itself always uses the complete physical
-  boundary density regardless of this flag, since `vec`/`u` are already
-  expanded onto it). Matches [`plot_boundary!`](@ref)'s fundamental-domain
-  outline convention. Has no effect when `inside_only = false`.
+- `fundamental_domain::Bool = true`: Restrict the reconstruction grid extent
+  and (when `inside_only = true`) the mask to `billiard`'s fundamental
+  domain alone, rather than the complete physical domain. `vec`/`u` are
+  already expanded onto the complete boundary regardless of this flag, so
+  density evaluation on the restricted grid remains correct. Matches
+  [`plot_boundary!`](@ref)'s fundamental-domain outline convention.
 - `MIN_CHUNK::Int = 4096`: Minimum spatial points per active thread.
 - `use_chebyshev::Bool = true`: Use Chebyshev-accelerated Hankel evaluation.
 - `cheb_config::ChebyshevConfig = ChebyshevConfig(T)`: Chebyshev configuration.
