@@ -345,7 +345,7 @@ exterior values are set to `NaN`.
 ## Returns
 - `Psi::Vector{T}`: Flattened wavefunction values with x varying fastest.
 """
-function compute_psi(state::S, billiard::AbsBilliard, x_grid, y_grid; inside_only = true, memory_limit = 10.0e9, multithreaded = true) where {S<:AbsState}
+function compute_psi(state::S, billiard::AbsBilliard, x_grid, y_grid; inside_only = true, memory_limit = 10.0e9, multithreaded = true) where {S<:BasisEigenstate}
     vec = state.vec; k = state.k_basis; basis = state.basis
     T = eltype(vec)
     pts = [SVector(x, y) for y in y_grid for x in x_grid]
@@ -388,7 +388,7 @@ complete billiard with `apply_symmetries_to_wavefunction`.
 - `x_grid::Vector{T}`: Cartesian x coordinates.
 - `y_grid::Vector{T}`: Cartesian y coordinates.
 """
-function wavefunction(state::S, billiard::AbsBilliard; b = 5.0, inside_only = true, fundamental_domain = true, memory_limit = 10.0e9, multithreaded = true) where {S<:AbsState}
+function wavefunction(state::S, billiard::AbsBilliard; b = 5.0, inside_only = true, fundamental_domain = true, memory_limit = 10.0e9, multithreaded = true) where {S<:BasisEigenstate}
     let k = state.k, symmetries = state.basis.symmetries
         type = eltype(state.vec)
         L = CompositeCurve(get_boundary_curves(billiard)).length
