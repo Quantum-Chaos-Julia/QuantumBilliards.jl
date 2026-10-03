@@ -236,12 +236,19 @@ function _density_kernel(solver::CFIE, ks, bds, xgrid, ygrid, cfg)
     return collect(zip(hp.h0, hp.h1)), ϕ_cfie
 end
 
-function _evaluate_wavefunctions(ks::Vector{T}, us::Vector{Vector{K}}, bds::Vector{P}, pts, indices, nx::Int, ny::Int, plans, ϕ::F, mode::M; MIN_CHUNK::Int = 4096, show_progress::Bool = true) where {T<:Real,K<:Number,P<:BoundaryPoints,F,M<:Val}
+# Fill value for grid points excluded by a mask (real or complex `V`):
+# `NaN` (both real/imaginary parts, when applicable) so Makie's
+# heatmap/surface plots render exterior points transparently via their
+# default `nan_color`, or `zero(V)` otherwise.
+@inline _mask_fill(::Type{V}, use_NaN_mask::Bool) where {V<:Real} = use_NaN_mask ? convert(V, NaN) : zero(V)
+@inline _mask_fill(::Type{V}, use_NaN_mask::Bool) where {V<:Complex} = use_NaN_mask ? V(NaN, NaN) : zero(V)
+
+function _evaluate_wavefunctions(ks::Vector{T}, us::Vector{Vector{K}}, bds::Vector{P}, pts, indices, nx::Int, ny::Int, plans, ϕ::F, mode::M; MIN_CHUNK::Int = 4096, show_progress::Bool = true, use_NaN_mask::Bool = false) where {T<:Real,K<:Number,P<:BoundaryPoints,F,M<:Val}
     V = ϕ === ϕ_slp ? promote_type(T, K) : promote_type(K, Complex{T})
     out = Vector{Matrix{V}}(undef, length(ks)); n = length(indices)
     nt = max(1, min(Threads.nthreads(), cld(n, MIN_CHUNK))); q, r = divrem(n, nt)
     @maybe_showprogress show_progress for i in eachindex(ks)
-        ψ = zeros(V, nx * ny); k = ks[i]; u = us[i]; bd = bds[i]; plan = plans === nothing ? nothing : plans[i]
+        ψ = fill(_mask_fill(V, use_NaN_mask), nx * ny); k = ks[i]; u = us[i]; bd = bds[i]; plan = plans === nothing ? nothing : plans[i]
         Threads.@threads :static for t in 1:nt
             lo = (t - 1) * q + min(t - 1, r) + 1; hi = lo + q - 1 + (t <= r)
             @inbounds for j in lo:hi
@@ -255,7 +262,7 @@ function _evaluate_wavefunctions(ks::Vector{T}, us::Vector{Vector{K}}, bds::Vect
 end
 
 """
-    wavefunction(states::AbstractVector{<:BIMEigenstate{K,T}}, billiard::AbsBilliard, solver::AbsBIMSolver; b::Real = 5, inside_only::Bool = true, fundamental_domain::Bool = true, MIN_CHUNK::Int = 4096, use_chebyshev::Bool = true, show_progress::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(T)) where {K<:Number,T<:Real}
+    wavefunction(states::AbstractVector{<:BIMEigenstate{K,T}}, billiard::AbsBilliard, solver::AbsBIMSolver; b::Real = 5, inside_only::Bool = true, fundamental_domain::Bool = true, MIN_CHUNK::Int = 4096, use_chebyshev::Bool = true, show_progress::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(T), use_NaN_mask::Bool = false) where {K<:Number,T<:Real}
 
 Reconstruct BIM eigenstates on a common Cartesian grid.
 
@@ -277,13 +284,16 @@ Reconstruct BIM eigenstates on a common Cartesian grid.
 - `use_chebyshev::Bool = true`: Use Chebyshev-accelerated Hankel evaluation.
 - `show_progress::Bool = true`: Display reconstruction progress.
 - `cheb_config::ChebyshevConfig = ChebyshevConfig(T)`: Chebyshev configuration.
+- `use_NaN_mask::Bool = false`: When `inside_only = true`, fill exterior
+  values with `NaN` instead of zero (e.g. so plotting functions render them
+  transparently).
 
 ## Returns
 - `Psi2ds::Vector{Matrix}`: Reconstructed wavefunctions.
 - `xgrid::Vector{T}`: Cartesian x coordinates.
 - `ygrid::Vector{T}`: Cartesian y coordinates.
 """
-function wavefunction(states::AbstractVector{<:BIMEigenstate{K,T}}, billiard::AbsBilliard, solver::AbsBIMSolver; b::Real = 5, inside_only::Bool = true, fundamental_domain::Bool = true, MIN_CHUNK::Int = 4096, use_chebyshev::Bool = true, show_progress::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(T)) where {K<:Number,T<:Real}
+function wavefunction(states::AbstractVector{<:BIMEigenstate{K,T}}, billiard::AbsBilliard, solver::AbsBIMSolver; b::Real = 5, inside_only::Bool = true, fundamental_domain::Bool = true, MIN_CHUNK::Int = 4096, use_chebyshev::Bool = true, show_progress::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(T), use_NaN_mask::Bool = false) where {K<:Number,T<:Real}
     isempty(states) && throw(ArgumentError("states must be nonempty"))
     kernel = _bim_kernel(solver)
     P = typeof(first(states).pts)
@@ -296,25 +306,25 @@ function wavefunction(states::AbstractVector{<:BIMEigenstate{K,T}}, billiard::Ab
     if density
         if use_chebyshev
             plans, ϕ = _density_kernel(kernel, ks, bds, xgrid, ygrid, cheb_config)
-            Psi = _evaluate_wavefunctions(ks, us, bds, pts, indices, nx, ny, plans, ϕ, Val(:cheb); MIN_CHUNK, show_progress)
+            Psi = _evaluate_wavefunctions(ks, us, bds, pts, indices, nx, ny, plans, ϕ, Val(:cheb); MIN_CHUNK, show_progress, use_NaN_mask)
         else
             ϕ = kernel isa DLP ? ϕ_dlp : ϕ_cfie
-            Psi = _evaluate_wavefunctions(ks, us, bds, pts, indices, nx, ny, nothing, ϕ, Val(:direct); MIN_CHUNK, show_progress)
+            Psi = _evaluate_wavefunctions(ks, us, bds, pts, indices, nx, ny, nothing, ϕ, Val(:direct); MIN_CHUNK, show_progress, use_NaN_mask)
         end
     else
         if use_chebyshev
             kc, rmin, rmax = _cheb_interval(ks, bds, xgrid, ygrid)
             hp, _, _ = _tune_cheb_plans(rmin, rmax, kc, cheb_config; h_orders = (0,))
-            Psi = _evaluate_wavefunctions(ks, us, bds, pts, indices, nx, ny, hp.h0, ϕ_slp, Val(:cheb); MIN_CHUNK, show_progress)
+            Psi = _evaluate_wavefunctions(ks, us, bds, pts, indices, nx, ny, hp.h0, ϕ_slp, Val(:cheb); MIN_CHUNK, show_progress, use_NaN_mask)
         else
-            Psi = _evaluate_wavefunctions(ks, us, bds, pts, indices, nx, ny, nothing, ϕ_slp, Val(:direct); MIN_CHUNK, show_progress)
+            Psi = _evaluate_wavefunctions(ks, us, bds, pts, indices, nx, ny, nothing, ϕ_slp, Val(:direct); MIN_CHUNK, show_progress, use_NaN_mask)
         end
     end
     return Psi, xgrid, ygrid
 end
 
 """
-    wavefunction(state::BIMEigenstate{K,T}, billiard::AbsBilliard, solver::AbsBIMSolver; b::Real = 5, inside_only::Bool = true, fundamental_domain::Bool = true, MIN_CHUNK::Int = 4096, use_chebyshev::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(T)) where {K<:Number,T<:Real}
+    wavefunction(state::BIMEigenstate{K,T}, billiard::AbsBilliard, solver::AbsBIMSolver; b::Real = 5, inside_only::Bool = true, fundamental_domain::Bool = true, MIN_CHUNK::Int = 4096, use_chebyshev::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(T), use_NaN_mask::Bool = false) where {K<:Number,T<:Real}
 
 Reconstruct one BIM eigenstate.
 
@@ -335,14 +345,17 @@ Reconstruct one BIM eigenstate.
 - `MIN_CHUNK::Int = 4096`: Minimum spatial points per active thread.
 - `use_chebyshev::Bool = true`: Use Chebyshev-accelerated Hankel evaluation.
 - `cheb_config::ChebyshevConfig = ChebyshevConfig(T)`: Chebyshev configuration.
+- `use_NaN_mask::Bool = false`: When `inside_only = true`, fill exterior
+  values with `NaN` instead of zero (e.g. so plotting functions render them
+  transparently).
 
 ## Returns
 - `Psi::Matrix`: Reconstructed wavefunction.
 - `xgrid::Vector{T}`: Cartesian x coordinates.
 - `ygrid::Vector{T}`: Cartesian y coordinates.
 """
-function wavefunction(state::BIMEigenstate{K,T}, billiard::AbsBilliard, solver::AbsBIMSolver; b::Real = 5, inside_only::Bool = true, fundamental_domain::Bool = true, MIN_CHUNK::Int = 4096, use_chebyshev::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(T)) where {K<:Number,T<:Real}
-    Psi, xgrid, ygrid = wavefunction([state], billiard, solver; b, inside_only, fundamental_domain, MIN_CHUNK, use_chebyshev, show_progress = false, cheb_config)
+function wavefunction(state::BIMEigenstate{K,T}, billiard::AbsBilliard, solver::AbsBIMSolver; b::Real = 5, inside_only::Bool = true, fundamental_domain::Bool = true, MIN_CHUNK::Int = 4096, use_chebyshev::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(T), use_NaN_mask::Bool = false) where {K<:Number,T<:Real}
+    Psi, xgrid, ygrid = wavefunction([state], billiard, solver; b, inside_only, fundamental_domain, MIN_CHUNK, use_chebyshev, show_progress = false, cheb_config, use_NaN_mask)
     return Psi[1], xgrid, ygrid
 end
 
@@ -351,7 +364,7 @@ end
 ################################################################################
 
 """
-    compute_psi(state::S, x_grid::AbstractVector, y_grid::AbstractVector; inside_only::Bool = true, memory_limit::Real = 10.0e9, multithreaded::Bool = true) where {S<:AbsState}
+    compute_psi(state::S, x_grid::AbstractVector, y_grid::AbstractVector; inside_only::Bool = true, memory_limit::Real = 10.0e9, multithreaded::Bool = true, use_NaN_mask::Bool = false) where {S<:AbsState}
 
 Evaluate the wavefunction of `state` on a Cartesian grid.
 
@@ -363,8 +376,8 @@ each basis matrix occupies at most approximately `memory_limit`. Each chunk is
 constructed with `basis_matrix`, so the standard filtering of numerically small
 basis-matrix elements is applied before multiplication by the state vector.
 
-If `inside_only = true`, only points inside the billiard are evaluated and
-exterior values are set to `NaN`.
+If `inside_only = true`, only points inside the billiard are evaluated;
+exterior values are set to zero by default, or `NaN` when `use_NaN_mask = true`.
 
 ## Arguments
 - `state::S`: Eigenstate whose basis expansion is evaluated.
@@ -372,22 +385,24 @@ exterior values are set to `NaN`.
 - `y_grid::AbstractVector`: Cartesian y coordinates.
 
 ## Kwargs
-- `inside_only::Bool = true`: Evaluate only inside the billiard and set
-  exterior values to `NaN`.
+- `inside_only::Bool = true`: Evaluate only inside the billiard.
 - `memory_limit::Real = 10.0e9`: Approximate maximum memory in bytes allocated
   to each basis-matrix chunk.
 - `multithreaded::Bool = true`: Use multithreaded basis-matrix construction.
+- `use_NaN_mask::Bool = false`: When `inside_only = true`, fill exterior
+  values with `NaN` instead of zero (e.g. so plotting functions render them
+  transparently).
 
 ## Returns
 - `Psi::Vector{T}`: Flattened wavefunction values with x varying fastest.
 """
-function compute_psi(state::S, billiard::AbsBilliard, x_grid, y_grid; inside_only = true, memory_limit = 10.0e9, multithreaded = true) where {S<:BasisEigenstate}
+function compute_psi(state::S, billiard::AbsBilliard, x_grid, y_grid; inside_only = true, memory_limit = 10.0e9, multithreaded = true, use_NaN_mask::Bool = false) where {S<:BasisEigenstate}
     vec = state.vec; k = state.k_basis; basis = state.basis
     T = eltype(vec)
     pts = [SVector(x, y) for y in y_grid for x in x_grid]
     mask = inside_only ? is_inside(billiard, pts) : trues(length(pts))
     idx = findall(mask); pts_eval = pts[idx]
-    Psi = inside_only ? fill(convert(T, NaN), length(pts)) : zeros(T, length(pts))
+    Psi = inside_only ? fill(_mask_fill(T, use_NaN_mask), length(pts)) : zeros(T, length(pts))
     chunk_size = max(1, floor(Int, 0.8 * memory_limit / (sizeof(T) * basis.dim)))
     for lo in 1:chunk_size:length(pts_eval)
         hi = min(lo + chunk_size - 1, length(pts_eval))
@@ -399,7 +414,7 @@ function compute_psi(state::S, billiard::AbsBilliard, x_grid, y_grid; inside_onl
 end
 
 """
-    wavefunction(state::S; b::Real = 5.0, inside_only::Bool = true, fundamental_domain::Bool = true, memory_limit::Real = 10.0e9, multithreaded::Bool = true) where {S<:AbsState}
+    wavefunction(state::S; b::Real = 5.0, inside_only::Bool = true, fundamental_domain::Bool = true, memory_limit::Real = 10.0e9, multithreaded::Bool = true, use_NaN_mask::Bool = false) where {S<:AbsState}
 
 Compute a basis-expanded eigenstate on a Cartesian grid.
 If the basis carries reflection symmetries, the corresponding coordinate
@@ -418,13 +433,16 @@ complete billiard with `apply_symmetries_to_wavefunction`.
 - `memory_limit::Real = 10.0e9`: Maximum memory in bytes for the full basis
   matrix.
 - `multithreaded::Bool = true`: Use multithreaded basis-matrix construction.
+- `use_NaN_mask::Bool = false`: When `inside_only = true`, fill exterior
+  values with `NaN` instead of zero (e.g. so plotting functions render them
+  transparently).
 
 ## Returns
 - `Psi2d::Matrix{T}`: Wavefunction values on the Cartesian grid.
 - `x_grid::Vector{T}`: Cartesian x coordinates.
 - `y_grid::Vector{T}`: Cartesian y coordinates.
 """
-function wavefunction(state::S, billiard::AbsBilliard; b = 5.0, inside_only = true, fundamental_domain = true, memory_limit = 10.0e9, multithreaded = true) where {S<:BasisEigenstate}
+function wavefunction(state::S, billiard::AbsBilliard; b = 5.0, inside_only = true, fundamental_domain = true, memory_limit = 10.0e9, multithreaded = true, use_NaN_mask::Bool = false) where {S<:BasisEigenstate}
     let k = state.k, symmetries = state.basis.symmetries
         type = eltype(state.vec)
         L = CompositeCurve(get_boundary_curves(billiard)).length
@@ -444,7 +462,7 @@ function wavefunction(state::S, billiard::AbsBilliard; b = 5.0, inside_only = tr
                 ny = length(y_grid)
             end
         end
-        Psi::Vector{type} = compute_psi(state, billiard, x_grid, y_grid; inside_only, memory_limit, multithreaded)
+        Psi::Vector{type} = compute_psi(state, billiard, x_grid, y_grid; inside_only, memory_limit, multithreaded, use_NaN_mask)
         Psi2d::Array{type,2} = reshape(Psi, (nx, ny))
         if ~fundamental_domain
             if ~isnothing(symmetries)
