@@ -52,13 +52,7 @@ function boundary_limits(curves; grd::Int = 1000, padding::Real = 0.01)
     return pad_limits(xlim, ylim; padding)
 end
 
-# `is_inside(billiard, ·)` only tests membership in the fundamental-domain
-# sector. A BIM eigenstate's density is already expanded onto the *complete*
-# physical boundary by `symmetrize_layer_density`/`solve_state`, so masking
-# the reconstruction grid against the fundamental domain alone would wrongly
-# clip away the correctly-computed symmetry-image sectors. This checks
-# membership in the union of the fundamental domain and every registered
-# symmetry image instead, matching `full_boundary`'s reconstruction.
+
 @inline function _is_inside_full(billiard::Bi, pt::SVector{2,T}) where {T<:Real,Bi<:AbsBilliard}
     BilliardGeometry.is_inside(billiard, pt) && return true
     @inbounds for sym in billiard.symmetries
@@ -67,14 +61,7 @@ end
     return false
 end
 
-# `fundamental_domain = true` restricts both the grid extent and the mask to
-# `billiard`'s fundamental domain alone (matching `plot_boundary!`'s
-# fundamental-domain outline and `BasisEigenstate`'s reduced-grid convention);
-# `fundamental_domain = false` spans and masks against the complete physical
-# domain instead, via `full_boundary`/`_is_inside_full`. `vec`/`u` are already
-# expanded onto the complete boundary regardless of this flag, so density
-# evaluation remains correct even when the grid is restricted to the
-# fundamental domain.
+
 function _wavefunction_grid(k::T, billiard::Bi, b::T; inside_only::Bool = true, fundamental_domain::Bool = true) where {T<:Real,Bi<:AbsBilliard}
     curves = fundamental_domain ? get_boundary_curves(billiard) : full_boundary(billiard)
     xlim, ylim = boundary_limits(curves); dx = T(2pi) / (b * k)

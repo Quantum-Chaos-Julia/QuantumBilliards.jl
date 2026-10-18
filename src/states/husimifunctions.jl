@@ -18,6 +18,12 @@
 # default since mostly we use reflections (1d irreps). For genuinely complex
 # boundary functions (such as some 2d irreps arising from NFoldRotation
 # symmetry) use full_p=true.
+#
+# Methods that auto-generate their own (q,p) grids detect a genuinely complex
+# u(s) and silently escalate to full_p=true, since a p -> -p reflection would
+# otherwise be mathematically wrong. Methods that take explicit qs/ps grids
+# instead raise an ArgumentError in that situation, since the caller-supplied
+# grid shape cannot be safely changed.
 ################################################################################
 
 # Extend a one-sided vector antisymmetrically without duplicating its first entry.
@@ -64,6 +70,17 @@ end
     return H
 end
 
+# Check whether `u` is real up to a single global complex phase, i.e. whether
+# `u = exp(iθ)v` for some real vector `v`. This is required for `full_p=false`
+# to be valid, since the `p -> -p` reflection symmetry used there relies on it.
+function _is_global_phase_real(u::AbstractVector{<:Number}; rtol::Real=1e-6)
+    eltype(u) <: Real && return true
+    uj = argmax(abs2,u)
+    iszero(uj) && return true
+    v = u.*(conj(uj)/abs(uj))
+    return maximum(abs,imag.(v)) <= rtol*maximum(abs,real.(v))
+end
+
 ################################################################################
 # GENERAL NONUNIFORM PHYSICAL-ARCLENGTH QUADRATURE
 ################################################################################
@@ -101,7 +118,10 @@ function husimi_function(k::T, s::AbstractVector{T}, ds::AbstractVector{T}, u::A
     # For fixed `q`, the Gaussian envelope, quadrature weights and boundary function
     # are combined once and reused for every momentum. This supports arbitrary
     # physical-arclength discretizations.
-    full_p || (iszero(first(ps)) && all(p->p>=zero(T),ps)) || throw(ArgumentError("full_p=false requires a nonnegative momentum grid starting at p=0"))
+    if !full_p
+        (iszero(first(ps)) && all(p->p>=zero(T),ps)) || throw(ArgumentError("full_p=false requires a nonnegative momentum grid starting at p=0"))
+        _is_global_phase_real(u) || throw(ArgumentError("full_p=false requires u to be real up to a global phase; pass full_p=true for genuinely complex boundary functions"))
+    end
     width = T(w)/sqrt(k)
     s_ext = vcat(s.-L,s,s.+L)
     ds_ext = vcat(ds,ds,ds)
@@ -249,7 +269,7 @@ Compute an automatically gridded Poincare-Husimi function.
 ## Keyword Arguments
 * `c::Real=10.0`: Phase-space sampling density.
 * `w::Real=7.0`: Gaussian truncation radius in units of `1/√k`.
-* `full_p::Bool=false`: Whether both momentum signs are evaluated explicitly. For 1d irreps (u real-valued up to a global complex phase), where we have p -> -p symmetry this should be false. 
+* `full_p::Bool=false`: Whether both momentum signs are evaluated explicitly. For 1d irreps (u real-valued up to a global complex phase), where we have p -> -p symmetry this should be false. Automatically escalated to `true` if `u` is not real up to a global phase.
 
 ## Returns
 * `H::Matrix{T}`: Normalized Poincare-Husimi density.
@@ -257,6 +277,7 @@ Compute an automatically gridded Poincare-Husimi function.
 * `ps::Vector{T}`: Full signed momentum grid.
 """
 function husimi_function(k::T, s::AbstractVector{T}, ds::AbstractVector{T}, u::AbstractVector{Num}, L::T; c::Real=10.0, w::Real=7.0, full_p::Bool=false) where {T<:Real,Num<:Number}
+    full_p = full_p || !_is_global_phase_real(u)
     sig = inv(sqrt(k))
     if _husimi_uniform_arclength_grid(s,ds) && T(w)*sig<L/T(2)
         return _husimi_uniform_arclength(k,s,ds,u,L;c=c,w=w,full_p=full_p)

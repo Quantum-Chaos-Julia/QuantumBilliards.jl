@@ -197,6 +197,44 @@ end
 ################################################################################
 
 """
+    sweep_windows(k1, k2, dk::Union{Real,Function}) → (centers, widths)
+
+Divides `[k1, k2]` into the sequence of scaling centers and local window
+half-widths used by [`compute_spectrum`](@ref) for an
+[`AcceleratedBasisSolver`](@ref): starting from `k1`, each center is advanced
+by `Δk = dk` (constant) or `Δk = dk(k0)` (adaptive) until `k2` is reached.
+
+Exposed so that other callers (e.g. diagnostic/benchmark plotting of the
+accelerated sweep) can reproduce the exact same window placement
+`compute_spectrum` uses, instead of re-deriving it independently.
+
+## Arguments
+* `k1`: Lower bound of the requested wavenumber interval.
+* `k2`: Upper bound of the requested wavenumber interval.
+* `dk`: Spacing between consecutive scaling centers, either a positive constant or a function of the current center.
+
+## Returns
+* `centers`: Vector of scaling centers covering `[k1, k2]`.
+* `widths`: Vector of local window half-widths, one per center.
+"""
+function sweep_windows(k1, k2, dk::Union{Real,Function})
+    T = promote_type(typeof(k1), typeof(k2))
+    k1T, k2T = T(k1), T(k2)
+    k1T < k2T || throw(ArgumentError("require k1 < k2"))
+    centers = T[]
+    widths = T[]
+    k0 = k1T
+    while k0 < k2T
+        Δk = T(dk isa Function ? dk(k0) : dk)
+        Δk > 0 || throw(ArgumentError("dk must be positive; received dk($k0) = $Δk"))
+        push!(centers, k0)
+        push!(widths, Δk)
+        k0 += Δk
+    end
+    return centers, widths
+end
+
+"""
     compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, k1, k2, dk::Union{Real,Function}; tol::Real = 1e-4, multithreaded::Bool = true, show_progress::Bool = true) → data::SpectralData
 
 Compute the spectrum of `billiard` over the wavenumber interval `[k1, k2]`
@@ -238,19 +276,9 @@ determined from the largest scaling center in the panel.
 * `data`: [`SpectralData`](@ref) containing the merged spectrum and, when requested by the solver, the associated eigenstates.
 """
 function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, k1, k2, dk::Union{Real,Function}; tol::Real = 1e-4, multithreaded::Bool = true, show_progress::Bool = true)
-    T = promote_type(typeof(k1), typeof(k2))
+    centers, widths = sweep_windows(k1, k2, dk)
+    T = eltype(centers)
     k1T, k2T = T(k1), T(k2)
-    k1T < k2T || throw(ArgumentError("require k1 < k2"))
-    centers = T[]
-    widths = T[]
-    k0 = k1T
-    while k0 < k2T
-        Δk = T(dk isa Function ? dk(k0) : dk)
-        Δk > 0 || throw(ArgumentError("dk must be positive; received dk($k0) = $Δk"))
-        push!(centers, k0)
-        push!(widths, Δk)
-        k0 += Δk
-    end
     ks = T[]
     ts = T[]
     control = Bool[]

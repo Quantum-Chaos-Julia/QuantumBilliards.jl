@@ -202,6 +202,14 @@ function tune_cheb_config(cs::CombinedFieldIntegralEquationSolver, pts::Boundary
     return ChebyshevConfig(_bim_numeric_type(cs); n_panels_h=tuned.n_panels_h, M_h=tuned.M_h, n_panels_j=tuned.n_panels_j, M_j=tuned.M_j, tol=tuned.tol, max_iter=tuned.max_iter, sampling_points=tuned.sampling_points, grow_panels=tuned.grow_panels, grow_M=tuned.grow_M, param_strategy=:manual)
 end
 
+# Chebyshev-accelerated matrix construction is not implemented for
+# CompositeBIMSolver (see `_construct_matrices_multi_k_cheb` below), so there
+# is no Chebyshev plan to tune. `compute_spectrum` still calls
+# `tune_cheb_config` unconditionally whenever `imag_k_check` is enabled
+# (independent of `use_chebyshev`), so this falls back to returning `cfg`
+# unchanged rather than erroring.
+tune_cheb_config(::CompositeBIMSolver, ::BoundaryPoints, k, cfg::ChebyshevConfig) = cfg
+
 function _construct_matrices_multi_k_cheb(cs::DoubleLayerPotentialSolver, pts::BoundaryPoints{T}, zj::Vector{ComplexF64}, cfg::ChebyshevConfig; multithreaded::Bool = true) where {T<:Real}
     T === Float64 || error("Chebyshev-accelerated Beyn evaluation requires Float64")
     N = length(pts); graded = _is_nontrivial_dlp_grading(pts); G = boundary_geom_cache(pts, graded); Rmat = zeros(T, N, N); kress_R!(Rmat)
