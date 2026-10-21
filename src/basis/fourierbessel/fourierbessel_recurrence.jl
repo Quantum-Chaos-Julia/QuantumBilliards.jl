@@ -41,8 +41,8 @@ and are constructed only when the cache is created from a basis with
 * `r`: Radial coordinates of the evaluation points.
 * `coeffs`: Normalized Taylor coefficients of `J_j(kr)`.
 * `ang`: Angular factors `T(jφ)` for every point and basis function.
-* `sinφ`: Values of `sin(φ)` when spatial-gradient data are requested, otherwise `nothing`.
-* `cosφ`: Values of `cos(φ)` when spatial-gradient data are requested, otherwise `nothing`.
+* `sinφ`: Values of `sin(φ + rot_angle)`, the sine of the global polar angle, when spatial-gradient data are requested, otherwise `nothing`.
+* `cosφ`: Values of `cos(φ + rot_angle)`, the cosine of the global polar angle, when spatial-gradient data are requested, otherwise `nothing`.
 * `dang`: Angular derivatives `∂_φ T(jφ)` when spatial-gradient data are requested, otherwise `nothing`.
 """
 struct FourierBesselTaylorCache{T<:Real} <: BasisCache
@@ -93,7 +93,7 @@ function FourierBesselTaylorCache(basis::FourierBessel{T}, k0::T, pts::AbstractA
     dang = basis.gradients ? Matrix{T}(undef, M, N) : nothing
     if basis.gradients
         @inbounds @simd for p = 1:M
-            sinφ[p], cosφ[p] = sincos(φ[p])
+            sinφ[p], cosφ[p] = sincos(φ[p] + basis.rot_angle)
         end
     end
     @use_threads multithreading=multithreaded for c = 1:N

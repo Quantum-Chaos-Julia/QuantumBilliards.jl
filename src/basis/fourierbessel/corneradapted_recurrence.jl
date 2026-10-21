@@ -61,8 +61,8 @@ and are constructed only when the cache is created with `gradients = true`.
 * `r`: Radial coordinates of the evaluation points.
 * `coeffs`: Normalized Taylor coefficients of `J_m(kr)`.
 * `sin_mφ`: Angular factors `sin(mφ)` for every point and basis function.
-* `sinφ`: Values of `sin(φ)` when spatial-gradient data are requested, otherwise `nothing`.
-* `cosφ`: Values of `cos(φ)` when spatial-gradient data are requested, otherwise `nothing`.
+* `sinφ`: Values of `sin(φ + rot_angle)`, the sine of the global polar angle, when spatial-gradient data are requested, otherwise `nothing`.
+* `cosφ`: Values of `cos(φ + rot_angle)`, the cosine of the global polar angle, when spatial-gradient data are requested, otherwise `nothing`.
 * `cos_mφ`: Angular factors `cos(mφ)` when spatial-gradient data are requested, otherwise `nothing`.
 """
 struct CornerAdaptedTaylorCache{T<:Real} <: BasisCache
@@ -118,7 +118,7 @@ constructed analytically from Bessel's differential equation. Only the first
 two coefficients require direct Bessel-function evaluations.
 
 The angular factors `sin(mφ)` required for basis evaluation are always cached.
-If `gradients = true`, the additional factors `sin(φ)`, `cos(φ)` and
+If `gradients = true`, the additional factors `sin(φ + rot_angle)`, `cos(φ + rot_angle)` and
 `cos(mφ)` required for Cartesian spatial gradients are also stored.
 
 ## Arguments
@@ -143,10 +143,10 @@ function CornerAdaptedTaylorCache(basis::CornerAdaptedFourierBessel{T}, k0::T, p
     sinφ = basis.gradients ? Vector{T}(undef, M) : nothing
     cosφ = basis.gradients ? Vector{T}(undef, M) : nothing
     cos_mφ = basis.gradients ? Matrix{T}(undef, M, N) : nothing
-    _polar_coords!(r, φ, basis.cs.local_map, pts, basis.rotation_angle_discontinuity)
+    _polar_coords!(r, φ, pts, basis.origin, basis.rot_angle, basis.rotation_angle_discontinuity)
     if basis.gradients
         @inbounds @simd for j = 1:M
-            sinφ[j], cosφ[j] = sincos(φ[j])
+            sinφ[j], cosφ[j] = sincos(φ[j] + basis.rot_angle)
         end
     end
     @use_threads multithreading=multithreaded for c = 1:N

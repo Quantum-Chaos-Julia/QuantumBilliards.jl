@@ -2,7 +2,6 @@ module QuantumBilliards
 using Bessels
 using SpecialFunctions
 using QuadGK
-using CoordinateTransformations, Rotations
 using LinearAlgebra, StaticArrays, CircularArrays
 using Optim
 using FFTW

@@ -1,21 +1,5 @@
 
 """
-CoordinateSystem
-
-`CoordinateSystem` is the abstract supertype for local coordinate frames used
-to evaluate basis functions and their gradients.
-
-## Description
-A `CoordinateSystem` bundles an origin, a rotation angle and the corresponding
-affine maps (and their inverses) needed to transform points between the global
-Cartesian frame and a local frame in which basis functions are naturally
-expressed, e.g. a Cartesian frame aligned with a symmetry axis, or a polar
-frame centered at a corner. Concrete subtypes are [`CartesianCS`](@ref) and
-[`PolarCS`](@ref).
-"""
-abstract type CoordinateSystem end
-
-"""
 AbsBasis
 
 `AbsBasis` is the abstract supertype for all basis representations used to

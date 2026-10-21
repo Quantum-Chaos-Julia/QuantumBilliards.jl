@@ -49,7 +49,7 @@ end
     @test b.symmetries isa Vector
     @test map(typeof, b.symmetries) == [YAxisReflection, XYAxisReflection, XAxisReflection]
     @test b.sym_qnumbers == [1.0, -1.0, -1.0]   # [sym_x, sym_x*sym_y, sym_y]
-    @test b.cs.origin == SVector(0.0, 0.0)
+    @test b.origin == SVector(0.0, 0.0)
 
     b0 = FourierBessel(4)
     @test isnothing(b0.symmetries) && isnothing(b0.sym_qnumbers)
@@ -72,8 +72,8 @@ end
 
     # Non-default origin without symmetry is allowed and stored.
     bo = FourierBessel(3; origin=SVector(0.3, -0.2), rot_angle=0.4)
-    @test bo.cs.origin == SVector(0.3, -0.2)
-    @test bo.cs.rot_angle == 0.4
+    @test bo.origin == SVector(0.3, -0.2)
+    @test bo.rot_angle == 0.4
 
     # Keyword storage and `uses_taylor` trait.
     bk = FourierBessel(3; use_taylor=false, taylor_degree=10, taylor_radius=0.25, taylor_tol=1e-9, gradients=true)
@@ -142,7 +142,7 @@ end
     @test (b2.orders, b2.trig) == QuantumBilliards.fb_modes(1, -1, 6)
     @test map(typeof, b2.symmetries) == map(typeof, b.symmetries)
     @test b2.sym_qnumbers == b.sym_qnumbers
-    @test b2.cs.origin == b.cs.origin && b2.cs.rot_angle == b.cs.rot_angle
+    @test b2.origin == b.origin && b2.rot_angle == b.rot_angle
     @test !b2.use_taylor && b2.taylor_degree == 10 && b2.taylor_radius == 0.25
     @test b2.taylor_tol == 1e-9 && b2.gradients
 
@@ -154,7 +154,7 @@ end
     bo = FourierBessel(3; origin=SVector(0.3, -0.2), rot_angle=0.4)
     bo2 = resize_basis(bo, billiard, 5, _FBT_K)
     @test isnothing(bo2.symmetries) && isnothing(bo2.sym_qnumbers)
-    @test bo2.cs.origin == SVector(0.3, -0.2) && bo2.cs.rot_angle == 0.4
+    @test bo2.origin == SVector(0.3, -0.2) && bo2.rot_angle == 0.4
     @test bo2.orders == QuantumBilliards.fb_modes(nothing, nothing, 5)[1]
 end
 

@@ -23,9 +23,6 @@ AcceleratedBasisSolver
 ```@docs
 make_triangle_and_basis
 adapt_basis
-CoordinateSystem
-CartesianCS
-PolarCS
 ```
 
 ## Basis

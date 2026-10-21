@@ -1,5 +1,4 @@
-using Bessels
-using CoordinateTransformations, Rotations, StaticArrays
+using Bessels, StaticArrays
 
 """
     fb_term(j::Int, trig::Integer, k::T, r::T, phi::T) where {T<:Real} → f::T
@@ -64,14 +63,15 @@ end
 end
 
 # f, ∂ₓf, ∂ᵧf for f = J_j(kr) T(jφ), with the r == 0 guard of the polar Jacobian.
-@inline function _fb_term_and_gradient(j::Int, trig::Integer, k::T, r::T, φ::T) where {T<:Real}
+# φ is the polar angle in the local frame, `rot_angle` the rotation of that frame.
+@inline function _fb_term_and_gradient(j::Int, trig::Integer, k::T, r::T, φ::T, rot_angle::T) where {T<:Real}
     x = k * r
     jv = Jv(j, x)
     dj = _fb_Jvp(j, x)
     s, c = sincos(j * φ)
     ang = trig > 0 ? c : s
     dang = trig > 0 ? -j * s : j * c
-    sφ, cφ = sincos(φ)
+    sφ, cφ = sincos(φ + rot_angle)
     invr = r == 0 ? zero(T) : inv(r)
     fr = k * dj * ang
     fφ = jv * dang
@@ -170,7 +170,8 @@ When `use_taylor = true`, compatible accelerated solvers may construct a
 additionally store the angular data required for Cartesian spatial gradients.
 
 ## Attributes
-* `cs`: Local [`PolarCS`](@ref) coordinate system centered at the origin of the basis.
+* `origin`: Origin of the local polar frame.
+* `rot_angle`: Rotation angle of the local polar frame.
 * `dim`: Number of basis functions.
 * `symmetries`: Reflection symmetries applied to the basis, or `nothing`.
 * `sym_qnumbers`: Quantum number for each entry of `symmetries`, or `nothing`.
@@ -192,7 +193,8 @@ The following functions can be evaluated for this type:
 - [`FourierBesselTaylorCache`](@ref)
 """
 struct FourierBessel{T<:Real} <: AbsBasis
-    cs::PolarCS{T}
+    origin::SVector{2,T}
+    rot_angle::T
     dim::Int
     symmetries::Union{Vector{BilliardGeometry.AbsReflection},Nothing}
     sym_qnumbers::Union{Vector{T},Nothing}
@@ -224,7 +226,7 @@ reflections act about the global origin.
 ## Keyword Arguments
 * `sym_x::Union{Int,Nothing} = nothing`: Character of the y-axis reflection (\$x\\to-x\$), `±1` or `nothing` for no symmetry.
 * `sym_y::Union{Int,Nothing} = nothing`: Character of the x-axis reflection (\$y\\to-y\$), `±1` or `nothing` for no symmetry.
-* `origin::SVector{2,<:Real} = SVector(0.0, 0.0)`: Origin of the local [`PolarCS`](@ref).
+* `origin::SVector{2,<:Real} = SVector(0.0, 0.0)`: Origin of the local polar frame.
 * `rot_angle::Real = 0.0`: Rotation angle of the local coordinate system.
 * `use_taylor::Bool = true`: Whether compatible accelerated solvers may use the analytic Taylor representation of the basis.
 * `taylor_degree::Int = 16`: Degree of the analytic Taylor expansion in the wavenumber.
@@ -268,8 +270,7 @@ function FourierBessel(dim::Int; sym_x::Union{Int,Nothing}=nothing, sym_y::Union
         sym_qnumbers = T[T(sym_x)]
     end
     orders, trig = fb_modes(sym_x, sym_y, dim)
-    cs = PolarCS(SVector{2,T}(origin), T(rot_angle))
-    return FourierBessel{T}(cs, dim, symmetries, sym_qnumbers, orders, trig, use_taylor, taylor_degree, T(taylor_radius), T(taylor_tol), gradients)
+    return FourierBessel{T}(SVector{2,T}(origin), T(rot_angle), dim, symmetries, sym_qnumbers, orders, trig, use_taylor, taylor_degree, T(taylor_radius), T(taylor_tol), gradients)
 end
 
 # Reflection characters (sym_x, sym_y) encoded by a symmetries/sym_qnumbers pair.
@@ -381,7 +382,7 @@ Return a [`FourierBessel`](@ref) basis resized to dimension `dim`, reusing
 """
 function resize_basis(basis::FourierBessel, billiard::Bi, dim::Int, k) where {Bi<:AbsBilliard}
     basis.dim == dim && return basis
-    return FourierBessel(dim, basis.symmetries, basis.sym_qnumbers; origin=basis.cs.origin, rot_angle=basis.cs.rot_angle,
+    return FourierBessel(dim, basis.symmetries, basis.sym_qnumbers; origin=basis.origin, rot_angle=basis.rot_angle,
                          use_taylor=basis.use_taylor, taylor_degree=basis.taylor_degree, taylor_radius=basis.taylor_radius,
                          taylor_tol=basis.taylor_tol, gradients=basis.gradients)
 end
@@ -391,7 +392,7 @@ end
     M = length(pts)
     r = Vector{T}(undef, M)
     φ = Vector{T}(undef, M)
-    _polar_coords!(r, φ, basis.cs.local_map, pts, zero(T))
+    _polar_coords!(r, φ, pts, basis.origin, basis.rot_angle, zero(T))
     return r, φ
 end
 
@@ -552,7 +553,7 @@ function gradient(basis::FourierBessel{T}, i::Int, k::T, pts::AbstractArray) whe
     dx = Vector{T}(undef, M)
     dy = Vector{T}(undef, M)
     @inbounds for p in 1:M
-        _, dx[p], dy[p] = _fb_term_and_gradient(j, τ, k, r[p], φ[p])
+        _, dx[p], dy[p] = _fb_term_and_gradient(j, τ, k, r[p], φ[p], basis.rot_angle)
     end
     return dx, dy
 end
@@ -587,7 +588,7 @@ function gradient(basis::FourierBessel{T}, indices::AbstractArray, k::T, pts::Ab
         cx = @view dB_dx[:, c]
         cy = @view dB_dy[:, c]
         @inbounds for p in 1:M
-            _, cx[p], cy[p] = _fb_term_and_gradient(j, τ, k, r[p], φ[p])
+            _, cx[p], cy[p] = _fb_term_and_gradient(j, τ, k, r[p], φ[p], basis.rot_angle)
         end
     end
     return dB_dx, dB_dy
@@ -622,7 +623,7 @@ function basis_and_gradient(basis::FourierBessel{T}, i::Int, k::T, pts::Abstract
     dx = Vector{T}(undef, M)
     dy = Vector{T}(undef, M)
     @inbounds for p in 1:M
-        bf[p], dx[p], dy[p] = _fb_term_and_gradient(j, τ, k, r[p], φ[p])
+        bf[p], dx[p], dy[p] = _fb_term_and_gradient(j, τ, k, r[p], φ[p], basis.rot_angle)
     end
     return bf, dx, dy
 end
@@ -659,7 +660,7 @@ function basis_and_gradient(basis::FourierBessel{T}, indices::AbstractArray, k::
         cx = @view dB_dx[:, c]
         cy = @view dB_dy[:, c]
         @inbounds for p in 1:M
-            bc[p], cx[p], cy[p] = _fb_term_and_gradient(j, τ, k, r[p], φ[p])
+            bc[p], cx[p], cy[p] = _fb_term_and_gradient(j, τ, k, r[p], φ[p], basis.rot_angle)
         end
     end
     return B, dB_dx, dB_dy
