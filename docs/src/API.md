@@ -32,6 +32,8 @@ PolarCS
 ```@docs
 RealPlaneWaves
 CornerAdaptedFourierBessel
+FourierBessel
+fb_modes
 resize_basis
 basis_fun
 dk_fun
@@ -39,6 +41,8 @@ gradient
 basis_and_gradient
 ca_fb
 ca_fb_dk
+fb_term
+fb_term_dk
 ```
 
 ## Solvers
