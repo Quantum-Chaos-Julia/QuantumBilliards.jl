@@ -27,7 +27,8 @@ basis functions (e.g. plane waves or corner-adapted Fourier-Bessel functions)
 at a fixed dimension `dim` and wavenumber. Solvers combine an `AbsBasis` with
 a boundary discretization to construct the matrices used to determine
 eigenvalues and eigenvectors. Concrete subtypes include
-[`RealPlaneWaves`](@ref) and [`CornerAdaptedFourierBessel`](@ref).
+[`RealPlaneWaves`](@ref), [`CornerAdaptedFourierBessel`](@ref) and
+[`FourierBessel`](@ref).
 
 ## API
 Every concrete subtype of `AbsBasis` is expected to implement:

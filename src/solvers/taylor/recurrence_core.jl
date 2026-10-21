@@ -54,6 +54,15 @@ end
     return v
 end
 
+# Evaluate the Taylor coefficients C[:, j, c] by Horner's rule at a real point δ.
+@inline function _horner(C::Array{T,3}, j::Int, c::Int, δ::T) where {T<:Real}
+    v::T = C[end, j, c]
+    @inbounds for l = size(C, 1) - 1:-1:1
+        v = muladd(v, δ, C[l, j, c])
+    end
+    return v
+end
+
 # Evaluate a Taylor polynomial and its first derivative simultaneously by
 # Horner's rule at a point δ.
 @inline function _horner_with_derivative(a::Vector{ComplexF64}, δ::Number)

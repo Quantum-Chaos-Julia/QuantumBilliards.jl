@@ -40,6 +40,9 @@ export RealPlaneWaves
 include("basis/fourierbessel/corneradapted.jl")
 include("basis/fourierbessel/corneradapted_recurrence.jl")
 export CornerAdaptedFourierBessel
+include("basis/fourierbessel/fourierbessel.jl")
+include("basis/fourierbessel/fourierbessel_recurrence.jl")
+export FourierBessel
 export resize_basis, basis_fun, dk_fun, gradient, basis_and_gradient 
 
 include("solvers/decompositions.jl")

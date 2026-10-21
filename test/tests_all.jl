@@ -92,7 +92,7 @@ function fr_geometries()
         (name="c3", b=C3Billiard(0.02), corners=false, holes=false, basis=true, exact=nothing, exact_area=nothing),
         (name="prosen", b=ProsenBilliard(0.02), corners=false, holes=false, basis=true, exact=nothing, exact_area=pi*(1+0.02^2/2)),
         (name="mushroom", b=MushroomBilliard(0.5,0.7), corners=true, holes=false, basis=false, exact=nothing, exact_area=pi/2+0.7),
-        (name="annular", b=AnnularBilliard(1.0,0.3), corners=false, holes=true, basis=false, exact=nothing, exact_area=pi*(1-0.3^2)),
+        (name="annular", b=AnnularBilliard(0.3,0.0), corners=false, holes=true, basis=false, exact=nothing, exact_area=pi*(1-0.3^2)),
         (name="sinai", b=SinaiBilliard(1.0,0.25), corners=true, holes=true, basis=false, exact=nothing, exact_area=4-pi*0.25^2),
         (name="square_holes", b=SquareWithinSquareBilliard(1.0), corners=true, holes=true, basis=false, exact=nothing, exact_area=4-2*0.25^2), ]
 end

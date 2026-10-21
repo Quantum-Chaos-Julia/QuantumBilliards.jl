@@ -234,6 +234,9 @@ function sweep_windows(k1, k2, dk::Union{Real,Function})
     return centers, widths
 end
 
+uses_taylor(::AbsBasis) = false
+uses_taylor(basis::Union{CornerAdaptedFourierBessel,RealPlaneWaves,FourierBessel}) = basis.use_taylor
+
 """
     compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, k1, k2, dk::Union{Real,Function}; tol::Real = 1e-4, multithreaded::Bool = true, show_progress::Bool = true) → data::SpectralData
 
@@ -284,7 +287,7 @@ function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billi
     control = Bool[]
     states = AbsState[]
     L = CompositeCurve(get_boundary_curves(billiard)).length
-    use_taylor = (basis isa CornerAdaptedFourierBessel || basis isa RealPlaneWaves) && basis.use_taylor
+    use_taylor = uses_taylor(basis)
     if use_taylor
         R = T(basis.taylor_radius)
         R > zero(T) || throw(ArgumentError("taylor_radius must be positive"))
