@@ -17,13 +17,13 @@
 #    rectangle, and with inside_only = false it must reproduce it on the whole grid box.
 #  * Unit circle: J0(j01 r) with j01 the first zero of J0 is the lowest Dirichlet mode. It is built from a
 #    FourierBessel basis (the j = 0 cosine term) with coefficient vector [1], both with and without reflection symmetries.
-#  * Layer potentials on a hand-built circle discretization (48 equispaced points, outward normals, unit tangents,
-#    weights 2 pi / 48). By Graf's addition theorem, for |x| = r < 1 and k = j01 (a zero of J0):
+#  * Layer potentials on a hand-built circle discretization (64 equispaced points, outward normals, unit tangents,
+#    weights 2 pi / 64). By Graf's addition theorem, for |x| = r < 1 and k = j01 (a zero of J0):
 #        single layer, u = d_n psi = -k J1(k) (constant):  1/4 sum Y0(k|x-q|) u ds = -J0(k r)
 #        double layer, mu = 1:                              -(i pi k / 2) H1(k) J0(k r)
 #        combined field, mu = 1:                            pi k J0(k r) (H0(k) + i H1(k))
-#    The discrete sums are trapezoid sums of a periodic analytic integrand; the aliasing error is of order r^48 and
-#    negligible for the test radii r <= 0.55.
+#    The discrete sums are trapezoid sums of a periodic analytic integrand; the aliasing error is of order r^64 and
+#    negligible for r <= 0.6 (the test points).
 # BIM wavefunctions use test-local solver stubs that only provide the type the reconstruction dispatches on (DLP, CFIE or
 # a generic SweepBIMSolver).
 # Helper definitions use the prefix `wf_` / `WF_`.
@@ -38,7 +38,7 @@ const WF_J02 = 5.520078110286311      # second zero of J0
 const WF_A, WF_B = 1.0, 0.6
 const WF_RECT = RectangleBilliard(WF_A, WF_B)
 const WF_CIRCLE = CircleBilliard(1.0)
-const WF_NODES = 48
+const WF_NODES = 64
 
 # Solver stubs: the reconstruction only dispatches on the solver type.
 struct wf_SweepStub <: QuantumBilliards.SweepBIMSolver end
@@ -559,7 +559,7 @@ end
         psi, x, y = wavefunction(st, WF_CIRCLE, solver; use_chebyshev=false)
         @test psi isa Matrix{Float64}
         @test size(psi) == (length(x), length(y))
-        inside = wf_quadrant_interior(x, y, 0.5)
+        inside = wf_quadrant_interior(x, y, 0.6)
         @test count(inside) > 4e4
         @test psi[inside] ≈ -wf_j0(x, y)[inside] atol = 1e-10         # psi = -J0(k r) for u = d_n J0
         @test all(psi[wf_disc_exterior(x, y)] .== 0)
@@ -569,14 +569,14 @@ end
     @testset "fundamental_domain = false covers the whole disc" begin
         psi, x, y = wavefunction(st, WF_CIRCLE, solver; use_chebyshev=false, fundamental_domain=false)
         @test x[1] ≈ -1.01 && x[end] ≈ 1.01
-        inside = wf_disc_interior(x, y, 0.5)
+        inside = wf_disc_interior(x, y, 0.6)
         @test psi[inside] ≈ -wf_j0(x, y)[inside] atol = 1e-10
         @test all(psi[wf_disc_exterior(x, y)] .== 0)
     end
 
     @testset "Chebyshev Hankel evaluation agrees with the analytic field" begin
         psi, x, y = wavefunction(st, WF_CIRCLE, solver; use_chebyshev=true)
-        inside = wf_quadrant_interior(x, y, 0.5)
+        inside = wf_quadrant_interior(x, y, 0.6)
         @test psi[inside] ≈ -wf_j0(x, y)[inside] atol = 1e-6
     end
 
@@ -592,7 +592,7 @@ end
 
     @testset "DLP: psi = D mu" begin
         psi, x, y = wavefunction(st, WF_CIRCLE, wf_DLPStub(); use_chebyshev=false)
-        inside = wf_quadrant_interior(x, y, 0.5)
+        inside = wf_quadrant_interior(x, y, 0.6)
         expected = -(im * pi * WF_J01 / 2) * hankelh1(1, WF_J01) .* wf_j0(x, y)
         @test psi isa Matrix{ComplexF64}
         @test psi[inside] ≈ expected[inside] atol = 1e-10
@@ -600,14 +600,14 @@ end
 
     @testset "CFIE: psi = -(D + i k S) mu" begin
         psi, x, y = wavefunction(st, WF_CIRCLE, wf_CFIEStub(); use_chebyshev=false)
-        inside = wf_quadrant_interior(x, y, 0.5)
+        inside = wf_quadrant_interior(x, y, 0.6)
         expected = pi * WF_J01 * (hankelh1(0, WF_J01) + im * hankelh1(1, WF_J01)) .* wf_j0(x, y)
         @test psi[inside] ≈ expected[inside] atol = 1e-10
     end
 
     @testset "DLP with Chebyshev Hankel evaluation" begin
         psi, x, y = wavefunction(st, WF_CIRCLE, wf_DLPStub(); use_chebyshev=true)
-        inside = wf_quadrant_interior(x, y, 0.5)
+        inside = wf_quadrant_interior(x, y, 0.6)
         expected = -(im * pi * WF_J01 / 2) * hankelh1(1, WF_J01) .* wf_j0(x, y)
         @test psi[inside] ≈ expected[inside] atol = 1e-6
     end
@@ -621,7 +621,7 @@ end
         Psi, x, y = wavefunction([s1, s2], WF_CIRCLE, solver; use_chebyshev=false, show_progress=false)
         @test length(Psi) == 2
         @test all(size(P) == (length(x), length(y)) for P in Psi)
-        inside = wf_quadrant_interior(x, y, 0.5)
+        inside = wf_quadrant_interior(x, y, 0.6)
         @test Psi[1][inside] ≈ -wf_j0(x, y, WF_J01)[inside] atol = 1e-10
         @test Psi[2][inside] ≈ -wf_j0(x, y, WF_J02)[inside] atol = 1e-10
     end
