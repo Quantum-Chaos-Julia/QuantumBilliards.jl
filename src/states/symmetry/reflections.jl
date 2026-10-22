@@ -63,12 +63,12 @@ function apply_symmetries_to_wavefunction(Psi, x_grid, y_grid, symmetries::Vecto
         # YAxisReflection: mirrors x (dim1)
         p = get_qnum(BilliardGeometry.YAxisReflection)
         Psi_ref = reverse(p .* Psi, dims=1)
-        return hcat(Psi_ref, Psi), vcat(-reverse(x_grid), x_grid), y_grid
+        return vcat(Psi_ref, Psi), vcat(-reverse(x_grid), x_grid), y_grid
     elseif has_x
         # XAxisReflection: mirrors y (dim2)
         p = get_qnum(BilliardGeometry.XAxisReflection)
         Psi_ref = reverse(p .* Psi, dims=2)
-        return vcat(Psi_ref, Psi), x_grid, vcat(-reverse(y_grid), y_grid)
+        return hcat(Psi_ref, Psi), x_grid, vcat(-reverse(y_grid), y_grid)
     else
         return Psi, x_grid, y_grid
     end
@@ -194,7 +194,7 @@ function apply_symmetries_to_boundary_points(pts::BoundaryPoints{T}, symmetries:
     if has_x && has_y
         # CCW order: Q1(base) → Q2(Y-reflect) → Q3(XY-reflect) → Q4(X-reflect)
         push_reflection!(get_sym(BilliardGeometry.YAxisReflection))  # Q1→Q2: reverse
-        push_reflection!(get_sym(BilliardGeometry.XYAxisReflection)) # Q2→Q3: preserve
+        push_reflection!(BilliardGeometry.XYAxisReflection(0))       # Q2→Q3: preserve; implied by X and Y
         push_reflection!(get_sym(BilliardGeometry.XAxisReflection))  # Q3→Q4: reverse
     elseif has_y
         # CCW order: Q1(base) → Q2(Y-reflect, reversed)

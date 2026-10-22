@@ -440,11 +440,11 @@ function wavefunction(state::S, billiard::AbsBilliard; b = 5.0, inside_only = tr
         if ~isnothing(symmetries)
             has_x = any(s -> s isa BilliardGeometry.XAxisReflection, symmetries)
             has_y = any(s -> s isa BilliardGeometry.YAxisReflection, symmetries)
-            if has_x
+            if has_y
                 x_grid = rectify_grid(x_grid)
                 nx = length(x_grid)
             end
-            if has_y
+            if has_x
                 y_grid = rectify_grid(y_grid)
                 ny = length(y_grid)
             end

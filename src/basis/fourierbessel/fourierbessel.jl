@@ -62,7 +62,8 @@ end
     return (Jv(j - 1, x) - Jv(j + 1, x)) / 2
 end
 
-# f, ∂ₓf, ∂ᵧf for f = J_j(kr) T(jφ), with the r == 0 guard of the polar Jacobian.
+# f, ∂ₓf, ∂ᵧf for f = J_j(kr) T(jφ). At r == 0 the polar Jacobian term J_j(kr)/r is replaced by its
+# limit (k/2 for j == 1, 0 otherwise), which gives the exact gradient at the origin.
 # φ is the polar angle in the local frame, `rot_angle` the rotation of that frame.
 @inline function _fb_term_and_gradient(j::Int, trig::Integer, k::T, r::T, φ::T, rot_angle::T) where {T<:Real}
     x = k * r
@@ -72,11 +73,13 @@ end
     ang = trig > 0 ? c : s
     dang = trig > 0 ? -j * s : j * c
     sφ, cφ = sincos(φ + rot_angle)
-    invr = r == 0 ? zero(T) : inv(r)
+    jv_over_r = _fb_J_over_r(j, k, r, jv)
     fr = k * dj * ang
-    fφ = jv * dang
-    return jv * ang, cφ * fr - sφ * invr * fφ, sφ * fr + cφ * invr * fφ
+    return jv * ang, cφ * fr - sφ * jv_over_r * dang, sφ * fr + cφ * jv_over_r * dang
 end
+
+# J_j(kr)/r, with its limit at r = 0.
+@inline _fb_J_over_r(j::Int, k::T, r::T, jv::T) where {T<:Real} = r == 0 ? (j == 1 ? k / 2 : zero(T)) : jv / r
 
 """
     fb_modes(sym_x::Union{Int,Nothing}, sym_y::Union{Int,Nothing}, dim::Int) → (orders, trig)::Tuple{Vector{Int},Vector{Int8}}
@@ -380,11 +383,13 @@ Return a [`FourierBessel`](@ref) basis resized to dimension `dim`, reusing
 ## Returns
 *  `basis_new` : `basis` itself if `basis.dim == dim`, otherwise a new basis with the first `dim` modes of the same symmetry sector, origin and Taylor settings.
 """
-function resize_basis(basis::FourierBessel, billiard::Bi, dim::Int, k) where {Bi<:AbsBilliard}
+function resize_basis(basis::FourierBessel{T}, billiard::Bi, dim::Int, k) where {T<:Real,Bi<:AbsBilliard}
     basis.dim == dim && return basis
-    return FourierBessel(dim, basis.symmetries, basis.sym_qnumbers; origin=basis.origin, rot_angle=basis.rot_angle,
-                         use_taylor=basis.use_taylor, taylor_degree=basis.taylor_degree, taylor_radius=basis.taylor_radius,
-                         taylor_tol=basis.taylor_tol, gradients=basis.gradients)
+    dim >= 1 || throw(ArgumentError("dim must be at least 1"))
+    sym_x, sym_y = _fb_axis_characters(basis.symmetries, basis.sym_qnumbers)
+    orders, trig = fb_modes(sym_x, sym_y, dim)
+    return FourierBessel{T}(basis.origin, basis.rot_angle, dim, basis.symmetries, basis.sym_qnumbers, orders, trig,
+                            basis.use_taylor, basis.taylor_degree, basis.taylor_radius, basis.taylor_tol, basis.gradients)
 end
 
 # Local polar coordinates of `pts` about the origin of `basis`.
@@ -533,8 +538,9 @@ Using the chain rule with the polar-to-Cartesian Jacobian,
 ```
 
 with \$\\partial_r f = k J_{j}'(kr)\\,T(j\\varphi)\$ and
-\$\\partial_\\varphi f = J_{j}(kr)\\,\\partial_\\varphi T(j\\varphi)\$. Points at
-the origin are assigned a zero gradient.
+\$\\partial_\\varphi f = J_{j}(kr)\\,\\partial_\\varphi T(j\\varphi)\$. At the origin the term
+\$J_j(kr)/r\$ is replaced by its limit (\$k/2\$ for \$j=1\$, zero otherwise), which gives the
+exact gradient there.
 
 ## Arguments
 * `basis`: The [`FourierBessel`](@ref) basis.

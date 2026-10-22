@@ -394,9 +394,7 @@ end
     @testset "return type" begin
         @test resize_basis(FourierBessel(3), billiard, 5, 1.0) isa FourierBessel{Float64}
         @test resize_basis(FourierBessel(3; sym_x=1), billiard, 5, 1.0) isa FourierBessel{Float64}
-        # Source finding: the (dim, symmetries, sym_qnumbers; kwargs...) constructor is not inferred to a concrete type,
-        # so resize_basis returns abstract `FourierBessel` to inference (RealPlaneWaves infers concretely).
-        @test_broken (try; @inferred(resize_basis(FourierBessel(3), billiard, 5, 1.0)); true; catch; false; end)
+        @test @inferred(resize_basis(FourierBessel(3), billiard, 5, 1.0)) isa FourierBessel{Float64}
     end
 end
 
@@ -443,8 +441,7 @@ end
         @test @inferred(_fb_Jvp(2, 1.5)) isa Float64
         @test @inferred(_fb_Jvp(2, 1.5f0)) isa Float32
         @test @inferred(Jvp(2, 1.5)) isa Float64
-        # Source finding: `Jvp` multiplies by the Float64 literal 0.5, so a Float32 argument returns Float64.
-        @test_broken @inferred(Jvp(2, 1.5f0)) isa Float32
+        @test @inferred(Jvp(2, 1.5f0)) isa Float32
         @test Jvp(2, 1.5f0) ≈ Jvp(2, 1.5) atol = 1e-6
         @test _fb_Jvp(2, 1.5f0) ≈ Float32(_fb_Jvp(2, 1.5)) atol = 1e-6
     end
@@ -844,14 +841,11 @@ end
         @test Bs == Bv[:, [5, 2]] && sx == dX[:, [5, 2]] && sy == dY[:, [5, 2]]
     end
 
-    @testset "origin: documented zero gradient, true limit approached nearby" begin
+    @testset "origin: exact limit of the gradient" begin
         b = FourierBessel(4)                                               # modes (0,cos), (1,cos), (1,sin), (2,cos)
         dX, dY = gradient(b, 1:4, k, [SVector(0.0, 0.0)])
-        @test all(iszero, dX[:, [1, 3, 4]]) && all(iszero, dY)
-        # Source finding: the r == 0 guard only drops the 1/r angular term, so the radial term k J_1'(0) cos(0) = k/2
-        # survives for the (1, cos) mode, contradicting the docstring ("points at the origin are assigned a zero
-        # gradient") and the Taylor-cache path, which returns exactly zero there.
-        @test_broken iszero(dX[1, 2])
+        @test all(iszero, dX[:, [1, 3, 4]]) && iszero(dY[1, 1]) && iszero(dY[1, 2]) && iszero(dY[1, 4])
+        @test dX[1, 2] ≈ k / 2 && dY[1, 3] ≈ k / 2
         # Near the origin J_1(kr) cos φ ≈ k x / 2, so ∇ ≈ (k/2, 0); J_1(kr) sin φ ≈ k y / 2, so ∇ ≈ (0, k/2).
         gx, gy = gradient(b, 2, k, [SVector(1e-8, 0.0)])
         @test gx[1] ≈ k / 2 atol = 1e-6

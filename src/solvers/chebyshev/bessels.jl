@@ -307,8 +307,8 @@ end
 #    below the Chebyshev cutoff, evaluate the special function directly.
 # 3. Otherwise evaluate the stored panel polynomial with Clenshaw's algorithm.
 @inline function eval_h(pl::ChebHankelPlanH,pidx::Int32,t::Float64,r::Float64)
-    if pidx==0
-        z=pl.k*r; az=abs(z)
+    z=pl.k*r; az=abs(z)
+    if pidx==0 || az<hankel_z_chebyshev_cutoff
         if pl.ν==0
             return az<hankel_z_chebyshev_cutoff_small_z ? _small_h0_series(z) : SpecialFunctions.besselh(0,pl.κ,z)
         elseif pl.ν==1

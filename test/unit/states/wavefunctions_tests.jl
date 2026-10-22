@@ -499,9 +499,7 @@ end
 
 @testset "wavefunction - single-axis reflection basis on the Limacon" begin
     # XAxisReflection constrains the parity in y and unfolds along y; the Limacon fundamental domain is the upper half
-    # (x from about -0.71 to 1.31, y > 0). wavefunction rectifies the grid that matches the reflection that is present
-    # incorrectly: an XAxisReflection crops the x grid to x > 0 (cutting off the left part of the Limacon) and leaves the
-    # y grid unrectified; the unfolded field is built from `vcat` along x while the y grid is doubled.
+    # (x from about -0.71 to 1.31, y > 0). wavefunction rectifies the y grid and leaves x unrectified.
     lim = LimaconBilliard(0.3)
     basis = RealPlaneWaves(3; sym_y=1)
     @test basis.symmetries[1] isa BilliardGeometry.XAxisReflection
@@ -509,11 +507,11 @@ end
 
     psi, x, y = wavefunction(st, lim)
     @test size(psi) == (length(x), length(y))
-    @test_broken minimum(x) < -0.5          # the grid covers the whole fundamental domain in x
-    @test_broken minimum(y) > 0             # the y grid is rectified, since y is the reflected direction
+    @test minimum(x) < -0.5          # the grid covers the whole fundamental domain in x
+    @test minimum(y) > 0             # the y grid is rectified, since y is the reflected direction
 
     psi_u, xu, yu = wavefunction(st, lim; fundamental_domain=false)
-    @test_broken size(psi_u) == (length(xu), length(yu))
+    @test size(psi_u) == (length(xu), length(yu))
 end
 
 @testset "wavefunction(::BasisState)" begin

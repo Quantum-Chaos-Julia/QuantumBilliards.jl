@@ -42,7 +42,7 @@ corner correction) reaches `state`.
 function k_at_state(state, billiard::AbsBilliard; fundamental::Bool=true)
     curves = fundamental ? get_boundary_curves(billiard) : full_boundary(billiard)
     A = fundamental ? fundamental_area(billiard) : area(billiard)
-    L = _boundary_length(curves)
+    L = _boundary_length(curves)::typeof(A)
     angles = corner_angles(billiard; fundamental)
     return isempty(angles) ? k_at_state(state, A, L) : k_at_state(state, A, L, angles)
 end

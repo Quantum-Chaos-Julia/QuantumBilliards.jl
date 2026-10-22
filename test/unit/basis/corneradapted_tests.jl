@@ -75,9 +75,6 @@ function ca_same_basis(a, b)
            (b.use_taylor, b.taylor_degree, b.taylor_radius, b.taylor_tol, b.gradients)
 end
 
-# Whether building the basis with `f` throws an ArgumentError (used with @test_broken for missing validation).
-ca_throws_argument(f) = try; f(); false; catch e; e isa ArgumentError; end
-
 @testset "CornerAdaptedFourierBessel type" begin
     @test CornerAdaptedFourierBessel <: AbsBasis
     @test !isabstracttype(CornerAdaptedFourierBessel)
@@ -272,15 +269,14 @@ end
         @test_throws MethodError CornerAdaptedFourierBessel(4, π / 3, (0.0, 0.0), 0.0)         # the origin is an SVector{2}
     end
 
-    @testset "invalid dimension, corner angle and Taylor settings are accepted without validation (source finding)" begin
-        # Source finding: unlike FourierBessel, the constructors only validate `taylor_degree`. A non-positive `dim`, a corner
-        # angle of 0 (ν = Inf) or below 0 (ν < 0), and a non-positive `taylor_radius` or `taylor_tol` build a basis silently.
-        @test_broken ca_throws_argument(() -> CornerAdaptedFourierBessel(0, π / 3, o, 0.0))
-        @test_broken ca_throws_argument(() -> CornerAdaptedFourierBessel(-2, π / 3, o, 0.0))
-        @test_broken ca_throws_argument(() -> CornerAdaptedFourierBessel(4, 0.0, o, 0.0))
-        @test_broken ca_throws_argument(() -> CornerAdaptedFourierBessel(4, -1.0, o, 0.0))
-        @test_broken ca_throws_argument(() -> CornerAdaptedFourierBessel(4, π / 3, o, 0.0; taylor_radius=-1.0))
-        @test_broken ca_throws_argument(() -> CornerAdaptedFourierBessel(4, π / 3, o, 0.0; taylor_tol=0.0))
+    @testset "invalid dimension, corner angle and Taylor settings are rejected" begin
+        @test_throws ArgumentError CornerAdaptedFourierBessel(0, π / 3, o, 0.0)
+        @test_throws ArgumentError CornerAdaptedFourierBessel(-2, π / 3, o, 0.0)
+        @test_throws ArgumentError CornerAdaptedFourierBessel(4, 0.0, o, 0.0)
+        @test_throws ArgumentError CornerAdaptedFourierBessel(4, -1.0, o, 0.0)
+        @test_throws ArgumentError CornerAdaptedFourierBessel(4, π / 3, o, 0.0; taylor_radius=-1.0)
+        @test_throws ArgumentError CornerAdaptedFourierBessel(4, π / 3, o, 0.0; taylor_tol=0.0)
+        @test_throws ArgumentError CornerAdaptedFourierBessel(4, π / 3, o, 0.0; taylor_degree=0)
     end
 end
 
@@ -709,11 +705,11 @@ end
         @test all(iszero, dk_fun(ca_make(4, 2π / 3), 1:4, k, [SVector(0.0, 0.0)]))
     end
 
-    @testset "the corner of a re-entrant wedge (source finding)" begin
-        # Source finding: for corner angles above π the first order ν < 1 gives Jvp(ν, 0) = Inf, and r Jvp = 0 * Inf = NaN at
-        # the corner. The limit is r ∂_x J_ν(x) → 0 (J_ν ~ x^ν), which the Taylor-cache path returns.
+    @testset "the corner of a re-entrant wedge" begin
+        # For corner angles above π the first order ν < 1 gives Jvp(ν, 0) = Inf; r Jvp is guarded to 0 at r == 0
+        # (the limit r ∂_x J_ν(x) → 0 since J_ν ~ x^ν).
         d = dk_fun(ca_make(4, 3π / 2), 1:4, k, [SVector(0.0, 0.0)])
-        @test_broken iszero(d[1, 1])
+        @test iszero(d[1, 1])
         @test all(iszero, d[:, 2:4])
     end
 

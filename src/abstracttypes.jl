@@ -143,7 +143,7 @@ elsewhere).
 ## API
 The following functions can be evaluated for any `AcceleratedBIMSolver`:
 - `evaluate_points`
-- `construct_matrices`
+- `construct_matrices` (only for solvers that assemble matrices directly; `CORKSolver` assembles its Chebyshev polynomial internally)
 - `solve`
 - [`solve_wavenumber`](@ref)
 - `solve_spectrum`

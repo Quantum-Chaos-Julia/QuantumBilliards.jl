@@ -6,7 +6,7 @@
 #   src/spectra/spectralutils.jl             (compute_spectrum(::ExpandedBIMSolver, ...) window, centre and merge handling)
 # overlap_and_merge_ebim! and _local_gap are covered in spectra/spectralutils_tests.jl and not repeated here; constructor validation is
 # covered in solvers/solverconstructors_tests.jl. The ExpandedBIMSolver in the current source has no `_argmin_finite` helper: solve_wavenumber
-# selects the candidate with a plain `argmin`, so the NaN handling is tested through solve_wavenumber (see the @test_broken below).
+# solve_wavenumber selects the nearest finite candidate and skips non-finite ones, so the NaN handling is tested through solve_wavenumber.
 # The symmetry-reduced Taylor panel is checked on a rectangle sector; the full composite Taylor panel is left to integration coverage.
 #
 # Matrix derivatives. The kernel derivatives of the DLP / CFIE / composite Fredholm matrices are compared with central finite differences
@@ -497,12 +497,16 @@ end
     end
 
     @testset "a NaN candidate does not hide the genuine nearest candidate" begin
-        # Plain `argmin` treats NaN as the minimum, so the NaN candidate is selected (source problem: the former `_argmin_finite`
-        # helper that skipped non-finite candidates no longer exists). The correct result is the nearest finite candidate 10.15.
+        # Non-finite candidates are skipped; the nearest finite candidate 10.15 is returned.
         solver = eb_scripted((k0, nl) -> (ComplexF64[NaN, 10.15, 9.0], [1e-3, 2e-3, 0.1]))
         kb, tb = solve_wavenumber(solver, eb_circle, k, dk; multithreaded=false)
-        @test_broken kb == 10.15 + 0im
-        @test_broken tb == 2e-3
+        @test kb == 10.15 + 0im
+        @test tb == 2e-3
+    end
+
+    @testset "all candidates NaN gives (nothing, nothing)" begin
+        solver = eb_scripted((k0, nl) -> (ComplexF64[NaN, NaN], [1e-3, 2e-3]))
+        @test solve_wavenumber(solver, eb_circle, k, dk; multithreaded=false) === (nothing, nothing)
     end
 end
 

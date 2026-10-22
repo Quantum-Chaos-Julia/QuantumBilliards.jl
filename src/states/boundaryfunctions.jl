@@ -9,9 +9,9 @@ directly.
 The boundary normal derivative computed by [`boundary_function`](@ref) can be
 `NaN` at points where the boundary normal is not smooth (e.g. at corners of
 the domain). Each such entry is replaced by the average of its two nearest
-neighbours along the arc-length parametrization of the boundary. Since the
-boundary is a closed curve, the first sample's neighbours are its next entry
-and the last entry of `u`.
+finite neighbours along the arc-length parametrization of the boundary. Since the
+boundary is a closed curve, the neighbours wrap around: the first sample's
+neighbours are its next entry and the last entry of `u`, and vice versa.
 
 ## Arguments
 * `u`: The boundary function values to regularize, modified in place.
@@ -21,13 +21,22 @@ and the last entry of `u`.
 """
 function regularize!(u)
     idx = findall(isnan, u)
+    (isempty(idx) || length(idx) == length(u)) && return nothing
+    n = length(u)
+    bad = falses(n)
+    bad[idx] .= true
     for i in idx
-        if i != 1
-            u[i] = (u[i+1] + u[i-1])/2.0
-        else
-            u[i] = (u[i+1] + u[end])/2.0
+        l = mod1(i - 1, n)
+        while bad[l]
+            l = mod1(l - 1, n)
         end
+        r = mod1(i + 1, n)
+        while bad[r]
+            r = mod1(r + 1, n)
+        end
+        u[i] = (u[l] + u[r]) / 2
     end
+    return nothing
 end
 
 """

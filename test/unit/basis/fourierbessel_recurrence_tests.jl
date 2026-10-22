@@ -278,11 +278,26 @@ end
         end
     end
 
-    @testset "the cached spatial gradient is exactly zero at r = 0" begin
+    @testset "the cached spatial gradient at r = 0 is the exact limit: (k/2, 0) for (1, cos), (0, k/2) for (1, sin), zero otherwise" begin
+        expected_x = [basis.orders[c] == 1 && basis.trig[c] > 0 ? k / 2 : 0.0 for c in 1:basis.dim]
+        expected_y = [basis.orders[c] == 1 && basis.trig[c] < 0 ? k / 2 : 0.0 for c in 1:basis.dim]
         cx, cy = gradient_matrices(cache, basis, k)
-        @test all(iszero, cx) && all(iszero, cy)
+        @test vec(cx) ≈ expected_x && vec(cy) ≈ expected_y
         _, bx, by = basis_and_gradient_matrices(cache, basis, k)
-        @test all(iszero, bx) && all(iszero, by)
+        @test vec(bx) ≈ expected_x && vec(by) ≈ expected_y
+        gx, gy = gradient(basis, 1:basis.dim, k, [SVector(0.0, 0.0)])
+        @test vec(gx) ≈ expected_x && vec(gy) ≈ expected_y
+    end
+
+    @testset "rotated frame: the (1, cos) gradient at the origin points along the rotated x axis" begin
+        θ = 0.4
+        rb = FourierBessel(3; rot_angle=θ, gradients=true)
+        rcache = FourierBesselTaylorCache(rb, k0, [SVector(0.0, 0.0)])
+        cx, cy = gradient_matrices(rcache, rb, k)
+        @test cx[1, 2] ≈ k / 2 * cos(θ) && cy[1, 2] ≈ k / 2 * sin(θ)
+        @test cx[1, 3] ≈ -k / 2 * sin(θ) && cy[1, 3] ≈ k / 2 * cos(θ)
+        gx, gy = gradient(rb, 2, k, [SVector(0.0, 0.0)])
+        @test gx[1] ≈ cx[1, 2] && gy[1] ≈ cy[1, 2]
     end
 end
 

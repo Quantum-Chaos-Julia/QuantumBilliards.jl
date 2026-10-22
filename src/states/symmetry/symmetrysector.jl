@@ -206,26 +206,34 @@ function _resolve_bim_reflection_sector(gens::Vector{Pair{BilliardGeometry.AbsSy
     return BilliardGeometry.CompositeReflection(generators), Tuple(characters)
 end
 
-# Recover the cyclic sector `s` whose character on the registered element g^m
+# Recover every cyclic sector `s` whose character on the registered element g^m
 # equals `char`. The finite set s=0,...,N-1 is searched directly because the
 # phase is defined modulo 2π; dividing the principal argument by `m` does not
-# in general invert the map s ↦ sm mod N.
-function _match_rotation_sector(gen::BilliardGeometry.NFoldRotation, char::ComplexF64)
+# in general invert the map s ↦ sm mod N. Several sectors match when m and N
+# share a factor.
+function _matching_rotation_sectors(gen::BilliardGeometry.NFoldRotation, char::ComplexF64)
     order = gen.order
-    for s in 0:order-1
-        isapprox(cis(2*pi*s*gen.m/order), char; atol=1e-9) && return s
-    end
-    throw(ArgumentError("Character $char is not a valid NFoldRotation irrep value for m=$(gen.m), order=$order"))
+    return [s for s in 0:order-1 if isapprox(cis(2*pi*s*gen.m/order), char; atol=1e-9)]
+end
+
+# Smallest sector matching `char` on the element g^m.
+function _match_rotation_sector(gen::BilliardGeometry.NFoldRotation, char::ComplexF64)
+    sectors = _matching_rotation_sectors(gen, char)
+    isempty(sectors) && throw(ArgumentError("Character $char is not a valid NFoldRotation irrep value for m=$(gen.m), order=$(gen.order)"))
+    return first(sectors)
 end
 
 # Resolve several registered elements of one cyclic rotation group to a common
-# sector index. All elements must have the same group order and independently
-# recover the same sector, ensuring that their characters define one consistent
-# one-dimensional representation.
+# sector index. All elements must have the same group order; the sector is the
+# intersection of the sectors compatible with each element's character, which
+# must be a single index to define one consistent one-dimensional representation.
 function _resolve_bim_rotation_sector(gens::Vector{Pair{BilliardGeometry.AbsSymmetry,ComplexF64}})
     order = gens[1].first.order
     all(g -> g.first.order == order, gens) || throw(ArgumentError("Mismatched NFoldRotation orders within one SymmetrySector"))
-    sectors = [_match_rotation_sector(gen, char) for (gen, char) in gens]
-    all(==(sectors[1]), sectors) || throw(ArgumentError("Inconsistent rotation sector recovered across sym_ids: $sectors"))
-    return gens[1].first, (sectors[1],)
+    candidates = [_matching_rotation_sectors(gen, char) for (gen, char) in gens]
+    any(isempty, candidates) && throw(ArgumentError("Character is not a valid NFoldRotation irrep value for the registered elements: candidate sectors $candidates"))
+    sectors = reduce(intersect, candidates)
+    isempty(sectors) && throw(ArgumentError("Inconsistent rotation sector recovered across sym_ids: $candidates"))
+    length(sectors) == 1 || throw(ArgumentError("Ambiguous rotation sector: the registered elements are compatible with sectors $sectors"))
+    return gens[1].first, (only(sectors),)
 end

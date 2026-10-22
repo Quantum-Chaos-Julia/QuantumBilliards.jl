@@ -204,9 +204,7 @@ end
 
     @testset "argument types" begin
         @test_throws MethodError k_range_for_states(r, 1.5, 10)
-        # Finding: `area`/`fundamental_area`/`corner_angles` (BilliardGeometry) infer as `Any`,
-        # so the billiard-level `k_at_state` (and `k_range_for_states`) are not type-stable.
-        @test_broken @inferred(k_range_for_states(r, 10, 100)) isa Tuple{Float64,Float64}
+        @test @inferred(k_range_for_states(r, 10, 100)) isa Tuple{Float64,Float64}
         @test k_range_for_states(r, 10, 100) isa Tuple{Float64,Float64}
     end
 end

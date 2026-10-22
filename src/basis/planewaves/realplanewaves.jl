@@ -296,6 +296,9 @@ function RealPlaneWaves(dim::Int; sym_x::Union{Int,Nothing}=nothing, sym_y::Unio
                        taylor_radius::Real=0.5, taylor_tol::Real=1e-11)
     # Build symmetries vector and quantum numbers based on sym_x and sym_y
     # Automatically adjust angle_arc and angle_shift based on symmetries if not provided
+    for s in (sym_x, sym_y)
+        (isnothing(s) || abs(s) == 1) || throw(ArgumentError("symmetry quantum numbers must be ±1 or nothing"))
+    end
     
     if isnothing(sym_x) && isnothing(sym_y)
         # No symmetries - fast path

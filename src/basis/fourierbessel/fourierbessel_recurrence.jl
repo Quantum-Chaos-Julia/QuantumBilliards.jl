@@ -254,8 +254,10 @@ wavenumber `k`.
 For `r > 0`, the radial spatial derivative satisfies
 \$\\partial_r J_j(kr) = (k/r)\\partial_k J_j(kr)\$, so the Taylor series and its
 derivative yield both the radial and angular parts of the gradient without
-additional Bessel-function evaluations. Points at the origin are assigned a
-zero gradient. The cache must have been constructed with `gradients = true`.
+additional Bessel-function evaluations. At the origin the gradient is the exact
+limit: `(k/2)(cos α, sin α)` for the `(1, cos)` mode and `(k/2)(-sin α, cos α)`
+for the `(1, sin)` mode, with `α` the rotation of the local frame, and zero for
+all other modes. The cache must have been constructed with `gradients = true`.
 
 ## Arguments
 * `cache`: [`FourierBesselTaylorCache`](@ref) containing the Taylor coefficients and spatial-gradient data.
@@ -283,8 +285,11 @@ function gradient_matrices(cache::FourierBesselTaylorCache{T}, basis::FourierBes
         @inbounds for p = 1:M
             r = cache.r[p]
             if r == zero(T)
-                dB_dx[p, c] = zero(T)
-                dB_dy[p, c] = zero(T)
+                jvr = basis.orders[c] == 1 ? k / 2 : zero(T)
+                a = cache.ang[p, c]
+                da = dang[p, c]
+                dB_dx[p, c] = jvr * (cosφ[p] * a - sinφ[p] * da)
+                dB_dy[p, c] = jvr * (sinφ[p] * a + cosφ[p] * da)
             else
                 y, dy = _horner_with_derivative(cache.coeffs, p, c, δ)
                 invr = inv(r)
@@ -341,8 +346,10 @@ function basis_and_gradient_matrices(cache::FourierBesselTaylorCache{T}, basis::
             a = cache.ang[p, c]
             B[p, c] = y * a
             if r == zero(T)
-                dB_dx[p, c] = zero(T)
-                dB_dy[p, c] = zero(T)
+                jvr = basis.orders[c] == 1 ? k / 2 : zero(T)
+                da = dang[p, c]
+                dB_dx[p, c] = jvr * (cosφ[p] * a - sinφ[p] * da)
+                dB_dy[p, c] = jvr * (sinφ[p] * a + cosφ[p] * da)
             else
                 invr = inv(r)
                 fr = k * dy * invr * a

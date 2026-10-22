@@ -208,7 +208,7 @@ components in `pts` (used by [`CompositeBIMSolver`](@ref) and composite
 `GlobalCornerGrading` boundaries).
 """
 function boundary_matrix_size(pts::Vector{BoundaryPoints{T}}) where T<:Real
-    return sum(length, pts)
+    return sum(length, pts; init=0)
 end
 
 """
@@ -304,7 +304,7 @@ function boundary_coords(billiard::Bi, samplers::Vector{AbsSampler}, Ns::Vector{
     for i in eachindex(curves)
         crv = curves[i]; t, dt = sample_points(samplers[i], Ns[i])
         xy = curve(crv, t); ds = norm.(tangent(crv, t)) .* dt
-        normal = domain_gradient_vector(crv, xy); normal .= normal ./ norm(normal)
+        normal = domain_gradient_vector(crv, xy); normal .= normal ./ norm.(normal)
         xy_all[i] = xy; normal_all[i] = normal; s_all[i] = arc_length(crv, t) .+ L0; ds_all[i] = ds
         L0 += crv.length
     end
@@ -336,7 +336,7 @@ function boundary_coords(billiard::Bi, fourier_sampler::FourierNodes, M) where {
     for i in eachindex(curves)
         crv = curves[i]; L = crv.length; t = ts[i]; dt = dts[i]
         xy = curve(crv, t); ds = norm.(tangent(crv, t)) .* dt
-        normal = domain_gradient_vector(crv, xy); normal .= normal ./ norm(normal)
+        normal = domain_gradient_vector(crv, xy); normal .= normal ./ norm.(normal)
         xy_all[i] = xy; normal_all[i] = normal; s_all[i] = arc_length(crv, t) .+ L0; ds_all[i] = ds
         L0 += L
     end

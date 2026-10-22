@@ -243,11 +243,17 @@ end
         @test st.u === u
     end
 
-    @testset "partial state with vec = nothing through the documented keyword constructor" begin
-        # The signature accepts vec::Union{Nothing,Vector{K}}, but with vec === nothing K is only constrained by the
-        # keyword argument `u` (or not at all), so the call fails with UndefVarError(:K).
-        @test_broken (BIMEigenstate(2.5, nothing, 0.1, ES_PTS; u=[-1.0, -2.0]); true)
-        @test_broken (BIMEigenstate(2.5, nothing, 0.1, ES_PTS); true)
+    @testset "partial state with vec = nothing through the keyword constructor" begin
+        # K is inferred from `u`, else Complex{T}.
+        u = [-1.0, -2.0]
+        st = BIMEigenstate(2.5, nothing, 0.1, ES_PTS; u)
+        @test st.u === u
+        @test st.vec === nothing
+        @test st isa BIMEigenstate{Float64,Float64}
+        st2 = BIMEigenstate(2.5, nothing, 0.1, ES_PTS)
+        @test st2.vec === nothing
+        @test st2.u === nothing
+        @test st2 isa BIMEigenstate{ComplexF64,Float64}
     end
 end
 

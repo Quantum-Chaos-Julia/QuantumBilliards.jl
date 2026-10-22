@@ -419,16 +419,19 @@ end
         end
     end
 
-    # SOURCE FINDING: for an even order N the element g^(N/2) has the same character for sectors s and s + N/2,
-    # so `_match_rotation_sector` returns the smallest sector (s mod N/2) for it, while g^1 returns s itself.
-    # `_resolve_bim_rotation_sector` then sees different sectors across the sym_ids and throws "Inconsistent
-    # rotation sector" for the valid sectors s = N/2, ..., N-1 (C4: s = 2, 3). The sector should be recovered
-    # jointly from all registered elements (or from the m = 1 element alone).
-    @testset "C4: sectors s = N/2..N-1 resolve (known failure)" begin
+    # For an even order N the element g^(N/2) has the same character for sectors s and s + N/2, so the sector is
+    # recovered jointly from all registered elements.
+    @testset "C4: sectors s = N/2..N-1 resolve" begin
         star4 = StarBilliard(1.0, 0.3, 4)
         for s in 2:3
-            @test_broken ss_resolves_to_sector(star4, s)
+            @test ss_resolves_to_sector(star4, s)
         end
+    end
+
+    @testset "ambiguous sector from a single element g^(N/2)" begin
+        gens = ss_gens(NFoldRotation(4, 2, 1) => -1)
+        err = try _resolve_bim_symmetry(gens) catch e; e end
+        @test err isa ArgumentError && occursin("Ambiguous rotation sector", err.msg)
     end
 end
 

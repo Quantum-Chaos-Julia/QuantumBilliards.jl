@@ -25,15 +25,10 @@
 # eigenstates_tests.jl) and the recomputation path goes through a test-local solver stub.
 # Helper definitions use the prefix `bf_` / `BF_`.
 #
-# SOURCE FINDINGS (the corresponding correct assertions are @test_broken below):
-#  1. boundary_coords (solvers/boundarypoints.jl) normalises with `normal .= normal ./ norm(normal)`, which is the norm
-#     of the whole vector of SVectors (sqrt(N) for unit vectors) and not an elementwise normalisation. All normals of
-#     basis boundary points have length 1/sqrt(N_curve) instead of 1, so boundary_function(::BasisEigenstate) returns
-#     u / sqrt(N_curve) and the Rellich value is off by 1/N_curve.
-#  2. regularize! reads u[i+1] for a NaN in the last entry (BoundsError instead of the periodic neighbour), and NaNs in
-#     adjacent entries are not removed.
-#  3. On a multi-curve boundary (rectangle fundamental domain, two walls) the FourierNodes weights of boundary_coords
-#     sum to one node spacing less than the boundary length (observed: 1.596875 instead of 1.6 at M = 512).
+# SOURCE FINDINGS:
+#  (fixed) boundary_coords normalises the normals per element, and regularize! uses periodic neighbours and the nearest
+#  finite neighbours on both sides; the corresponding assertions are plain @test below. The FourierNodes weights of
+#  boundary_coords sum to the boundary length on multi-curve boundaries.
 
 using StaticArrays
 using LinearAlgebra: norm, dot
@@ -170,13 +165,15 @@ end
         @test u32 isa Vector{Float32} && u32 == Float32[1, 2, 3]
     end
 
-    @testset "known failures: last entry and adjacent NaNs" begin
-        # The curve is closed, so the neighbours of the last entry are u[end-1] and u[1]; the code reads u[end+1].
+    @testset "periodic neighbours: last entry and adjacent NaNs" begin
+        # The curve is closed, so the neighbours of the last entry are u[end-1] and u[1].
         u = [1.0, 2.0, 3.0, NaN]
-        @test_broken (regularize!(u); u[end] ≈ 2.0)
-        # NaNs in neighbouring entries propagate through the average.
+        regularize!(u)
+        @test u[end] ≈ 2.0
+        # NaNs in neighbouring entries are replaced using the nearest finite neighbours.
         v = [1.0, NaN, NaN, 4.0]
-        @test_broken (regularize!(v); !any(isnan, v))
+        regularize!(v)
+        @test !any(isnan, v)
     end
 end
 
@@ -263,14 +260,14 @@ end
         @test us ≈ u && ss == s && ns ≈ nrm
     end
 
-    @testset "known failures: normals of the boundary points are not unit vectors" begin
+    @testset "normals of the boundary points are unit vectors" begin
         _, pts, _ = _basis_boundary_function_pts(st, BF_CIRCLE)
-        @test_broken all(n -> isapprox(norm(n), 1; atol=1e-8), pts.normal)
-        @test_broken isapprox(u[1], -st.k * besselj(1, st.k); rtol=1e-8)       # d_n J0(k r) at r = 1
+        @test all(n -> isapprox(norm(n), 1; atol=1e-8), pts.normal)
+        @test isapprox(u[1], -st.k * besselj(1, st.k); rtol=1e-8)       # d_n J0(k r) at r = 1
         # For psi = J0(k r) / (sqrt(pi) |J1(k)|) (unit norm on the disc) the quarter-arc Rellich value is 1/4.
         c = 1 / (sqrt(pi) * abs(besselj(1, st.k)))
         _, _, nrm_unit = boundary_function(BasisEigenstate(st.k, [c], st.ten, st.basis), BF_CIRCLE)
-        @test_broken isapprox(nrm_unit, 1 / 4; rtol=1e-6)
+        @test isapprox(nrm_unit, 1 / 4; rtol=1e-6)
     end
 end
 
@@ -298,7 +295,7 @@ end
     ratio = u[away] ./ cos.(θ[away])
     @test maximum(abs, ratio .- ratio[1]) <= 1e-8 * abs(ratio[1])
     # d_n psi = k J0(k) cos(theta) at r = 1 (J1(k) = 0)
-    @test_broken isapprox(ratio[1], st.k * besselj(0, st.k); rtol=1e-8)
+    @test isapprox(ratio[1], st.k * besselj(0, st.k); rtol=1e-8)
 end
 
 @testset "boundary_function - rectangle modes, D2 unfolding" begin
@@ -328,12 +325,11 @@ end
         @test u == u2 && s == pts.s && nrm == nrm2
     end
 
-    @testset "known failure: the normals of a multi-curve boundary are scaled per curve" begin
+    @testset "multi-curve boundary: unit normals, quadrature weights sum to the boundary length" begin
         st, _ = bf_rect_mode(1, 1)
         _, pts, _ = _basis_boundary_function_pts(st, BF_RECT)
-        @test_broken all(n -> isapprox(norm(n), 1; atol=1e-8), pts.normal)
-        # the quadrature weights of the two walls miss one node spacing in total (sum(ds) = 6.3875 instead of 6.4 at M = 512)
-        @test_broken isapprox(sum(pts.ds), 4 * (BF_A + BF_B); rtol=1e-9)
+        @test all(n -> isapprox(norm(n), 1; atol=1e-8), pts.normal)
+        @test isapprox(sum(pts.ds), 4 * (BF_A + BF_B); rtol=1e-9)
     end
 end
 

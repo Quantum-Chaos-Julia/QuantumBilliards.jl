@@ -896,7 +896,9 @@ function solve_wavenumber(solver::ExpandedBIMSolver, billiard::Bi, k, dk; multit
     pts = evaluate_points(solver, billiard, k)
     ks, ts = solve(solver, pts, k, nreq; multithreaded)
     isempty(ks) && return nothing, nothing
-    q::Int = argmin(abs.(real.(ks) .- k))
+    d = abs.(real.(ks) .- k)
+    q::Int = argmin(i -> isfinite(d[i]) ? d[i] : Inf, eachindex(d))
+    isfinite(d[q]) || return nothing, nothing
     return ks[q], ts[q]
 end
 

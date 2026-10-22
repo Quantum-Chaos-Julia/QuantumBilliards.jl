@@ -181,9 +181,8 @@ end
     bp2 = BoundaryPoints([SVector(Float64(i), 1.0) for i in 1:5])
     @test boundary_matrix_size(bp1) == 3
     @test boundary_matrix_size([bp1, bp2]) == 8
-    # SOURCE BUG (boundary_matrix_size(::Vector{BoundaryPoints})): `sum(length, pts)` throws on an empty vector
-    # (no `init`), unlike boundary_s / component_offsets which handle the empty case.
-    @test_broken boundary_matrix_size(BoundaryPoints{Float64}[]) == 0
+    # the empty vector is handled like in boundary_s / component_offsets
+    @test boundary_matrix_size(BoundaryPoints{Float64}[]) == 0
     @test @inferred(boundary_matrix_size([bp1, bp2])) == 8
 end
 
@@ -324,10 +323,8 @@ end
     @test all(bp.s[(offs[2]+1):offs[3]] .> curves[1].length)
     @test bp.s[end] < curves[1].length + curves[2].length
 
-    # SOURCE BUG (boundary_coords): `normal .= normal ./ norm(normal)` divides by the 2-norm of the whole
-    # vector of normals instead of normalizing each one, so stored normals have length 1/sqrt(N_curve).
-    # Compare `normal ./ norm.(normal)` used in evaluate_points(::DecompositionMethodSolver, ...).
-    @test_broken all(isapprox.(norm.(bp.normal), 1.0; atol=1e-12))
+    # normals are normalised per element
+    @test all(isapprox.(norm.(bp.normal), 1.0; atol=1e-12))
 end
 
 @testset "boundary_coords normals on a circular arc" begin
@@ -418,6 +415,5 @@ end
     @test flatten_boundary_ds([bp1, bp2]) == flatten_boundary_components([BoundaryPoints(bp1.xy; normal=fill(SVector(0.0, 1.0), 2), ds=bp1.ds), BoundaryPoints(bp2.xy; normal=fill(SVector(0.0, 1.0), 3), ds=bp2.ds)]).ds
     @test sum(flatten_boundary_ds([bp1, bp2])) ≈ sum(bp1.ds) + sum(bp2.ds)
     @test @inferred(flatten_boundary_ds([bp1, bp2])) isa Vector{Float64}
-    # SOURCE BUG (flatten_boundary_ds): inherits the empty-vector failure of boundary_matrix_size.
-    @test_broken isempty(flatten_boundary_ds(BoundaryPoints{Float64}[]))
+    @test isempty(flatten_boundary_ds(BoundaryPoints{Float64}[]))
 end

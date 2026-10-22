@@ -6,8 +6,8 @@
 #                                       _cheb_nthreads_buf)
 # All expected values are SpecialFunctions.besselh/besselj evaluations, exact Chebyshev identities
 # T_m(t) = cos(m acos t), or analytic panel geometry. Plans are tiny (a handful of panels, no BIM matrices).
-# eval_h's mid-range cutoff fidelity (|z| < hankel_z_chebyshev_cutoff inside the panelized interval) is
-# checked as @test_broken: the current eval_h only falls back to direct evaluation for pidx == 0.
+# eval_h's mid-range cutoff fidelity (|z| < hankel_z_chebyshev_cutoff inside the panelized interval) is checked for eval_h only:
+# it evaluates directly below the cutoff even when pidx != 0 (the multi-k variants still only fall back for pidx == 0).
 
 using SpecialFunctions
 using QuantumBilliards: plan_h, plan_j, panel_t, panel_and_geom, eval_h, eval_j, eval_h_multi_ks!, eval_j_multi_ks!,
@@ -395,10 +395,7 @@ end
             ref = besselh(1, 1, k_small*r)
             abs(eval_h(pl, p, τ, r) - ref)/abs(ref)
         end
-        # SOURCE BUG (eval_h in src/solvers/chebyshev/bessels.jl): the comment promises direct evaluation when |z|
-        # stays below hankel_z_chebyshev_cutoff, but only `pidx == 0` triggers a fallback, so the degree-8 panel
-        # polynomial is used where H₁⁽¹⁾ ~ 1/z is hard to interpolate (relative error ~1e-2).
-        @test_broken err < 1e-9
+        @test err < 1e-9
     end
 
     @testset "type stability" begin

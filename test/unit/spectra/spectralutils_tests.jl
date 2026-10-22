@@ -179,13 +179,11 @@ end
     end
 
     @testset "overlapping spectra are deduplicated" begin
-        # `append!` passes kl = data1.k[end] > kr = data2.k[1] to `overlap_and_merge!`, whose
-        # window (kl-tol, kr+tol) is then empty, so nothing is matched and duplicates survive.
-        # Finding: src/spectra/spectralutils.jl, `Base.append!(::SpectralData, ::SpectralData)`.
+        # The overlap window of `append!` is (data2.k[1], data1.k[end]); the near-duplicates 2.0/2.0001 and 3.0/3.0001 merge.
         d1 = mk([1.0, 2.0, 3.0], [1e-3, 1e-3, 1e-3])
         d2 = mk([2.0001, 3.0001, 4.0], [1e-4, 1e-4, 1e-3])
         append!(d1, d2)
-        @test_broken length(d1.k) == 4
+        @test length(d1.k) == 4
     end
 end
 
@@ -466,9 +464,7 @@ end
     @test weyl_window_count(b, k, 0.0) == 0.0
     @test weyl_window_count(b, k, dk) > 0
     @test weyl_window_count(b, k, 2dk) > 2 * weyl_window_count(b, k, dk)                    # grows quadratically
-    # Finding: `area`/`fundamental_area` (BilliardGeometry) infer as `Any` for RectangleBilliard
-    # (Base.return_types(area, (typeof(b),)) == [Any]), so billiard-level Weyl helpers are not type-stable.
-    @test_broken @inferred(weyl_window_count(b, k, dk)) isa Float64
+    @test @inferred(weyl_window_count(b, k, dk)) isa Float64
 end
 
 @testset "weyl_window_width" begin
@@ -482,7 +478,7 @@ end
     @test wfull < w                                                        # larger area -> narrower window
     @test weyl_window_width(b, 20.0, m) < w                                # density grows with k
     @test weyl_window_width(b, k, 2m) > w
-    @test_broken @inferred(weyl_window_width(b, k, m)) isa Float64   # same `area` instability as weyl_window_count
+    @test @inferred(weyl_window_width(b, k, m)) isa Float64
 end
 
 @testset "plan_weyl_windows" begin

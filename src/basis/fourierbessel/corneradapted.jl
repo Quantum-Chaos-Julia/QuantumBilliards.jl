@@ -65,8 +65,10 @@ J_{\\nu}'(r) = \\tfrac{1}{2}\\left(J_{\\nu-1}(r) - J_{\\nu+1}(r)\\right).
 function Jvp(nu,r::T) where {T<:Real}
     j_minus=Jv(nu-one(T),r)
     j_plus=Jv(nu+one(T),r)
-    return 0.5*(j_minus-j_plus)
+    return (j_minus-j_plus)/2
 end
+
+@inline _r_Jvp(nu,x,r)=iszero(r) ? zero(r) : r*Jvp(nu,x)
 
 """
     ca_fb_dk(nu, k, r, phi) → df
@@ -91,7 +93,7 @@ to `k` via the chain rule gives:
 ## Returns
 *  `df` : Value of \$\\partial f/\\partial k\$.
 """
-ca_fb_dk(nu,k,r,phi)=r*Jvp(nu,k*r)*sin(nu*phi)
+ca_fb_dk(nu,k,r,phi)=_r_Jvp(nu,k*r,r)*sin(nu*phi)
 
 """
     CornerAdaptedFourierBessel{T,Sy} <: AbsBasis
@@ -189,7 +191,7 @@ data can be enabled with `gradients`.
 * `basis`: A [`CornerAdaptedFourierBessel`](@ref) basis with no attached symmetries.
 """
 function CornerAdaptedFourierBessel(dim::Int64, corner_angle::T, origin::SVector{2,T}, rot_angle::T; rotation_angle_discontinuity = zero(T), use_taylor::Bool = true, taylor_degree::Int = 16, taylor_radius::T = T(0.5), taylor_tol::T = T(1e-11), gradients::Bool = false) where {T<:Real}
-    taylor_degree >= 1 || throw(ArgumentError("taylor_degree must be at least 1"))
+    _check_corner_adapted_args(dim, corner_angle, taylor_degree, taylor_radius, taylor_tol)
     nu = T(pi) / corner_angle
     return CornerAdaptedFourierBessel{T,Nothing}(origin, rot_angle, dim, corner_angle, nu, nothing, rotation_angle_discontinuity, use_taylor, taylor_degree, taylor_radius, taylor_tol, gradients)
 end
@@ -229,9 +231,18 @@ data can be enabled with `gradients`.
 * `basis`: A [`CornerAdaptedFourierBessel`](@ref) basis with the specified origin, rotation and symmetries.
 """
 function CornerAdaptedFourierBessel(dim::Int64, corner_angle::T, origin::SVector{2,T}, rot_angle::T, symmetry::Union{Vector{<:BilliardGeometry.AbsReflection},Nothing}; rotation_angle_discontinuity = zero(T), use_taylor::Bool = true, taylor_degree::Int = 16, taylor_radius::T = T(0.5), taylor_tol::T = T(1e-11), gradients::Bool = false) where {T<:Real}
-    taylor_degree >= 1 || throw(ArgumentError("taylor_degree must be at least 1"))
+    _check_corner_adapted_args(dim, corner_angle, taylor_degree, taylor_radius, taylor_tol)
     nu = T(pi) / corner_angle
     return CornerAdaptedFourierBessel{T,Nothing}(origin, rot_angle, dim, corner_angle, nu, symmetry, rotation_angle_discontinuity, use_taylor, taylor_degree, taylor_radius, taylor_tol, gradients)
+end
+
+function _check_corner_adapted_args(dim, corner_angle, taylor_degree, taylor_radius, taylor_tol)
+    dim >= 1 || throw(ArgumentError("dim must be at least 1"))
+    corner_angle > 0 || throw(ArgumentError("corner_angle must be positive"))
+    taylor_degree >= 1 || throw(ArgumentError("taylor_degree must be at least 1"))
+    taylor_radius > 0 || throw(ArgumentError("taylor_radius must be positive"))
+    taylor_tol > 0 || throw(ArgumentError("taylor_tol must be positive"))
+    return nothing
 end
 
 """
@@ -371,7 +382,7 @@ corner, and the term [`ca_fb_dk`](@ref) is evaluated with angular order `nu * i`
     _polar_coords!(r,φ,pts,basis.origin,basis.rot_angle,basis.rotation_angle_discontinuity)
     dk=Vector{T}(undef,M)
     @inbounds @simd for j in 1:M
-        dk[j]=r[j]*Jvp(m,k*r[j])*sin(m*φ[j])
+        dk[j]=_r_Jvp(m,k*r[j],r[j])*sin(m*φ[j])
     end
     return dk
 end
@@ -411,7 +422,7 @@ corner once, and the term [`ca_fb_dk`](@ref) is evaluated with angular order
         m=ν*indices[c]
         col=@view dB_dk[:,c]
         @inbounds @simd for j in 1:M
-            col[j]=r[j]*Jvp(m,k*r[j])*sin(m*φ[j])
+            col[j]=_r_Jvp(m,k*r[j],r[j])*sin(m*φ[j])
         end
     end
     return dB_dk

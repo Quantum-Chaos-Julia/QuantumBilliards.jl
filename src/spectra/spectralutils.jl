@@ -106,7 +106,7 @@ function Base.append!(data1::SpectralData{T}, data2::SpectralData; tol::Real=1e-
     if data1.solver isa ExpandedBIMSolver
         overlap_and_merge_ebim!(k1c, data1.ten, k2c, data2.ten, data1.control; tol=T(tol), states_left=data1.states, states_right=data2.states)
     else
-        kl, kr = data1.k[end], data2.k[1]
+        kl, kr = data2.k[1], data1.k[end]
         overlap_and_merge!(k1c, data1.ten, k2c, data2.ten, data1.control, kl, kr; tol, states_left=data1.states, states_right=data2.states)
     end
     empty!(data1.k); append!(data1.k, real.(k1c)); empty!(data1.k_im); append!(data1.k_im, imag.(k1c))
@@ -784,7 +784,7 @@ function compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; multithreade
         states = nothing
         @maybe_showprogress show_progress for i in eachindex(intervals)
             a, b = intervals[i]; k0 = (a+b)/2; dk = b-a; pts = evaluate_points(solver, billiard, k0)
-            ki, ti, X = solve_vectors(solver, pts, k0, dk; multithreaded, p)
+            ki, ti, X = solve_vectors(solver, pts, k0, dk; multithreaded, p, expected=weyl_window_count(billiard, k0 - dk/2, dk; fundamental))
             keep = findall(j -> begin
                 x = real(ki[j])
                 a<=x && (i==length(intervals) ? x<=k2T : x<b) && k1T<=x
@@ -799,7 +799,7 @@ function compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; multithreade
     end
     @maybe_showprogress show_progress for i in eachindex(intervals)
         a, b = intervals[i]; k0 = (a+b)/2; dk = b-a; pts = evaluate_points(solver, billiard, k0)
-        ki, ti = solve(solver, pts, k0, dk; multithreaded, p)
+        ki, ti = solve(solver, pts, k0, dk; multithreaded, p, expected=weyl_window_count(billiard, k0 - dk/2, dk; fundamental))
         keep = findall(j -> begin
             x = real(ki[j])
             a<=x && (i==length(intervals) ? x<=k2T : x<b) && k1T<=x

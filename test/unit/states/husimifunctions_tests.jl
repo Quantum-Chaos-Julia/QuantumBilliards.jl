@@ -23,10 +23,6 @@
 # not affect the Husimi density of a single-curve boundary, since H is normalised to sum 1.
 # Helper definitions use the prefix `hu_` / `HU_`.
 #
-# FINDINGS (no source change): the general quadrature husimi_function(k, s, ds, u, L, qs, ps) maps q into [L, 2L) but the
-# periodic extension s_ext ends at 2L, so for q > L - w / sqrt(k) the upper part of the Gaussian window is cut off (rows near
-# q = L are wrong; the uniform fast path is unaffected). Checks on the general path use the interior rows (hu_interior) and
-# the full-range checks are @test_broken.
 # FINDINGS (no source change): the batched forms return (Hs, ps, qs) while the single-state forms return (H, qs, ps);
 # the batched basis form drops states that throw, silently. Both are current documented/observed behaviour and are pinned below.
 # The single-axis reflection path was checked through boundary_function in boundaryfunctions_tests.jl (Limacon) and is
@@ -76,14 +72,6 @@ hu_expected(f, qs, ps) = (E = [f(q, p) for q in qs, p in ps]; E ./ sum(E))
 
 # Largest deviation relative to the largest entry of the expected density.
 hu_err(H, E) = maximum(abs, H .- E) / maximum(E)
-
-# Rows of a density with q <= L - w / sqrt(k), renormalised to sum 1. The general quadrature truncates the window for the
-# remaining rows (source finding, see the broken tests); the interior rows are exact.
-function hu_interior(H, qs, k, L; w=7.0)
-    m = qs .<= L - w / sqrt(k)
-    Hm = H[m, :]
-    return Hm ./ sum(Hm), qs[m]
-end
 
 # Common properties of a Poincare-Husimi density.
 function hu_check_density(H, qs, ps)
@@ -297,7 +285,7 @@ end
     s, ds, L = hu_uniform_grid(Float64, 256)
     u = cos.(k * p0 .* s)
     f = (q, p) -> hu_cos_density(k, p0, q, p)
-    qs = [0.3, 1.1, 2.9, 4.0, 4.6]                                   # all below L - w / sqrt(k) = 4.72, see the broken test below
+    qs = [0.3, 1.1, 2.9, 4.0, 4.6, 5.7]                              # includes q within w / sqrt(k) of L
     ps = collect(range(-1, 1; length=41))
 
     @testset "analytic density on arbitrary q and p, grids returned as given" begin
@@ -324,16 +312,12 @@ end
     @testset "agrees with the fast uniform evaluator on the same grid" begin
         Hf, qf, pf = _husimi_uniform_arclength(k, s, ds, u, L; full_p=true)
         Hg, _, _ = husimi_function(k, s, ds, u, L, qf, pf; full_p=true)
-        keep = qf .<= L - 7 / sqrt(k)
-        Gk, Fk = Hg[keep, :], Hf[keep, :]
-        @test Gk ./ sum(Gk) ≈ Fk ./ sum(Fk) atol = 1e-10 * maximum(Fk ./ sum(Fk))     # each density is normalised over its own rows
+        @test Hg ≈ Hf atol = 1e-10 * maximum(Hf)
     end
 
     @testset "the Gaussian window is not truncated near q = L" begin
-        # The general quadrature shifts q into [L, 2L) while the periodic extension of s ends at 2L, so for q > L - w / sqrt(k)
-        # the upper part of the window is cut off and the density deviates from the analytic one (source finding).
         H, qo, po = husimi_function(k, s, ds, u, L, [5.7], ps; full_p=true)
-        @test_broken hu_err(H, hu_expected(f, qo, po)) < 1e-8
+        @test hu_err(H, hu_expected(f, qo, po)) < 1e-8
     end
 
     @testset "full_p = false argument checks" begin
@@ -358,17 +342,15 @@ end
         @test qs[1] == 0 && qs[end] < L
         @test all(diff(qs) .≈ qs[2] - qs[1]) && qs[2] - qs[1] <= σ / 10
         @test length(ps) == 2 * ceil(Int, 10 * sqrt(k)) + 1
-        Hi, qi = hu_interior(H, qs, k, L)
+        Hi, qi = H, qs
         hu_check_constant(Hi, qi, ps, k)
-        @test_broken maximum(abs, H .- H[1:1, :]) <= 1e-8 * maximum(H)           # rows with q > L - w sigma lose part of the window
+        @test maximum(abs, H .- H[1:1, :]) <= 1e-8 * maximum(H)
     end
 
     @testset "cos(k p0 s): analytic density with interference" begin
         H, qs, ps = husimi_function(k, s, ds, cos.(k * p0 .* s), L)
         @test H ≈ reverse(H; dims=2) atol = 1e-12 * maximum(H)
-        Hi, qi = hu_interior(H, qs, k, L)
-        @test hu_err(Hi, hu_expected((q, p) -> hu_cos_density(k, p0, q, p), qi, ps)) < 1e-6
-        @test_broken hu_err(H, hu_expected((q, p) -> hu_cos_density(k, p0, q, p), qs, ps)) < 1e-6
+        @test hu_err(H, hu_expected((q, p) -> hu_cos_density(k, p0, q, p), qs, ps)) < 1e-6
     end
 end
 
@@ -379,11 +361,9 @@ end
     H, qs, ps = husimi_function(k, s, ds, cos.(k * p0 .* s), L)
     @test qs[1] == 0 && all(diff(qs) .≈ qs[2] - qs[1])                # the general path builds equispaced boundary positions
     hu_check_density(H, qs, ps)
-    Hi, qi = hu_interior(H, qs, k, L)
-    @test hu_err(Hi, hu_expected((q, p) -> hu_cos_density(k, p0, q, p), qi, ps)) < 1e-6
+    @test hu_err(H, hu_expected((q, p) -> hu_cos_density(k, p0, q, p), qs, ps)) < 1e-6
     Hc, qc, pc = husimi_function(k, s, ds, ones(256), L)
-    Hci, qci = hu_interior(Hc, qc, k, L)
-    hu_check_constant(Hci, qci, pc, k; var=false)
+    hu_check_constant(Hc, qc, pc, k; var=false)
 end
 
 @testset "husimi_function - Float32" begin
@@ -416,8 +396,7 @@ end
 
     @testset "constant normal derivative gives the analytic Gaussian in p, independent of q" begin
         hu_check_density(H, qs, ps)
-        Hi, qi = hu_interior(H, qs, k, 2pi)
-        hu_check_constant(Hi, qi, ps, k; var=false)
+        hu_check_constant(H, qs, ps, k; var=false)
         @test ps[argmax(H[1, :])] ≈ 0 atol = 1e-12                    # concentrated at normal incidence p = 0
     end
 
@@ -441,8 +420,7 @@ end
         @test husimi_function(st, HU_CIRCLE; full_p=true)[1] ≈ H atol = 1e-12 * maximum(H)
         @test husimi_function(st, HU_CIRCLE; multithreaded=false)[1] ≈ H atol = 1e-12 * maximum(H)
         Hb, qb, _ = husimi_function(st, HU_CIRCLE; b=3000.0)
-        Hbi, qbi = hu_interior(Hb, qb, k, 2pi)
-        hu_check_constant(Hbi, qbi, ps, k; var=false)
+        hu_check_constant(Hb, qb, ps, k; var=false)
         Hw, _, pw = husimi_function(st, HU_CIRCLE; w=1.0)
         @test hu_err(Hw, H) > 1e-3                                    # a narrow window truncates the Gaussian
     end
@@ -455,12 +433,11 @@ end
     hu_check_density(H, qs, ps)
     @test H ≈ reverse(H; dims=2) atol = 1e-12 * maximum(H)            # real state
     # u = A cos(theta) = A cos(k p1 s) with p1 = 1/k, theta = s on the unit circle: H(q, p) is the cos plane-wave density.
-    # The q-marginal (two Gaussians) cannot be used on the interior rows, the interference term only averages out over a full period.
+    # The q-marginal (two Gaussians) cannot be used, the interference term only averages out over a full period.
     p1 = 1 / k
-    Hi, qi = hu_interior(H, qs, k, 2pi)
     # the boundary nodes enter with their cumulative weights (one node spacing offset, 0.003 rad), which perturbs the
     # density at the 1e-3 level
-    @test hu_err(Hi, hu_expected((q, p) -> hu_cos_density(k, p1, q, p), qi, ps)) < 5e-3
+    @test hu_err(H, hu_expected((q, p) -> hu_cos_density(k, p1, q, p), qs, ps)) < 5e-3
     @test husimi_function(st, HU_CIRCLE; full_p=true)[1] ≈ H atol = 1e-12 * maximum(H)
 end
 
@@ -493,16 +470,14 @@ end
         st = hu_bim_state(HU_J01, fill(-HU_J01 * besselj(1, HU_J01), 512), hu_pts(s, ds))
         H, qs, ps = husimi_function(st, HU_CIRCLE, hu_SweepStub())
         hu_check_density(H, qs, ps)
-        Hi, qi = hu_interior(H, qs, st.k, 2pi)
-        hu_check_constant(Hi, qi, ps, st.k; var=false)
+        hu_check_constant(H, qs, ps, st.k; var=false)
     end
 
     @testset "missing u is recomputed through the kernel of the solver" begin
         s, ds, _ = hu_graded_grid(512)
         st = BIMEigenstate{Float64,Float64}(HU_J01, 0.0, nothing, 1e-9, hu_pts(s, ds), nothing, nothing)
         H, qs, ps = husimi_function(st, HU_CIRCLE, hu_SweepStub())    # the stub returns a constant u
-        Hi, qi = hu_interior(H, qs, st.k, 2pi)
-        hu_check_constant(Hi, qi, ps, st.k; var=false)
+        hu_check_constant(H, qs, ps, st.k; var=false)
     end
 
     @testset "several states: Hs, ps, qs, each equal to the single-state result" begin

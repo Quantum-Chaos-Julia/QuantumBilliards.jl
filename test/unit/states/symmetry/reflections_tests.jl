@@ -150,12 +150,7 @@ end
     @test P === Psi && px === xg && py === yg
 end
 
-# Single-axis unfolding. Documented behaviour: "the grid is unfolded across that axis". The returned grids are
-# correct (YAxisReflection doubles x, XAxisReflection doubles y), but the returned Psi is joined along the wrong
-# dimension: Y-only gives size (nx, 2ny) and X-only gives (2nx, ny), so size(full_Psi) != (length(full_x), length(full_y)).
-# SOURCE FINDING in apply_symmetries_to_wavefunction: the `has_y` branch uses `hcat` (joins dim 2) after reversing
-# dims=1, and the `has_x` branch uses `vcat` (joins dim 1) after reversing dims=2; the join dims must be swapped,
-# i.e. Y-only: vcat(reverse(p .* Psi, dims=1), Psi); X-only: hcat(reverse(p .* Psi, dims=2), Psi).
+# Single-axis unfolding: YAxisReflection doubles x, XAxisReflection doubles y.
 @testset "apply_symmetries_to_wavefunction - single axis" begin
     xg = [0.1, 0.25, 0.4]
     yg = [0.2, 0.5]
@@ -174,20 +169,20 @@ end
         @test py == vcat(-reverse(yg), yg)
     end
 
-    @testset "YAxisReflection: values on the unfolded grid (known failure)" begin
+    @testset "YAxisReflection: values on the unfolded grid" begin
         f(x, y) = x^3 * y^2                                                    # pY = -1
         Psi = [f(x, y) for x in xg, y in yg]
         P, px, py = apply_symmetries_to_wavefunction(Psi, xg, yg, [rf_Y], [-1.0])
-        @test_broken size(P) == (length(px), length(py))
-        @test_broken P == [f(x, y) for x in px, y in py]
+        @test size(P) == (length(px), length(py))
+        @test P == [f(x, y) for x in px, y in py]
     end
 
-    @testset "XAxisReflection: values on the unfolded grid (known failure)" begin
+    @testset "XAxisReflection: values on the unfolded grid" begin
         f(x, y) = x^2 * y^3                                                    # pX = -1
         Psi = [f(x, y) for x in xg, y in yg]
         P, px, py = apply_symmetries_to_wavefunction(Psi, xg, yg, [rf_X], [-1.0])
-        @test_broken size(P) == (length(px), length(py))
-        @test_broken P == [f(x, y) for x in px, y in py]
+        @test size(P) == (length(px), length(py))
+        @test P == [f(x, y) for x in px, y in py]
     end
 end
 
@@ -335,19 +330,13 @@ end
         @test length(full32.xy) == 4N
     end
 
-    # SOURCE FINDING in apply_symmetries_to_boundary_points: the XY copy is fetched from `symmetries` by type
-    # (`get_sym(XYAxisReflection)`), so a symmetry list holding only the generators (Y, X) -- the form accepted by
-    # apply_symmetries_to_boundary_function and the wavefunction unfolding -- fails with the opaque
-    # "ArgumentError: invalid index: nothing". The XY element is implied by X and Y and should be derived.
-    @testset "generator-only list (Y, X) without an XYAxisReflection entry (known failure)" begin
-        ok = try
-            full = apply_symmetries_to_boundary_points(pts, BilliardGeometry.AbsReflection[rf_Y, rf_X], billiard)
-            length(full.xy) == 4N
-        catch err
-            err isa ArgumentError || rethrow()
-            false
-        end
-        @test_broken ok
+    @testset "generator-only list (Y, X) without an XYAxisReflection entry" begin
+        full = apply_symmetries_to_boundary_points(pts, BilliardGeometry.AbsReflection[rf_Y, rf_X], billiard)
+        ref  = apply_symmetries_to_boundary_points(pts, BilliardGeometry.AbsReflection[rf_Y, rf_XY, rf_X], billiard)
+        @test length(full.xy) == 4N
+        @test full.xy == ref.xy
+        @test full.normal == ref.normal
+        @test full.ds == ref.ds
     end
 end
 

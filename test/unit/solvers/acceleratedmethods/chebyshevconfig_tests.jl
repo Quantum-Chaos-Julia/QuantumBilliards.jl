@@ -91,13 +91,12 @@ end
     end
 
     @testset "nonpositive resolution or tolerance is rejected" begin
-        # SOURCE GAP (ChebyshevConfig constructor): only param_strategy is validated; zero panel counts or degrees
-        # (division by zero in _breaks_uniform / _chebfit!) and a nonpositive tol are silently accepted.
-        rejected(; kwargs...) = try ChebyshevConfig(; kwargs...); false catch e; e isa ArgumentError end
-        @test_broken rejected(n_panels_h=0)
-        @test_broken rejected(n_panels_j=0)
-        @test_broken rejected(M_h=0)
-        @test_broken rejected(tol=-1e-8)
+        @test_throws ArgumentError ChebyshevConfig(; n_panels_h=0)
+        @test_throws ArgumentError ChebyshevConfig(; n_panels_j=0)
+        @test_throws ArgumentError ChebyshevConfig(; M_h=0)
+        @test_throws ArgumentError ChebyshevConfig(; M_j=0)
+        @test_throws ArgumentError ChebyshevConfig(; tol=-1e-8)
+        @test_throws ArgumentError ChebyshevConfig(; tol=0.0)
     end
 end
 

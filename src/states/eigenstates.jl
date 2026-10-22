@@ -261,6 +261,11 @@ function BIMEigenstate(k::Number, vec::Union{Nothing,Vector{K}}, ten::T, pts::Bo
     return BIMEigenstate{K,T}(T(real(k)), T(imag(k)), vec, ten, pts, u, bnd_norm)
 end
 
+function BIMEigenstate(k::Number, vec::Nothing, ten::T, pts::BoundaryPoints{T}; u::Union{Nothing,Vector{<:Number}}=nothing, bnd_norm::Union{Nothing,T}=nothing) where {T<:Real}
+    K = isnothing(u) ? Complex{T} : eltype(u)
+    return BIMEigenstate{K,T}(T(real(k)), T(imag(k)), nothing, ten, pts, u, bnd_norm)
+end
+
 """
     compute_eigenstate(solver::SweepBIMSolver, billiard::AbsBilliard, k; multithreaded::Bool=true) → data::SpectralData
 

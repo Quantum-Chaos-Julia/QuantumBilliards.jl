@@ -244,8 +244,8 @@ end
     @test_throws ArgumentError RealPlaneWaves(4, nothing, nothing; taylor_tol=-1.0)
     @test_throws TypeError RealPlaneWaves(4; sym_x=1.0)                    # parities are integers
     @test_throws MethodError RealPlaneWaves(4.0)
-    # Documented quantum numbers are ±1; any other integer is silently accepted and treated as a sine factor.
-    @test_broken (try RealPlaneWaves(4; sym_x=2); false catch e; e isa ArgumentError end)
+    # Quantum numbers must be ±1 (or nothing).
+    @test_throws ArgumentError RealPlaneWaves(4; sym_x=2)
 end
 
 @testset "RealPlaneWaves(dim, billiard, sector)" begin

@@ -367,17 +367,16 @@ end
     @test isapprox(construct_matrices(red, pts, k), cb_orbit_sum(construct_matrices(full, pts, k), offs, locals); atol=1e-12, rtol=0)
 end
 
-# Source finding: component solvers that each infer a multi-generator reflection symmetry from `sym_characters` hold two distinct
-# but equal CompositeReflection objects, and CompositeBIMSolver compares them with `==`, which falls back to `===` because
-# BilliardGeometry defines no `==` for CompositeReflection. The constructor therefore rejects solvers that are equal.
+# Component solvers that each infer a multi-generator reflection symmetry from `sym_characters` hold two distinct but equal
+# CompositeReflection objects; BilliardGeometry defines `==` for CompositeReflection, so CompositeBIMSolver accepts them.
 @testset "CompositeBIMSolver accepts separately inferred, equal CompositeReflection symmetries" begin
     sinai = SinaiBilliard(1.0, 0.25)
     a = DoubleLayerPotentialSolver(5.0, sinai; sym_characters=(1, -1))
     b = DoubleLayerPotentialSolver(5.0, sinai; sym_characters=(1, -1))
     @test a.sym_characters == b.sym_characters
     @test a.symmetry.reflections == b.symmetry.reflections
-    @test_broken a.symmetry == b.symmetry
-    @test_broken (CompositeBIMSolver(a, b); true)
+    @test a.symmetry == b.symmetry
+    @test (CompositeBIMSolver(a, b); true)
 end
 
 @testset "construct_matrices: direct matrix against the Taylor matrix" begin

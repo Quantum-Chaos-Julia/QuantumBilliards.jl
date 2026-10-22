@@ -568,11 +568,18 @@ end
         @test real.(ks1) ≈ [2.85, 3.0, 3.3] atol = 1e-6                      # a single starting vector sees one copy of the double root
     end
 
-    @testset "a too small initial Krylov dimension is accepted as an empty spectrum" begin
-        # mstart = 6 leaves no Ritz root in the window at m = 6 and m = 8, so the empty spectrum is "stable" and returned although
-        # the window holds four roots (see F2 of the redesign plan). The correct result would be the four roots.
-        ks_small, _ = solve(ck_solver(mstart=6), CK_PTS, CK_K0, CK_DK; multithreaded=false)
-        @test_broken length(ks_small) == 4
+    @testset "a too small initial Krylov dimension does not yield an empty spectrum when levels are expected" begin
+        # mstart = 6 leaves no Ritz root in the window at m = 6 and m = 8; with the expected level count the empty
+        # spectrum is not accepted and the Krylov dimension keeps growing until the four roots appear.
+        ks_small, _ = solve(ck_solver(mstart=6), CK_PTS, CK_K0, CK_DK; multithreaded=false, expected=4.0)
+        @test length(ks_small) == 4
+        @test real.(ks_small) ≈ [2.85, 3.0, 3.0, 3.3] atol = 1e-6
+    end
+
+    @testset "an empty window with expected < 0.5 still returns an empty spectrum" begin
+        ks_empty, _ = solve(ck_solver(), CK_PTS, 4.0, 0.4; multithreaded=false, expected=0.1)
+        @test isempty(ks_empty)
+        @test_throws "Reached full CORK Krylov dimension" solve(ck_solver(), CK_PTS, 4.0, 0.4; multithreaded=false, expected=3.0)
     end
 end
 
@@ -615,7 +622,8 @@ end
     end
 
     @testset "solve_wavenumber with no root in the window throws" begin
-        @test_throws "found no eigenvalue candidates" solve_wavenumber(solver, billiard, 4.0, 0.4; multithreaded=false)
+        # the Weyl estimate of the unit circle for dk = 0.1 is below 0.5, so the empty Ritz set is accepted
+        @test_throws "found no eigenvalue candidates" solve_wavenumber(solver, billiard, 4.0, 0.1; multithreaded=false)
     end
 
     @testset "solve_spectrum returns every accepted root" begin

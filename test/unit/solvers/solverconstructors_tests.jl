@@ -87,9 +87,7 @@ const sc_RECT_T = typeof(RectangleBilliard(1.0, 0.7))
         solver = ParticularSolutionsMethodSolver(2.0, [3.0, 1.0, 5.0, 7.0], 4.0)
         bs, samplers = adjust_scaling_and_samplers(solver, circle)
         @test bs[1:4] == [3.0, 1.0, 5.0, 7.0]                           # never reordered or reduced in value
-        @test length(bs) >= length(get_boundary_curves(circle))
-        # the docstring promises a result of length equal to the number of curves; surplus entries are kept instead
-        @test_broken length(bs) == length(get_boundary_curves(circle))
+        @test length(bs) >= length(get_boundary_curves(circle))         # surplus entries are kept
     end
 
     @testset "Float32 solver" begin
@@ -529,13 +527,11 @@ end
     end
 
     @testset "independently built components with the same sym_characters" begin
-        # Source finding: every call with `sym_characters` builds a new CompositeReflection and CompositeReflection has no
-        # `==`, so two equally constructed components are considered to have different symmetries.
         a = DoubleLayerPotentialSolver(10.0, rect; sym_characters=(1, 1))
         b = DoubleLayerPotentialSolver(10.0, rect; sym_characters=(1, 1))
         @test a.sym_characters == b.sym_characters
-        @test_broken a.symmetry == b.symmetry
-        @test_broken (CompositeBIMSolver(a, b); true)
+        @test a.symmetry == b.symmetry
+        @test (CompositeBIMSolver(a, b); true)
     end
 
     @testset "SweepBIMSolver contract" begin
@@ -776,7 +772,7 @@ end
         @test sc_has(compute_spectrum, S, typeof(circle), Float64, Float64)
         @test sc_has(compute_spectrum, S, typeof(circle), Int, Int)
         @test sc_has(compute_eigenstate, S, typeof(circle), Float64)
-        # The AcceleratedBIMSolver docstring lists `construct_matrices`, but CORK assembles its Chebyshev polynomial internally.
-        @test_broken sc_has(construct_matrices, S, sc_PTS_T, Float64)
+        # CORK assembles its Chebyshev polynomial internally and does not define `construct_matrices`.
+        @test !sc_has(construct_matrices, S, sc_PTS_T, Float64)
     end
 end

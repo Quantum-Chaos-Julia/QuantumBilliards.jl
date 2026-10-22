@@ -86,5 +86,10 @@ starting point.
 """
 function ChebyshevConfig(::Type{T}=Float64; n_panels_h::Int=10000, M_h::Int=5, n_panels_j::Int=5000, M_j::Int=5, tol::Real=1e-12, max_iter::Int=20, sampling_points::Int=10_000, grow_panels::Real=1.5, grow_M::Int=2, param_strategy::Symbol=:global) where {T<:Real}
     param_strategy in (:global, :segment, :manual) || throw(ArgumentError("param_strategy must be :global, :segment or :manual; received $param_strategy"))
+    n_panels_h >= 1 || throw(ArgumentError("n_panels_h must be positive; received $n_panels_h"))
+    n_panels_j >= 1 || throw(ArgumentError("n_panels_j must be positive; received $n_panels_j"))
+    M_h >= 1 || throw(ArgumentError("M_h must be positive; received $M_h"))
+    M_j >= 1 || throw(ArgumentError("M_j must be positive; received $M_j"))
+    tol > 0 || throw(ArgumentError("tol must be positive; received $tol"))
     return ChebyshevConfig{T}(n_panels_h, M_h, n_panels_j, M_j, T(tol), max_iter, sampling_points, T(grow_panels), grow_M, param_strategy)
 end

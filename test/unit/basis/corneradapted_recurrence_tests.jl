@@ -304,12 +304,12 @@ end
         end
     end
 
-    @testset "the cached dk is finite at the corner of a re-entrant wedge where the direct dk is NaN" begin
-        # See the source finding in corneradapted_tests.jl: the direct dk_fun gives 0 * Inf = NaN for ν < 1 at r = 0.
+    @testset "the cached and the direct dk are both finite (zero) at the corner of a re-entrant wedge" begin
+        # r Jvp(ν, 0) is guarded to 0 at r == 0 in the direct dk_fun (Jvp(ν, 0) = Inf for ν < 1).
         basis = car_make(4, 3π / 2)
         cache = CornerAdaptedTaylorCache(basis, k0, [basis.origin])
         @test all(isfinite, dk_matrix(cache, k))
-        @test isnan(dk_fun(basis, 1:1, k, [basis.origin])[1])
+        @test iszero(dk_fun(basis, 1:1, k, [basis.origin])[1])
     end
 
     @testset "the direct matrices agree with the cache at the corner of a wedge below π" begin

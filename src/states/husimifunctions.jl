@@ -114,7 +114,8 @@ function husimi_function(k::T, s::AbstractVector{T}, ds::AbstractVector{T}, u::A
     # For each boundary position `q`, the coherent-state amplitude is approximated by
     # `h(q,p) = Σⱼ uⱼ exp[-k(sⱼ-q)²/2] exp[-ikp(sⱼ-q)] dsⱼ`,
     # with only points satisfying `|sⱼ-q| ≤ w/√k` retained. Periodicity is handled
-    # by extending the boundary coordinates and data by one copy in either direction.
+    # by extending the boundary coordinates and data by `n = max(1, ⌈w/(√k L)⌉)` copies
+    # in either direction, with `q` reduced to `[0, L)`.
     # For fixed `q`, the Gaussian envelope, quadrature weights and boundary function
     # are combined once and reused for every momentum. This supports arbitrary
     # physical-arclength discretizations.
@@ -123,16 +124,17 @@ function husimi_function(k::T, s::AbstractVector{T}, ds::AbstractVector{T}, u::A
         _is_global_phase_real(u) || throw(ArgumentError("full_p=false requires u to be real up to a global phase; pass full_p=true for genuinely complex boundary functions"))
     end
     width = T(w)/sqrt(k)
-    s_ext = vcat(s.-L,s,s.+L)
-    ds_ext = vcat(ds,ds,ds)
-    u_ext = vcat(u,u,u)
+    ncopies = max(1,ceil(Int,width/L))
+    s_ext = reduce(vcat,[s.+m*L for m in -ncopies:ncopies])
+    ds_ext = repeat(ds,2ncopies+1)
+    u_ext = repeat(u,2ncopies+1)
     nq = length(qs); np = length(ps)
     Hp = zeros(T,np,nq)
     offsets = Vector{T}(undef,0)
     c_re = Vector{T}(undef,0)
     c_im = Vector{T}(undef,0)
     @inbounds for iq in 1:nq
-        q = mod(qs[iq],L)+L
+        q = mod(qs[iq],L)
         lo = searchsortedfirst(s_ext,q-width)
         hi = searchsortedlast(s_ext,q+width)
         W = max(0,hi-lo+1)
