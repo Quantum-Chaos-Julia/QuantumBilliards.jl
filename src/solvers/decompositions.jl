@@ -178,7 +178,7 @@ blocks are filled with zeros.
 directsum(A::Matrix,B::Matrix) = [A zeros(size(A,1), size(B,2)); zeros(size(B,1), size(A,2)) B]
 
 """
-    adjust_scaling_and_samplers(solver::AbsSolver, billiard::AbsBilliard) → (bs::Vector, samplers::Vector{<:AbsSampler})
+    adjust_scaling_and_samplers(solver::AbsBasisSolver, billiard::AbsBilliard) → (bs::Vector, samplers::Vector{<:AbsSampler})
 
 Adjusts the scaling factors and samplers of the solver to match the number of fundamental 
 boundary curves in the billiard (for each curve one `b` and sampler). This ensures that the solver has the appropriate number of 
@@ -189,10 +189,10 @@ scaling factors and samplers, filling in defaults where necessary.
 * `billiard`: The billiard object, which defines the fundamental boundary curves.
 
 ## Returns
-* `bs`: The adjusted vector of scaling factors, with length equal to the number of fundamental boundary curves. Missing entries are filled with `minimum(solver.pts_scaling_factor)`.
-* `samplers`: The adjusted vector of samplers, with length equal to the number of fundamental boundary curves. Missing entries are filled with `solver.sampler[1]`.
+* `bs`: The adjusted vector of scaling factors, with at least as many entries as fundamental boundary curves. Missing entries are filled with `minimum(solver.pts_scaling_factor)`; surplus entries are kept unchanged.
+* `samplers`: The adjusted vector of samplers, with at least as many entries as fundamental boundary curves. Missing entries are filled with `solver.sampler[1]`; surplus entries are kept unchanged.
 """
-function adjust_scaling_and_samplers(solver::AbsSolver, billiard::AbsBilliard)
+function adjust_scaling_and_samplers(solver::AbsBasisSolver, billiard::AbsBilliard)
     bs = solver.pts_scaling_factor
     samplers = solver.sampler
     default = samplers[1]

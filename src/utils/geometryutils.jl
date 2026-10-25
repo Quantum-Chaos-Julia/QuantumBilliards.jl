@@ -1,1 +1,0 @@
-angle(a, b) = atan(norm(cross(a,b)),dot(a,b))

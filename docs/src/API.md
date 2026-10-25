@@ -14,23 +14,23 @@ CurrentModule = QuantumBilliards
 ```@docs
 AbsBasis
 AbsSolver
-SweepSolver
-AcceleratedSolver
+AbsBasisSolver
+SweepBasisSolver
+AcceleratedBasisSolver
 ```
 
 ## Utilities
 ```@docs
 make_triangle_and_basis
 adapt_basis
-CoordinateSystem
-CartesianCS
-PolarCS
 ```
 
 ## Basis
 ```@docs
 RealPlaneWaves
 CornerAdaptedFourierBessel
+FourierBessel
+fb_modes
 resize_basis
 basis_fun
 dk_fun
@@ -38,6 +38,8 @@ gradient
 basis_and_gradient
 ca_fb
 ca_fb_dk
+fb_term
+fb_term_dk
 ```
 
 ## Solvers
@@ -62,11 +64,6 @@ generalized_eigvals
 sm_results
 solve_vectors
 ```
-Missing documentation:
-* `print_benchmark_info`, `ParticularSolutionsMethod`, `BoundaryPointsSM`,
-  `BoundaryPointsDM`, `construct_matrices_benchmark` — exported in
-  `src/QuantumBilliards.jl` but no matching definition currently exists
-  anywhere in `src/`.
 
 ## Spectra
 ```@docs
@@ -77,7 +74,7 @@ and `src/spectra/unfolding.jl`, none currently have docstrings.
 
 ## States
 ```@docs
-Eigenstate
+BasisEigenstate
 BasisState
 GaussianRandomState
 compute_eigenstate
@@ -91,6 +88,8 @@ husimi_function
 pad_limits
 rectify_grid
 apply_symmetries_to_wavefunction
+apply_symmetries_to_boundary_function
+apply_symmetries_to_boundary_points
 regularize!
 _rellich
 antisym_vec

@@ -1,174 +1,881 @@
-######################################
-#Needs total rework
-######################################
+"""
+    SpectralData{T,Bi,So,S}
 
-function is_equal(x::T, dx::T, y::T, dy::T) :: Bool where {T<:Real}
-    # Define the intervals
-    x_lower=x-dx
-    x_upper=x+dx
-    y_lower=y-dy
-    y_upper=y+dy
-    # Check if the intervals overlap
-    return max(x_lower,y_lower) <= min(x_upper,y_upper)
-end
+Stores a computed spectrum, together with the `billiard`/`solver` context it
+was computed from, quality measures, merge-control flags and, optionally, the
+corresponding eigenstates.
 
-
-function match_wavenumbers(ks_l,ts_l,ks_r,ts_r)
-    #vectors ks_l and_ks_r must be sorted
-    i = j = 1 #counting index
-    control = Vector{Bool}()#control bits
-    ks = Vector{eltype(ks_l)}()#final wavenumbers
-    ts = Vector{eltype(ts_l)}()#final tensions
-    while i <= length(ks_l) && j <= length(ks_r)
-        x, dx = ks_l[i], ts_l[i]
-        y, dy = ks_r[j], ts_r[j]
-        if  is_equal(x,dx,y,dy) #check equality with errorbars
-            i += 1 
-            j += 1
-            if dx < dy
-                push!(ks, x)
-                push!(ts, dx)
-                push!(control, true)
-            else
-                push!(ks, y)
-                push!(ts, dy)
-                push!(control, true)
-            end
-        elseif x < y
-            i += 1
-            push!(ks, x)
-            push!(ts, dx)
-            push!(control, false)
-        else 
-            j += 1
-            push!(ks, y)
-            push!(ts, dy)
-            push!(control, false)
-        end
-    end
-    return ks, ts, control 
-end
-
-function overlap_and_merge!(k_left, ten_left, k_right, ten_right, control_left, kl, kr; tol=1e-3)
-    #check if intervals are empty 
-    if isempty(k_left)
-        #println("Left interval is empty.")
-        append!(k_left, k_right)
-        append!(ten_left, ten_right)
-        append!(control_left, [false for i in 1:length(k_right)])
-        return nothing #return short circuits further evaluation
-    end
-
-    #if right is empty just skip the mergeing
-    if isempty(k_right)
-        #println("Right interval is empty.")
-        return nothing
-    end
-    
-    #find overlaps in interval [k1,k2]
-    idx_l = k_left .> (kl-tol) .&& k_left .< (kr+tol)
-    idx_r = k_right .> (kl-tol) .&& k_right .< (kr+tol)
-    
-    ks_l,ts_l,ks_r,ts_r = k_left[idx_l], ten_left[idx_l], k_right[idx_r], ten_right[idx_r]
-    #check if wavnumbers match in overlap interval
-    ks, ts, control = match_wavenumbers(ks_l,ts_l,ks_r,ts_r)
-    #println("left: $ks_l")
-    #println("right: $ks_r")
-    #println("overlaping: $ks")
-    #i_l = idx_l[1]
-    #i_r = idx_r[end]+1
-    deleteat!(k_left, idx_l)
-    append!(k_left, ks)
-    deleteat!(ten_left, idx_l)
-    append!(ten_left, ts)
-    deleteat!(control_left, idx_l)
-    append!(control_left, control)
-
-    fl = findlast(idx_r)
-    idx_last = isnothing(fl) ? 1 : fl + 1
-    append!(k_left, k_right[idx_last:end])
-    append!(ten_left, ten_right[idx_last:end])
-    append!(control_left, [false for i in idx_last:length(k_right)])
-end
-
-function compute_spectrum(solver::AbsSolver, basis::AbsBasis, billiard::AbsBilliard,k1,k2,dk; tol=1e-4, multithreaded = true)
-    k0 = k1
-    #initial computation
-    k_res, ten_res = solve_spectrum(solver, basis, billiard, k0, dk+tol)
-    control = [false for i in 1:length(k_res)]
-    while k0 < k2
-        k0 += dk
-        k_new, ten_new = solve_spectrum(solver, basis, billiard, k0, dk+tol)
-        overlap_and_merge!(k_res, ten_res, k_new, ten_new, control, k0-dk, k0; tol=tol)
-
-    end
-    return k_res, ten_res, control
-end
-
-struct SpectralData{T} 
+## Attributes
+* `billiard::Bi`: Billiard the spectrum was computed on.
+* `solver::So`: Solver used to compute the spectrum.
+* `k::Vector{T}`: Retained real wavenumbers.
+* `k_im::Vector{T}`: Imaginary part / numerical residual of each retained wavenumber. This is a
+  numerical leakage diagnostic from boundary-integral root-finding, not a
+  physical imaginary wavenumber — this codebase has no leaky/open-billiard
+  resonance support.
+* `ten::Vector{T}`: Primary tension or residual associated with each wavenumber.
+* `control::Vector{Bool}`: Merge or validation-control flag associated with each wavenumber.
+* `states::S`: Corresponding eigenstates as a concrete `Vector{<:AbsState}`, or `nothing`.
+"""
+struct SpectralData{T<:Real,Bi<:AbsBilliard,So,S<:Union{Nothing,Vector{<:AbsState}}}
+    billiard::Bi
+    solver::So
     k::Vector{T}
+    k_im::Vector{T}
     ten::Vector{T}
     control::Vector{Bool}
-    k_min::T
-    k_max::T
+    states::S
 end
 
-function SpectralData(k,ten,control)
-    k_min = minimum(k)
-    k_max = maximum(k)
-    return SpectralData(k,ten,control,k_min,k_max)
+"""
+    SpectralData(billiard::Bi, solver::So, k::Vector{K}, ten::Vector{T}, control::Vector{Bool}; states::S=nothing) where {Bi<:AbsBilliard,So,K<:Number,T<:Real,S<:Union{Nothing,Vector{<:AbsState}}}
+
+Constructs [`SpectralData`](@ref), splitting `k` into its real part and its
+imaginary residual `k_im`.
+
+## Arguments
+* `billiard::Bi`: Billiard the spectrum was computed on.
+* `solver::So`: Solver used to compute the spectrum.
+* `k::Vector{K}`: Retained wavenumbers, real or complex according to the solver.
+* `ten::Vector{T}`: Primary tension or residual associated with each wavenumber.
+* `control::Vector{Bool}`: Merge or validation-control flags.
+
+## Keyword Arguments
+* `states::S=nothing`: Corresponding eigenstates, or `nothing`.
+
+## Returns
+* `data::SpectralData{T,Bi,So,S}`: Constructed spectral data.
+"""
+function SpectralData(billiard::Bi, solver::So, k::Vector{K}, ten::Vector{T}, control::Vector{Bool}; states::S=nothing) where {Bi<:AbsBilliard,So,K<:Number,T<:Real,S<:Union{Nothing,Vector{<:AbsState}}}
+    return SpectralData{T,Bi,So,S}(billiard, solver, T.(real.(k)), T.(imag.(k)), ten, control, states)
 end
 
-function merge_spectra(s1, s2; tol=1e-4)
-    first = interval(s1.k_min-tol/2, s1.k_max+tol/2)
-    second = interval(s2.k_min-tol/2, s2.k_max+tol/2)
-    overlap = intersect_interval(first, second)  #this is the overlap interval
-    
-    idx_1 = [in_interval(k, overlap) for k in s1.k]
-    idx_2 = [in_interval(k, overlap) for k in s2.k]
+Base.length(data::SpectralData) = length(data.k)
+Base.iterate(data::SpectralData, state::Int=1) = state>length(data) ? nothing : (data[state], state+1)
 
-    ks1 = s1.k[idx_1]
-    ts1 = s1.ten[idx_1]
-    ks2 = s2.k[idx_2]
-    ts2 = s2.ten[idx_2]
-
-    ks_ov, ts_ov, cont_ov = match_wavenumbers(ks1,ts1,ks2,ts2)
-    
-    ks = append!(s1.k[.~idx_1],ks_ov)
-    ts = append!(s1.ten[.~idx_1],ts_ov)
-    control = append!(s1.control[.~idx_1],cont_ov)
-
-    append!(ks, s2.k[.~idx_2])
-    append!(ts, s2.ten[.~idx_2])
-    append!(control, s2.control[.~idx_2])
-
-    p = sortperm(ks) 
-    return SpectralData(ks[p], ts[p], control[p])
+function Base.getindex(data::SpectralData{T,Bi,So}, i::Integer) where {T,Bi,So}
+    states = data.states===nothing ? nothing : [data.states[i]]
+    return SpectralData{T,Bi,So,typeof(states)}(data.billiard, data.solver, [data.k[i]], [data.k_im[i]], [data.ten[i]], [data.control[i]], states)
 end
 
-function compute_spectrum(solver::AbsSolver,basis::AbsBasis,billiard::AbsBilliard,N1::Int,N2::Int,dN::Int; N_expect = 2.0, tol=1e-4, multithreaded = false)
-    let solver=solver, basis=basis, billiard=billiard
-        N_intervals = range(N1-dN/2,N2+dN/2,step=dN)
-        #println(N_intervals)
-        if hasproperty(billiard,:angles)
-            k_intervals = [k_at_state(n, billiard.area, billiard.length, billiard.angles) for n in N_intervals]
-        else
-            k_intervals = [k_at_state(n, billiard.area, billiard.length) for n in N_intervals]
-        end
+function Base.getindex(data::SpectralData{T,Bi,So}, idx::AbstractVector) where {T,Bi,So}
+    states = data.states===nothing ? nothing : data.states[idx]
+    return SpectralData{T,Bi,So,typeof(states)}(data.billiard, data.solver, data.k[idx], data.k_im[idx], data.ten[idx], data.control[idx], states)
+end
 
-        results = Vector{SpectralData}(undef,length(k_intervals)-1)
-        for i in 1:(length(k_intervals)-1)
-            k1 = k_intervals[i]
-            k2 = k_intervals[i+1]
-            dk = N_expect * 2.0*pi / (billiard.area * k1) #fix this
-            #println(k1)
-            #println(k2)
-            #println(dk)
-            k_res, ten_res, control = compute_spectrum(solver,basis,billiard,k1,k2,dk; multithreaded, tol)
-            #println(k_res)
-            results[i] = SpectralData(k_res, ten_res, control)
-        end
+"""
+    k_range(data::SpectralData, kmin::Real, kmax::Real) → SpectralData
 
-        return reduce(merge_spectra, results)
+Returns the subset of `data` with `kmin <= k <= kmax`.
+"""
+function k_range(data::SpectralData, kmin::Real, kmax::Real)
+    idx = findall(k -> kmin<=k<=kmax, data.k)
+    return data[idx]
+end
+
+function Base.filter(f::Function, data::SpectralData)
+    idx = findall(i -> f(data[i]), eachindex(data.k))
+    return data[idx]
+end
+
+# Return `data.states`, or throw a clear error if no eigenstates are stored.
+# Shared by the `wavefunction`/`boundary_function`/`momentum_function`/
+# `husimi_function` SpectralData wrappers in states/*.jl.
+_require_states(data::SpectralData) = data.states === nothing ? throw(ArgumentError("data has no stored eigenstates")) : data.states
+
+"""
+    append!(data1::SpectralData, data2::SpectralData; tol::Real=1e-3) → data1
+
+Merges `data2` into `data1` in place, requiring `data1.billiard===data2.billiard`
+(object identity) and `typeof(data1.solver)===typeof(data2.solver)` (same
+concrete solver algorithm/type, not byte-identical parameters). Reuses
+[`overlap_and_merge_ebim!`](@ref) for an [`ExpandedBIMSolver`](@ref) and
+[`overlap_and_merge!`](@ref) otherwise, mirroring the merge strategy each
+solver's own `compute_spectrum` already uses.
+"""
+function Base.append!(data1::SpectralData{T}, data2::SpectralData; tol::Real=1e-3) where {T<:Real}
+    data1.billiard===data2.billiard || throw(ArgumentError("append!(::SpectralData,::SpectralData) requires both spectra to share the same billiard instance"))
+    typeof(data1.solver)===typeof(data2.solver) || throw(ArgumentError("append!(::SpectralData,::SpectralData) requires both spectra to use the same solver type"))
+    isempty(data2.k) && return data1
+    if isempty(data1.k)
+        append!(data1.k, data2.k); append!(data1.k_im, data2.k_im); append!(data1.ten, data2.ten); append!(data1.control, data2.control)
+        data1.states!==nothing && data2.states!==nothing && append!(data1.states, data2.states)
+        return data1
     end
+    k1c = Complex.(data1.k, data1.k_im); k2c = Complex.(data2.k, data2.k_im)
+    if data1.solver isa ExpandedBIMSolver
+        overlap_and_merge_ebim!(k1c, data1.ten, k2c, data2.ten, data1.control; tol=T(tol), states_left=data1.states, states_right=data2.states)
+    else
+        kl, kr = data2.k[1], data1.k[end]
+        overlap_and_merge!(k1c, data1.ten, k2c, data2.ten, data1.control, kl, kr; tol, states_left=data1.states, states_right=data2.states)
+    end
+    empty!(data1.k); append!(data1.k, real.(k1c)); empty!(data1.k_im); append!(data1.k_im, imag.(k1c))
+    p = sortperm(data1.k)
+    permute!(data1.k, p); permute!(data1.k_im, p); permute!(data1.ten, p); permute!(data1.control, p)
+    data1.states!==nothing && permute!(data1.states, p)
+    return data1
+end
+
+"""
+    vcat(data1::SpectralData, data2::SpectralData; tol::Real=1e-3) → SpectralData
+
+Non-mutating counterpart to [`append!(::SpectralData,::SpectralData)`](@ref):
+copies `data1` and merges `data2` into the copy.
+"""
+function Base.vcat(data1::SpectralData, data2::SpectralData; tol::Real=1e-3)
+    states = data1.states===nothing ? nothing : copy(data1.states)
+    merged = SpectralData(data1.billiard, data1.solver, copy(data1.k), copy(data1.k_im), copy(data1.ten), copy(data1.control), states)
+    append!(merged, data2; tol)
+    return merged
+end
+
+################################################################################
+# INTERNAL HELPERS
+################################################################################
+
+# Tension-tolerance predicate; `nothing` disables the filter.
+@inline _ten_ok(::Nothing, t) = true
+@inline _ten_ok(ten_tol::Real, t) = t<=ten_tol
+_ten_keep(ten_tol, ts) = findall(t -> _ten_ok(ten_tol, t), ts)
+
+# Half-width of a Vergini-Saraceno window whose edge tension equals `ten_tol`. Since ten = 2(2/mu)^2 and
+# ks-k = -2/mu to first order, ten ≈ 2(ks-k)^2, so ten <= ten_tol <=> |ks-k| <= sqrt(ten_tol/2).
+_vs_max_halfwidth(::Nothing) = Inf
+_vs_max_halfwidth(ten_tol::Real) = sqrt(ten_tol/2)
+_clamp_dk(dk::Real, hmax) = min(dk, hmax)
+_clamp_dk(dk::Function, hmax) = k -> min(dk(k), hmax)
+
+# Apply the tension filter, warn about discarded or missing eigenvalues and sort all aligned quantities by Re(k).
+# `ndropped` counts candidates already discarded by `ten_tol` before finalization.
+function _finalize_spectrum(billiard::Bi, solver::So, ks::Vector{K}, ts::Vector{T}, control::Vector{Bool}; states::Union{Nothing,Vector}=nothing, ten_tol::Union{Nothing,Real}=nothing, ndropped::Integer=0) where {Bi<:AbsBilliard,So,K<:Number,T<:Real}
+    idx = _ten_keep(ten_tol, ts)
+    if length(idx)<length(ts)
+        ndropped += length(ts)-length(idx)
+        ks = ks[idx]; ts = ts[idx]; control = control[idx]
+        states === nothing || (states = states[idx])
+    end
+    ndropped>0 && @warn "$(nameof(So)): discarded $ndropped eigenvalue candidate(s) with tension above ten_tol=$ten_tol"
+    isempty(ks) && @warn "$(nameof(So)): no eigenvalues found in the requested interval"
+    p = sortperm(ks; by=real)
+    return SpectralData(billiard, solver, ks[p], ts[p], control[p]; states=states===nothing ? nothing : states[p])
+end
+
+# Test whether two real-wavenumber uncertainty intervals overlap.
+@inline is_equal(x::Number, dx::Real, y::Number, dy::Real) = max(real(x)-dx, real(y)-dy)<=min(real(x)+dx, real(y)+dy)
+
+# Match two sorted spectra, retaining the lower-tension representative.
+function match_wavenumbers(ks_l::Vector{K}, ts_l::Vector{T}, ks_r::Vector{K}, ts_r::Vector{T}; states_l::SL=nothing, states_r::SR=nothing) where {K<:Number,T<:Real,SL<:Union{Nothing,Vector{<:AbsState}},SR<:Union{Nothing,Vector{<:AbsState}}}
+    i = j = 1; ks = K[]; ts = T[]; control = Bool[]; states = states_l===nothing ? nothing : similar(states_l, 0)
+    while i<=length(ks_l) && j<=length(ks_r)
+        x, dx = ks_l[i], ts_l[i]; y, dy = ks_r[j], ts_r[j]
+        if is_equal(x, dx, y, dy)
+            if dx<=dy
+                push!(ks, x); push!(ts, dx); states!==nothing && push!(states, states_l[i])
+            else
+                push!(ks, y); push!(ts, dy); states!==nothing && push!(states, states_r[j])
+            end
+            push!(control, true); i += 1; j += 1
+        elseif real(x)<real(y)
+            push!(ks, x); push!(ts, dx); push!(control, false); states!==nothing && push!(states, states_l[i]); i += 1
+        else
+            push!(ks, y); push!(ts, dy); push!(control, false); states!==nothing && push!(states, states_r[j]); j += 1
+        end
+    end
+    while i<=length(ks_l)
+        push!(ks, ks_l[i]); push!(ts, ts_l[i]); push!(control, false); states!==nothing && push!(states, states_l[i]); i += 1
+    end
+    while j<=length(ks_r)
+        push!(ks, ks_r[j]); push!(ts, ts_r[j]); push!(control, false); states!==nothing && push!(states, states_r[j]); j += 1
+    end
+    return ks, ts, control, states
+end
+
+# Merge a new overlapping spectral window into the accumulated spectrum.
+function overlap_and_merge!(k_left::Vector{K}, ten_left::Vector{T}, k_right::Vector{K}, ten_right::Vector{T}, control_left::Vector{Bool}, kl, kr; tol::Real=1e-3, states_left::SL=nothing, states_right::SR=nothing) where {K<:Number,T<:Real,SL<:Union{Nothing,Vector{<:AbsState}},SR<:Union{Nothing,Vector{<:AbsState}}}
+    if isempty(k_left)
+        append!(k_left, k_right); append!(ten_left, ten_right); append!(control_left, fill(false, length(k_right)))
+        states_left!==nothing && append!(states_left, states_right)
+        return nothing
+    end
+    isempty(k_right) && return nothing
+    idx_l = (real.(k_left).>kl-tol).&(real.(k_left).<kr+tol)
+    idx_r = (real.(k_right).>kl-tol).&(real.(k_right).<kr+tol)
+    sl = states_left===nothing ? nothing : states_left[idx_l]; sr = states_right===nothing ? nothing : states_right[idx_r]
+    ks, ts, control, states = match_wavenumbers(k_left[idx_l], ten_left[idx_l], k_right[idx_r], ten_right[idx_r]; states_l=sl, states_r=sr)
+    deleteat!(k_left, idx_l); append!(k_left, ks)
+    deleteat!(ten_left, idx_l); append!(ten_left, ts)
+    deleteat!(control_left, idx_l); append!(control_left, control)
+    states_left!==nothing && (deleteat!(states_left, idx_l); append!(states_left, states))
+    last_overlap = findlast(idx_r); first_tail = isnothing(last_overlap) ? 1 : last_overlap+1
+    append!(k_left, k_right[first_tail:end]); append!(ten_left, ten_right[first_tail:end]); append!(control_left, fill(false, length(k_right)-first_tail+1))
+    states_left!==nothing && append!(states_left, states_right[first_tail:end])
+    return nothing
+end
+
+################################################################################
+# ACCELERATED BASIS SOLVERS
+################################################################################
+
+"""
+    sweep_windows(k1, k2, dk::Union{Real,Function}) → (centers, widths)
+
+Divides `[k1, k2]` into the sequence of scaling centers and local window
+half-widths used by [`compute_spectrum`](@ref) for an
+[`AcceleratedBasisSolver`](@ref): starting from `k1`, each center is advanced
+by `Δk = dk` (constant) or `Δk = dk(k0)` (adaptive) until `k2` is reached.
+
+Exposed so that other callers (e.g. diagnostic/benchmark plotting of the
+accelerated sweep) can reproduce the exact same window placement
+`compute_spectrum` uses, instead of re-deriving it independently.
+
+## Arguments
+* `k1`: Lower bound of the requested wavenumber interval.
+* `k2`: Upper bound of the requested wavenumber interval.
+* `dk`: Spacing between consecutive scaling centers, either a positive constant or a function of the current center.
+
+## Returns
+* `centers`: Vector of scaling centers covering `[k1, k2]`.
+* `widths`: Vector of local window half-widths, one per center.
+"""
+function sweep_windows(k1, k2, dk::Union{Real,Function})
+    T = promote_type(typeof(k1), typeof(k2))
+    k1T, k2T = T(k1), T(k2)
+    k1T < k2T || throw(ArgumentError("require k1 < k2"))
+    centers = T[]
+    widths = T[]
+    k0 = k1T
+    while k0 < k2T
+        Δk = T(dk isa Function ? dk(k0) : dk)
+        Δk > 0 || throw(ArgumentError("dk must be positive; received dk($k0) = $Δk"))
+        push!(centers, k0)
+        push!(widths, Δk)
+        k0 += Δk
+    end
+    return centers, widths
+end
+
+uses_taylor(::AbsBasis) = false
+uses_taylor(basis::Union{CornerAdaptedFourierBessel,RealPlaneWaves,FourierBessel}) = basis.use_taylor
+
+"""
+    compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, k1, k2, dk::Union{Real,Function}; tol::Real = 1e-4, multithreaded::Bool = true, show_progress::Bool = true) → data::SpectralData
+
+Compute the spectrum of `billiard` over the wavenumber interval `[k1, k2]`
+using an [`AcceleratedBasisSolver`](@ref).
+
+## Description
+The requested interval is divided into overlapping local spectral windows with
+scaling centers determined by `dk`. At each center the local spectrum is
+computed and overlapping results are merged with
+[`overlap_and_merge!`](@ref).
+
+For a [`CornerAdaptedFourierBessel`](@ref) basis with `use_taylor = true`,
+consecutive scaling centers are grouped into panels covered by
+`basis.taylor_radius`. A single [`CornerAdaptedTaylorCache`](@ref) is
+constructed for each panel and reused by all scaling solves in that panel.
+
+Before the spectral sweep, the configured Taylor degree and radius are checked
+at the largest scaling wavenumber against direct basis evaluation. The cached
+route is used only if both the basis matrix and its wavenumber derivative
+satisfy `basis.taylor_tol`.
+
+For each Taylor panel, the basis dimension and boundary discretization are
+determined from the largest scaling center in the panel.
+
+## Arguments
+* `solver`: [`AcceleratedBasisSolver`](@ref) used to compute the local spectra.
+* `basis`: Basis used to represent the eigenstates.
+* `billiard`: Billiard whose spectrum is computed.
+* `k1`: Lower bound of the requested wavenumber interval.
+* `k2`: Upper bound of the requested wavenumber interval.
+* `dk`: Spacing between consecutive scaling centers, either a positive constant or a function of the current center.
+
+## Keyword Arguments
+* `tol::Real = 1e-4`: Tolerance used when extending local windows and merging overlapping spectra.
+* `ten_tol::Union{Nothing,Real} = 5e-4`: Maximum accepted tension (`nothing` disables the filter). Candidates above it are discarded before merging, and the window half-width is capped at `sqrt(ten_tol/2)` (since `ten ≈ 2(k_s-k)^2`) so that the sweep uses more, narrower windows instead of returning high-tension roots. A warning reports the number of discarded candidates.
+* `multithreaded::Bool = true`: Whether basis evaluations are multithreaded.
+* `show_progress::Bool = true`: Whether to display the progress bar.
+
+## Returns
+* `data`: [`SpectralData`](@ref) containing the merged spectrum and, when requested by the solver, the associated eigenstates.
+"""
+function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, k1, k2, dk::Union{Real,Function}; tol::Real = 1e-4, ten_tol::Union{Nothing,Real} = 5e-4, multithreaded::Bool = true, show_progress::Bool = true)
+    centers, widths = sweep_windows(k1, k2, _clamp_dk(dk, _vs_max_halfwidth(ten_tol)))
+    ndropped = Ref(0)
+    T = eltype(centers)
+    k1T, k2T = T(k1), T(k2)
+    ks = T[]
+    ts = T[]
+    control = Bool[]
+    states = AbsState[]
+    L = CompositeCurve(get_boundary_curves(billiard)).length
+    use_taylor = uses_taylor(basis)
+    if use_taylor
+        R = T(basis.taylor_radius)
+        R > zero(T) || throw(ArgumentError("taylor_radius must be positive"))
+        kcheck = centers[end]
+        dimcheck = max(solver.min_dim, round(Int, L * kcheck * solver.dim_scaling_factor / (2 * pi)))
+        basis_check = resize_basis(basis, billiard, dimcheck, kcheck)
+        pts_check = evaluate_points(solver, billiard, kcheck)
+        cache_check = basis_cache(basis_check, kcheck, pts_check.xy; multithreaded)
+        keval = max(k1T, kcheck - R)
+        w = pts_check.w_vs
+        nsym = one(T) * (isnothing(basis_check.symmetries) ? 1 : length(basis_check.symmetries) + 1)
+        B, dB = _weight_scaled_basis_and_dk_matrices(cache_check, keval, w, nsym; multithreaded)
+        B_ref = basis_matrix(basis_check, keval, pts_check.xy; multithreaded)
+        dB_ref = dk_matrix(basis_check, keval, pts_check.xy; multithreaded)
+        _scale_rows_sqrtw!(B_ref, w, nsym)
+        _scale_rows_sqrtw!(dB_ref, w, nsym)
+        err_B = norm(B - B_ref) / max(norm(B_ref), eps(T))
+        err_dB = norm(dB - dB_ref) / max(norm(dB_ref), eps(T))
+        max(err_B, err_dB) <= basis.taylor_tol || throw(ArgumentError("Taylor representation with degree $(basis.taylor_degree) and radius $(basis.taylor_radius) fails tolerance $(basis.taylor_tol) for expansion center k0 = $kcheck at evaluation point k = $keval: basis error = $err_B, derivative error = $err_dB"))
+        panel_start = Int[]
+        panel_stop = Int[]
+        i = 1
+        while i <= length(centers)
+            j = max(i, searchsortedlast(centers, centers[i] + 2R))
+            push!(panel_start, i)
+            push!(panel_stop, j)
+            i = j + 1
+        end
+        @maybe_showprogress show_progress for p in eachindex(panel_start)
+            i1 = panel_start[p]
+            i2 = panel_stop[p]
+            kc = (centers[i1] + centers[i2]) / 2
+            kmax = centers[i2]
+            dim = max(solver.min_dim, round(Int, L * kmax * solver.dim_scaling_factor / (2 * pi)))
+            basis_new = resize_basis(basis, billiard, dim, kmax)
+            pts = evaluate_points(solver, billiard, kmax)
+            cache = basis_cache(basis_new, kc, pts.xy; multithreaded)
+            for i in i1:i2
+                k0, Δk = centers[i], widths[i]
+                if solver.eigenvectors
+                    ki, ti, X = solve_vectors(solver, basis_new, pts, cache, k0, Δk + tol; multithreaded)
+                    idx = _ten_keep(ten_tol, ti); ndropped[] += length(ti) - length(idx)
+                    ki = ki[idx]; ti = ti[idx]; X = X[:, idx]
+                    si = AbsState[BasisEigenstate(ki[j], k0, X[:, j], ti[j], basis_new) for j in eachindex(ki)]
+                    if i == 1
+                        append!(ks, ki)
+                        append!(ts, ti)
+                        append!(control, fill(false, length(ki)))
+                        append!(states, si)
+                    else
+                        overlap_and_merge!(ks, ts, ki, ti, control, centers[i - 1], k0; tol, states_left = states, states_right = si)
+                    end
+                else
+                    ki, ti = solve(solver, basis_new, pts, cache, k0, Δk + tol; multithreaded)
+                    idx = _ten_keep(ten_tol, ti); ndropped[] += length(ti) - length(idx)
+                    ki = ki[idx]; ti = ti[idx]
+                    if i == 1
+                        append!(ks, ki)
+                        append!(ts, ti)
+                        append!(control, fill(false, length(ki)))
+                    else
+                        overlap_and_merge!(ks, ts, ki, ti, control, centers[i - 1], k0; tol)
+                    end
+                end
+            end
+        end
+    else
+        @maybe_showprogress show_progress for i in eachindex(centers)
+            k0, Δk = centers[i], widths[i]
+            dim = max(solver.min_dim, round(Int, L * k0 * solver.dim_scaling_factor / (2 * pi)))
+            basis_new = resize_basis(basis, billiard, dim, k0)
+            pts = evaluate_points(solver, billiard, k0)
+            if solver.eigenvectors
+                ki, ti, X = solve_vectors(solver, basis_new, pts, k0, Δk + tol; multithreaded)
+                idx = _ten_keep(ten_tol, ti); ndropped[] += length(ti) - length(idx)
+                ki = ki[idx]; ti = ti[idx]; X = X[:, idx]
+                si = AbsState[BasisEigenstate(ki[j], k0, X[:, j], ti[j], basis_new) for j in eachindex(ki)]
+                if i == 1
+                    append!(ks, ki)
+                    append!(ts, ti)
+                    append!(control, fill(false, length(ki)))
+                    append!(states, si)
+                else
+                    overlap_and_merge!(ks, ts, ki, ti, control, centers[i - 1], k0; tol, states_left = states, states_right = si)
+                end
+            else
+                ki, ti = solve(solver, basis_new, pts, k0, Δk + tol; multithreaded)
+                idx = _ten_keep(ten_tol, ti); ndropped[] += length(ti) - length(idx)
+                ki = ki[idx]; ti = ti[idx]
+                if i == 1
+                    append!(ks, ki)
+                    append!(ts, ti)
+                    append!(control, fill(false, length(ki)))
+                else
+                    overlap_and_merge!(ks, ts, ki, ti, control, centers[i - 1], k0; tol)
+                end
+            end
+        end
+    end
+    keep = (k1T .<= real.(ks)) .& (real.(ks) .<= k2T)
+    return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], control[keep]; states = solver.eigenvectors ? identity.(states[keep]) : nothing, ten_tol, ndropped = ndropped[])
+end
+
+"""
+    compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, N1::Int, N2::Int; N_expect::Real=3, tol::Real=1e-4, multithreaded::Bool=true, show_progress::Bool=true) → SpectralData
+
+Computes the accelerated-basis spectrum corresponding approximately to
+Weyl-law state indices `N1` through `N2`. The local spectral window spacing is
+chosen from the Weyl spectral density.
+
+## Arguments
+* `solver::AcceleratedBasisSolver`: Accelerated basis eigensolver.
+* `basis::AbsBasis`: Basis used to represent the eigenstates.
+* `billiard::AbsBilliard`: Billiard geometry.
+* `N1::Int`: First requested Weyl-law state index.
+* `N2::Int`: Last requested Weyl-law state index.
+
+## Keyword Arguments
+* `N_expect::Real=3`: Expected number of eigenvalues per local spectral window, so each window has width `N_expect/spectral_density(k, billiard)`. The accelerated basis method is accurate only for windows narrower than about one mean level spacing, so values of order one or larger give wide windows that return spurious levels (rejected by `ten_tol`) and lose accuracy, especially at low `k`. Use `N_expect` below 1 (for example `0.35`) unless `k` is large.
+* `tol::Real=1e-4`: Additional overlap tolerance used when solving and matching neighboring spectral windows.
+* `ten_tol::Union{Nothing,Real}=5e-4`: Maximum accepted tension, see the `k1,k2` method.
+* `multithreaded::Bool=true`: Enable multithreaded matrix construction and eigensolution where supported.
+* `show_progress::Bool=true`: Display a progress bar during the spectral sweep.
+
+## Returns
+* `data::SpectralData`: Merged and sorted spectrum over the wavenumber range corresponding to state indices `N1:N2`, including stored [`BasisEigenstate`](@ref)s when `solver.eigenvectors=true`.
+"""
+function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, N1::Int, N2::Int; N_expect::Real=3, tol::Real=1e-4, ten_tol::Union{Nothing,Real}=5e-4, multithreaded::Bool=true, show_progress::Bool=true)
+    k1, k2 = k_range_for_states(billiard, N1, N2)
+    dk = k -> N_expect/spectral_density(k, billiard)
+    return compute_spectrum(solver, basis, billiard, k1, k2, dk; tol, ten_tol, multithreaded, show_progress)
+end
+
+################################################################################
+# BEYN
+################################################################################
+
+"""
+    compute_spectrum(solver::BeynSolver, billiard::Bi, k1, k2; multithreaded::Bool=true, show_progress::Bool=true) where {Bi<:AbsBilliard} → SpectralData
+
+Computes the Beyn spectrum over the requested wavenumber interval using
+Weyl-sized contour windows.
+
+When `solver.eigenvectors=true`, each retained eigenvalue stores a
+[`BIMEigenstate`](@ref) containing the layer density produced by the Beyn
+solve. The density is expanded with [`symmetrize_layer_density`](@ref) before
+storage, so both `state.vec` and `state.pts` refer to the complete physical
+boundary.
+
+When `solver.imag_k_check=true`, projected roots and layer densities are
+retained temporarily and subjected to the global imaginary-wavenumber
+residual check before the final spectrum is constructed.
+
+## Arguments
+* `solver::BeynSolver`: Beyn contour-integral eigensolver.
+* `billiard::Bi`: Billiard geometry.
+* `k1`: Lower bound of the requested real-wavenumber interval.
+* `k2`: Upper bound of the requested real-wavenumber interval.
+
+## Keyword Arguments
+* `ten_tol::Union{Nothing,Real}=1e-8`: Maximum accepted residual (`nothing` disables the filter); larger candidates are discarded with a warning.
+* `multithreaded::Bool=true`: Enable multithreaded boundary-integral matrix construction.
+* `show_progress::Bool=true`: Display a progress bar during the contour sweep.
+
+## Returns
+* `data::SpectralData`: Sorted complex spectrum, including full-boundary [`BIMEigenstate`](@ref)s when `solver.eigenvectors=true`.
+"""
+function compute_spectrum(solver::BeynSolver, billiard::Bi, k1, k2; ten_tol::Union{Nothing,Real}=1e-8, multithreaded::Bool=true, show_progress::Bool=true) where {Bi<:AbsBilliard}
+    T = _bim_numeric_type(solver); fundamental = solver.kernel.symmetry!==nothing
+    intervals = plan_weyl_windows(billiard, T(k1), T(k2); m=solver.m, Rmax=solver.Rmax, fundamental)
+    isempty(intervals) && throw(ArgumentError("Spectrum interval [$k1,$k2] contains no Weyl windows"))
+    k0, R = beyn_disks_from_windows(intervals); nw = length(k0)
+    pts_type = typeof(evaluate_points(solver, billiard, T(k1))); pts = Vector{pts_type}(undef, nw)
+    for i in 1:nw
+        pts[i] = evaluate_points(solver, billiard, real(k0[i]))
+    end
+    if solver.use_taylor
+        _tune_beyn_taylor_degree!(solver, pts, k0, R; multithreaded)
+    end
+    cheb_config = solver.cheb_config
+    if (solver.use_chebyshev || solver.imag_k_check) && solver.cheb_config.param_strategy!==:manual # always do cheb config since imag_k_check requires it anyway even if taylor
+        cheb_config = tune_cheb_config(solver.kernel, pts[end], real(k0[end])+R[end], solver.cheb_config)
+    end
+    if !solver.imag_k_check
+        ks_win = Vector{Vector{Complex{T}}}(undef, nw); ts_win = Vector{Vector{T}}(undef, nw)
+        if solver.eigenvectors
+            X_win = Vector{Matrix{Complex{T}}}(undef, nw)
+            @maybe_showprogress show_progress for i in 1:nw
+                ks_win[i], ts_win[i], X_win[i] = solve_vectors(solver, pts[i], k0[i], 2R[i]; multithreaded, cheb_config)
+            end
+            states_win = [[BIMEigenstate(ks_win[i][j], symmetrize_layer_density(solver.kernel, X_win[i][:,j], pts[i], billiard), ts_win[i][j], pts[i]) for j in eachindex(ks_win[i])] for i in 1:nw]
+            ks = reduce(vcat, ks_win); ts = reduce(vcat, ts_win); states = reduce(vcat, states_win)
+            keep = (T(k1).<=real.(ks)).&(real.(ks).<=T(k2))
+            return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], fill(false, count(keep)); states=isempty(states) ? nothing : states[keep], ten_tol)
+        end
+        @maybe_showprogress show_progress for i in 1:nw
+            ks_win[i], ts_win[i] = solve(solver, pts[i], k0[i], 2R[i]; multithreaded, cheb_config)
+        end
+        ks = reduce(vcat, ks_win); ts = reduce(vcat, ts_win); keep = (T(k1).<=real.(ks)).&(real.(ks).<=T(k2))
+        return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], fill(false, count(keep)); ten_tol)
+    end
+    ks_win = Vector{Vector{Complex{T}}}(undef, nw); X_win = Vector{Matrix{Complex{T}}}(undef, nw)
+    @maybe_showprogress show_progress for i in 1:nw
+        ks_win[i], X_win[i] = _beyn_projected_solve(solver, pts[i], k0[i], 2R[i]; multithreaded, cheb_config)
+    end
+    idx_keep, residuals = _beyn_imag_k_check(solver, ks_win, X_win, pts; multithreaded, cheb_config)
+    n = sum(length, idx_keep); ks = Vector{Complex{T}}(undef, n); ts = Vector{T}(undef, n); control = Vector{Bool}(undef, n)
+    if solver.eigenvectors
+        entries = Tuple{Int,Int}[]; p = 0
+        for i in 1:nw, q in eachindex(idx_keep[i])
+            j = idx_keep[i][q]; p += 1
+            ks[p] = ks_win[i][j]; control[p] = isnan(residuals[i][q]); ts[p] = control[p] ? abs(imag(ks[p])) : residuals[i][q]
+            push!(entries, (i,j))
+        end
+        states = [BIMEigenstate(ks[q], symmetrize_layer_density(solver.kernel, X_win[i][:,j], pts[i], billiard), ts[q], pts[i]) for (q,(i,j)) in enumerate(entries)]
+        keep = (T(k1).<=real.(ks)).&(real.(ks).<=T(k2))
+        return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], control[keep]; states=isempty(states) ? nothing : states[keep], ten_tol)
+    end
+    p = 0
+    for i in 1:nw, q in eachindex(idx_keep[i])
+        j = idx_keep[i][q]; p += 1
+        ks[p] = ks_win[i][j]; control[p] = isnan(residuals[i][q]); ts[p] = control[p] ? abs(imag(ks[p])) : residuals[i][q]
+    end
+    keep = (T(k1).<=real.(ks)).&(real.(ks).<=T(k2))
+    return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], control[keep]; ten_tol)
+end
+
+"""
+    compute_spectrum(solver::BeynSolver, billiard::Bi, N1::Int, N2::Int; multithreaded::Bool=true, show_progress::Bool=true) where {Bi<:AbsBilliard} → SpectralData
+
+Computes the Beyn spectrum over the wavenumber interval corresponding
+approximately to Weyl-law state indices `N1` through `N2`.
+
+## Arguments
+* `solver::BeynSolver`: Beyn contour-integral eigensolver.
+* `billiard::Bi`: Billiard geometry.
+* `N1::Int`: First requested Weyl-law state index.
+* `N2::Int`: Last requested Weyl-law state index.
+
+## Keyword Arguments
+* `ten_tol::Union{Nothing,Real}=1e-8`: Maximum accepted residual, see the `k1,k2` method.
+* `multithreaded::Bool=true`: Enable multithreaded boundary-integral matrix construction.
+* `show_progress::Bool=true`: Display a progress bar during the contour sweep.
+
+## Returns
+* `data::SpectralData`: Sorted complex spectrum over the corresponding Weyl-law wavenumber range, including full-boundary [`BIMEigenstate`](@ref)s when `solver.eigenvectors=true`.
+"""
+function compute_spectrum(solver::BeynSolver, billiard::Bi, N1::Int, N2::Int; ten_tol::Union{Nothing,Real}=1e-8, multithreaded::Bool=true, show_progress::Bool=true) where {Bi<:AbsBilliard}
+    fundamental = solver.kernel.symmetry!==nothing
+    k1, k2 = k_range_for_states(billiard, N1, N2; fundamental)
+    return compute_spectrum(solver, billiard, k1, k2; ten_tol, multithreaded, show_progress)
+end
+
+################################################################################
+# EXPANDED BIM
+################################################################################
+
+# Score competing EBIM roots by imaginary part and correction tension.
+@inline _ebim_scoring_logic(k::Number, t::T) where {T<:Real} = log10(abs(imag(k))+eps(T))+log10(abs(t)+eps(T))
+
+# Compute the local median real-wavenumber spacing around index i.
+function _local_gap(xs::AbstractVector{T}, i::Int; w::Int=4) where {T<:Real}
+    i1 = max(1, i-w); i2 = min(length(xs), i+w); gaps = filter(>(zero(T)), diff(@view xs[i1:i2]))
+    isempty(gaps) && return T(Inf)
+    sort!(gaps); n = length(gaps)
+    return isodd(n) ? gaps[(n+1)÷2] : (gaps[n÷2]+gaps[n÷2+1])/2
+end
+
+# Cluster and merge duplicate EBIM corrections.
+function overlap_and_merge_ebim!(k_left::Vector{K}, ten_left::Vector{T}, k_right::Vector{K}, ten_right::Vector{T}, control_left::Vector{Bool}; tol::T=T(1e-5), spacing_frac::T=T(0.02), tolmax::T=T(5e-3), local_window::Int=4, states_left::SL=nothing, states_right::SR=nothing) where {K<:Number,T<:Real,SL<:Union{Nothing,Vector{<:AbsState}},SR<:Union{Nothing,Vector{<:AbsState}}}
+    isempty(k_right) && return nothing
+    append!(k_left, k_right); append!(ten_left, ten_right); append!(control_left, fill(false, length(k_right))); states_left!==nothing && append!(states_left, states_right)
+    p = sortperm(k_left; by=real); k_all = k_left[p]; ten_all = ten_left[p]; ctrl_all = control_left[p]; states_all = states_left===nothing ? nothing : states_left[p]
+    xs = real.(k_all); new_k = K[]; new_t = T[]; new_c = Bool[]; new_states = states_left===nothing ? nothing : similar(states_left, 0); i = 1
+    while i<=length(k_all)
+        j = i
+        while j<length(k_all)
+            lgap = min(_local_gap(xs, j; w=local_window), _local_gap(xs, j+1; w=local_window))
+            xs[j+1]-xs[j]<=min(tolmax, max(tol, spacing_frac*T(lgap))) || break
+            j += 1
+        end
+        block = i:j; best = block[argmin(_ebim_scoring_logic.(k_all[block], ten_all[block]))]
+        push!(new_k, k_all[best]); push!(new_t, ten_all[best]); push!(new_c, any(ctrl_all[block]) || length(block)>1); new_states!==nothing && push!(new_states, states_all[best])
+        i = j+1
+    end
+    empty!(k_left); append!(k_left, new_k); empty!(ten_left); append!(ten_left, new_t); empty!(control_left); append!(control_left, new_c)
+    states_left!==nothing && (empty!(states_left); append!(states_left, new_states))
+    return nothing
+end
+
+@inline function weyl_window_count(billiard::Bi, k::T, dk::T; fundamental::Bool=true) where {T<:Real,Bi<:AbsBilliard}
+    A = fundamental ? fundamental_area(billiard) : area(billiard)
+    return A*((k+dk)^2-k^2)/(T(4pi))
+end
+
+"""
+    compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::Function=(k -> 0.05), tol=1e-5, spacing_frac=0.02, tolmax=5e-3, local_window::Int=4, multithreaded::Bool=true, show_progress::Bool=true) where {Bi<:AbsBilliard}
+
+Compute the EBIM spectrum in `[k1,k2]`.
+
+Local EBIM expansion centers are separated according to `dk(k)`. At each
+center, the number of requested local eigenvalues is estimated from the Weyl
+law. Candidates are retained within the corresponding local spectral window
+and duplicate estimates from overlapping windows are merged.
+
+If `solver.use_taylor` is enabled, consecutive EBIM centers spanning at most
+`2solver.taylor_radius` are grouped into Taylor panels. One analytic Fredholm
+Taylor expansion is constructed at the midpoint of each panel and reused for
+all EBIM centers in that panel. Otherwise, `A`, `A'`, and `A''` are assembled
+directly at every expansion center.
+
+## Arguments
+* `solver::ExpandedBIMSolver`: EBIM solver.
+* `billiard::Bi`: Billiard geometry.
+* `k1`: Lower wavenumber bound.
+* `k2`: Upper wavenumber bound.
+
+## Keyword Arguments
+* `dk::Function = (k -> 0.05)`: Local EBIM spectral half-width and center spacing.
+* `tol = 1e-5`: Absolute tolerance used when merging duplicate eigenvalues.
+* `spacing_frac = 0.02`: Local-spacing fraction used by duplicate detection.
+* `tolmax = 5e-3`: Maximum duplicate-merging tolerance.
+* `local_window::Int = 4`: Number of neighboring spacings used by the local duplicate criterion.
+* `multithreaded::Bool = true`: Enable multithreaded matrix construction.
+* `show_progress::Bool = true`: Display the spectrum-sweep progress indicator.
+* `ten_tol::Union{Nothing,Real} = 5e-4`: Maximum accepted correction magnitude (`nothing` disables the filter); larger candidates are discarded before merging, with a warning.
+
+## Returns
+* `data::SpectralData`: Merged and sorted EBIM spectrum with correction magnitudes and merge-control flags.
+"""
+function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::Function = (k -> 0.05), tol = 1e-5, spacing_frac = 0.02, tolmax = 5e-3, local_window::Int = 4, ten_tol::Union{Nothing,Real} = 5e-4, multithreaded::Bool = true, show_progress::Bool = true) where {Bi<:AbsBilliard}
+    T = _bim_numeric_type(solver)
+    k1T = T(k1)
+    k2T = T(k2)
+    k1T < k2T || throw(ArgumentError("require k1 < k2"))
+    fundamental = solver.kernel.symmetry !== nothing
+    centers = T[]
+    dks = T[]
+    nlevels = Int[]
+    k = k1T
+    while k <= k2T
+        Δk = T(dk(k))
+        Δk > zero(T) || throw(ArgumentError("dk(k) must be positive"))
+        push!(centers, k)
+        push!(dks, Δk)
+        nweyl = ceil(Int, weyl_window_count(billiard, k - Δk, 2 * Δk; fundamental))
+        push!(nlevels, max(1, nweyl))
+        k += Δk
+    end
+    ks = Complex{T}[]
+    ts = T[]
+    ndropped = Ref(0)
+    if !solver.use_taylor
+        @maybe_showprogress show_progress for i = eachindex(centers)
+            ki = centers[i]
+            pts = evaluate_points(solver, billiard, ki)
+            ksi, tsi = solve(solver, pts, ki, nlevels[i]; multithreaded)
+            @inbounds for q = eachindex(ksi)
+                if abs(real(ksi[q]) - ki) <= dks[i]
+                    if _ten_ok(ten_tol, tsi[q])
+                        push!(ks, ksi[q])
+                        push!(ts, tsi[q])
+                    else
+                        ndropped[] += 1
+                    end
+                end
+            end
+        end
+    else
+        T === Float64 || throw(ArgumentError("analytic EBIM Taylor acceleration currently requires Float64"))
+        R = T(solver.taylor_radius)
+        R > zero(T) || throw(ArgumentError("taylor_radius must be positive"))
+        p = solver.taylor_degree
+        np = length(centers)
+        panel_start = 1
+        progress = show_progress ? Progress(np; desc = "EBIM spectrum: ") : nothing
+        while panel_start <= np
+            panel_stop = panel_start
+            panel_limit = centers[panel_start] + 2R
+            while panel_stop < np && centers[panel_stop + 1] <= panel_limit
+                panel_stop += 1
+            end
+            kc = T(0.5) * (centers[panel_start] + centers[panel_stop])
+            kmax_panel = min(k2T, kc + R)
+            pts = evaluate_points(solver, billiard, kmax_panel)
+            cache = EBIMTaylorCache(solver.kernel, pts, Float64(kc), p; multithreaded)
+            N = size(cache.coeffs, 1)
+            A = Matrix{ComplexF64}(undef, N, N)
+            dA = similar(A)
+            ddA = similar(A)
+            @inbounds for i = panel_start:panel_stop
+                ki = centers[i]
+                _construct_matrices!(solver, A, dA, ddA, cache, ki)
+                ksi, tsi = _solve(solver, A, dA, ddA, ki, nlevels[i])
+                for q = eachindex(ksi)
+                    if abs(real(ksi[q]) - ki) <= dks[i]
+                        if _ten_ok(ten_tol, tsi[q])
+                            push!(ks, ksi[q])
+                            push!(ts, tsi[q])
+                        else
+                            ndropped[] += 1
+                        end
+                    end
+                end
+            end
+            show_progress && update!(progress, panel_stop)
+            panel_start = panel_stop + 1
+        end
+    end
+    keep = (k1T .<= real.(ks)) .& (real.(ks) .<= k2T)
+    ks = ks[keep]
+    ts = ts[keep]
+    kout = Complex{T}[]
+    tout = T[]
+    control = Bool[]
+    overlap_and_merge_ebim!(kout, tout, ks, ts, control; tol = T(tol), spacing_frac = T(spacing_frac), tolmax = T(tolmax), local_window = local_window)
+    return _finalize_spectrum(billiard, solver, kout, tout, control; ten_tol, ndropped = ndropped[])
+end
+
+"""
+    compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, N1::Int, N2::Int; dk::Function=(k->0.05*k^(-1/3)), tol=1e-5, spacing_frac=0.02, tolmax=5e-3, local_window::Int=4, seg_reuse_frac=0.95, multithreaded::Bool=true, show_progress::Bool=true) where {Bi<:AbsBilliard} → SpectralData
+
+Computes the expanded-BIM spectrum over the wavenumber interval corresponding
+approximately to Weyl-law state indices `N1` through `N2`.
+
+## Arguments
+* `solver::ExpandedBIMSolver`: Expanded boundary-integral eigensolver.
+* `billiard::Bi`: Billiard geometry.
+* `N1::Int`: First requested Weyl-law state index.
+* `N2::Int`: Last requested Weyl-law state index.
+
+## Keyword Arguments
+* `dk::Function=(k->0.05*k^(-1/3))`: Adaptive spacing between expansion wavenumbers.
+* `tol=1e-5`: Minimum absolute separation used when clustering corrected roots.
+* `spacing_frac=0.02`: Fraction of the local spectral spacing used as an adaptive clustering threshold.
+* `tolmax=5e-3`: Maximum clustering threshold.
+* `local_window::Int=4`: Number of neighboring spacings on each side used to estimate the local spectral spacing.
+* `seg_reuse_frac=0.95`: Controls how far a boundary discretization may be reused before it is regenerated.
+* `multithreaded::Bool=true`: Enable multithreaded boundary-integral matrix construction.
+* `show_progress::Bool=true`: Display a progress bar during the correction sweep.
+* `ten_tol::Union{Nothing,Real}=5e-4`: Maximum accepted correction magnitude, see the `k1,k2` method.
+
+## Returns
+* `data::SpectralData`: Merged and sorted complex spectrum over the corresponding Weyl-law wavenumber range.
+"""
+function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, N1::Int, N2::Int; dk::Function = (k -> 0.05 * k^(-1/3)), tol = 1e-5, spacing_frac = 0.02, tolmax = 5e-3, local_window::Int = 4, ten_tol::Union{Nothing,Real} = 5e-4, multithreaded::Bool = true, show_progress::Bool = true) where {Bi<:AbsBilliard}
+    fundamental = solver.kernel.symmetry !== nothing
+    k1, k2 = k_range_for_states(billiard, N1, N2; fundamental)
+    return compute_spectrum(solver, billiard, k1, k2; dk, tol, spacing_frac, tolmax, local_window, ten_tol, multithreaded, show_progress)
+end
+
+################################################################################
+# CORK
+################################################################################
+
+"""
+    compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; multithreaded::Bool=true, show_progress::Bool=true) where {Bi<:AbsBilliard} → SpectralData
+
+Computes the complete CORK spectrum over the requested wavenumber interval
+using adjacent Weyl-sized spectral windows.
+
+Each requested interval is independently edge-certified and neighboring
+windows use deterministic ownership. When `solver.eigenvectors=true`, each
+retained root stores a [`BIMEigenstate`](@ref) containing the CORK layer
+density. The density is expanded with [`symmetrize_layer_density`](@ref) before
+storage, so both `state.vec` and `state.pts` refer to the complete physical
+boundary.
+
+## Arguments
+* `solver::CORKSolver`: Chebyshev-CORK boundary-integral eigensolver.
+* `billiard::Bi`: Billiard geometry.
+* `k1`: Lower bound of the requested real-wavenumber interval.
+* `k2`: Upper bound of the requested real-wavenumber interval.
+
+## Keyword Arguments
+* `multithreaded::Bool=true`: Enable multithreaded polynomial and boundary-integral matrix construction.
+* `show_progress::Bool=true`: Display a progress bar during the spectral sweep.
+* `ten_tol::Union{Nothing,Real}=1e-8`: Maximum accepted residual (`nothing` disables the filter); larger candidates are discarded with a warning.
+
+## Returns
+* `data::SpectralData`: Complete sorted complex spectrum over `k1 ≤ Re(k) ≤ k2`, including full-boundary [`BIMEigenstate`](@ref)s when `solver.eigenvectors=true`.
+"""
+function compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; ten_tol::Union{Nothing,Real}=1e-8, multithreaded::Bool=true, show_progress::Bool=true) where {Bi<:AbsBilliard}
+    T = _bim_numeric_type(solver); k1T = T(k1); k2T = T(k2); k1T<k2T || throw(ArgumentError("require k1<k2"))
+    fundamental = solver.kernel.symmetry!==nothing
+    intervals = plan_weyl_windows(billiard, k1T, k2T; m=solver.nlevels, Rmax=solver.Rmax, fundamental)
+    isempty(intervals) && throw(ArgumentError("Spectrum interval [$k1,$k2] contains no Weyl windows"))
+    if length(intervals)>1
+        ap, bp = intervals[end-1]; a, b = intervals[end]; dkprev = bp-ap
+        b-a<dkprev && (intervals[end] = (a, a+dkprev))
+    end
+    a, b = intervals[1]; k0 = (a+b)/2; Δpoly = (1+solver.guard)*(b-a)/2; pts = evaluate_points(solver, billiard, k0)
+    pmin = max(2, ceil(Int, sqrt(solver.b))); p = max(solver.p, pmin)
+    @time "Polynomial Validation..." begin
+        P, _ = build_cork_polynomial(solver.kernel, pts, Float64(k0), Float64(Δpoly), p; multithreaded)
+        err = validate_polynomial(solver.kernel, pts, P; multithreaded)
+        if err>solver.taylor_tol
+            while err>solver.taylor_tol
+                p += 1
+                P, _ = build_cork_polynomial(solver.kernel, pts, Float64(k0), Float64(Δpoly), p; multithreaded)
+                err = validate_polynomial(solver.kernel, pts, P; multithreaded)
+            end
+        else
+            while p>pmin
+                P1, _ = build_cork_polynomial(solver.kernel, pts, Float64(k0), Float64(Δpoly), p-1; multithreaded)
+                err1 = validate_polynomial(solver.kernel, pts, P1; multithreaded)
+                err1>solver.taylor_tol && break
+                p -= 1; err = err1
+            end
+        end
+        solver.verbose && @printf("CORK polynomial degree: %d -> %d, validation error = %.3e, tolerance = %.3e\n", solver.p, p, err, solver.taylor_tol)
+    end
+    ks = Complex{T}[]; ts = T[]
+    if solver.eigenvectors
+        states = nothing
+        @maybe_showprogress show_progress for i in eachindex(intervals)
+            a, b = intervals[i]; k0 = (a+b)/2; dk = b-a; pts = evaluate_points(solver, billiard, k0)
+            ki, ti, X = solve_vectors(solver, pts, k0, dk; multithreaded, p, expected=weyl_window_count(billiard, k0 - dk/2, dk; fundamental))
+            keep = findall(j -> begin
+                x = real(ki[j])
+                a<=x && (i==length(intervals) ? x<=k2T : x<b) && k1T<=x
+            end, eachindex(ki))
+            isempty(keep) && continue
+            si = [BIMEigenstate(ki[j], symmetrize_layer_density(solver.kernel, X[:,j], pts, billiard), ti[j], pts) for j in keep]
+            states===nothing ? (states = si) : append!(states, si)
+            append!(ks, Complex{T}.(ki[keep])); append!(ts, T.(ti[keep]))
+        end
+        states===nothing && (states = AbsState[])
+        _cork_warn_if_incomplete(solver, billiard, length(ks), k1T, k2T)
+        return _finalize_spectrum(billiard, solver, ks, ts, fill(false, length(ks)); states, ten_tol)
+    end
+    @maybe_showprogress show_progress for i in eachindex(intervals)
+        a, b = intervals[i]; k0 = (a+b)/2; dk = b-a; pts = evaluate_points(solver, billiard, k0)
+        ki, ti = solve(solver, pts, k0, dk; multithreaded, p, expected=weyl_window_count(billiard, k0 - dk/2, dk; fundamental))
+        keep = findall(j -> begin
+            x = real(ki[j])
+            a<=x && (i==length(intervals) ? x<=k2T : x<b) && k1T<=x
+        end, eachindex(ki))
+        append!(ks, Complex{T}.(ki[keep])); append!(ts, T.(ti[keep]))
+    end
+    _cork_warn_if_incomplete(solver, billiard, length(ks), k1T, k2T)
+    return _finalize_spectrum(billiard, solver, ks, ts, fill(false, length(ks)); ten_tol)
+end
+
+"""
+    compute_spectrum(solver::CORKSolver, billiard::Bi, N1::Int, N2::Int; multithreaded::Bool=true, show_progress::Bool=true) where {Bi<:AbsBilliard} → SpectralData
+
+Computes the complete CORK spectrum over the wavenumber interval corresponding
+approximately to Weyl-law state indices `N1` through `N2`.
+
+## Arguments
+* `solver::CORKSolver`: Chebyshev-CORK boundary-integral eigensolver.
+* `billiard::Bi`: Billiard geometry.
+* `N1::Int`: First requested Weyl-law state index.
+* `N2::Int`: Last requested Weyl-law state index.
+
+## Keyword Arguments
+* `multithreaded::Bool=true`: Enable multithreaded polynomial and boundary-integral matrix construction.
+* `show_progress::Bool=true`: Display a progress bar during the spectral sweep.
+* `ten_tol::Union{Nothing,Real}=1e-8`: Maximum accepted residual, see the `k1,k2` method.
+
+## Returns
+* `data::SpectralData`: Complete sorted complex spectrum over the corresponding Weyl-law wavenumber range, including full-boundary [`BIMEigenstate`](@ref)s when `solver.eigenvectors=true`.
+"""
+function compute_spectrum(solver::CORKSolver, billiard::Bi, N1::Int, N2::Int; ten_tol::Union{Nothing,Real}=1e-8, multithreaded::Bool=true, show_progress::Bool=true) where {Bi<:AbsBilliard}
+    fundamental = solver.kernel.symmetry!==nothing
+    k1, k2 = k_range_for_states(billiard, N1, N2; fundamental)
+    return compute_spectrum(solver, billiard, k1, k2; ten_tol, multithreaded, show_progress)
 end
