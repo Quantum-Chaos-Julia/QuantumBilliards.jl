@@ -571,7 +571,7 @@ end
         1.5 => (ComplexF64[1.4500002, 1.75], [2e-4, 1e-3]))
     f = (k0, nl) -> (push!(centers, k0); push!(nls, nl); candidates[k0])
     solver = eb_scripted(f; use_taylor=false)
-    data = compute_spectrum(solver, eb_circle, 1.0, 1.5; dk=k -> dk, multithreaded=false, show_progress=false)
+    data = compute_spectrum(solver, eb_circle, 1.0, 1.5; dk=k -> dk, ten_tol=nothing, multithreaded=false, show_progress=false)
 
     @testset "expansion centers are k1, k1 + dk, ... up to k2 with the Weyl local level count" begin
         @test centers == [1.0, 1.25, 1.5]
@@ -594,6 +594,15 @@ end
         @test issorted(data.k)
     end
 
+    @testset "ten_tol drops candidates with a larger correction before merging" begin
+        filtered = compute_spectrum(solver, eb_circle, 1.0, 1.5; dk=k -> dk, ten_tol=2.5e-3, multithreaded=false, show_progress=false)
+        @test all(filtered.ten .<= 2.5e-3)
+        @test filtered.k == [1.1000004, 1.24, 1.4500002]                     # 1.2 (3e-3) is discarded
+        default = compute_spectrum(solver, eb_circle, 1.0, 1.5; dk=k -> dk, multithreaded=false, show_progress=false)
+        @test all(default.ten .<= 5e-4)
+        @test default.k == [1.1000004, 1.4500002]
+    end
+
     @testset "invalid arguments" begin
         @test_throws "require k1 < k2" compute_spectrum(solver, eb_circle, 1.5, 1.0; show_progress=false)
         @test_throws "dk(k) must be positive" compute_spectrum(solver, eb_circle, 1.0, 1.5; dk=k -> 0.0, show_progress=false)
@@ -603,16 +612,17 @@ end
         empty_solver = eb_scripted((k0, nl) -> (ComplexF64[], Float64[]); use_taylor=false)
         data = compute_spectrum(empty_solver, eb_circle, 1.0, 1.5; dk=k -> dk, show_progress=false)
         @test length(data) == 0
-        outside = eb_scripted((k0, nl) -> (ComplexF64[k0 + 0.2], [1e-3]); use_taylor=false)   # every candidate above k2
+        outside = eb_scripted((k0, nl) -> (ComplexF64[k0 + 0.2], [1e-4]); use_taylor=false)   # every candidate above k2
         data = compute_spectrum(outside, eb_circle, 1.0, 1.0 + 1e-9; dk=k -> dk, show_progress=false)
         @test length(data) == 0
     end
 
     @testset "the number-of-states interface uses the Weyl-law wavenumber range" begin
-        g = eb_scripted((k0, nl) -> (ComplexF64[k0], [1e-3]); use_taylor=false)
+        g = eb_scripted((k0, nl) -> (ComplexF64[k0], [1e-4]); use_taylor=false)
         k1, k2 = k_range_for_states(eb_circle, 5, 12; fundamental=false)
         byk = compute_spectrum(g, eb_circle, k1, k2; dk=k -> 0.05, multithreaded=false, show_progress=false)
         byn = compute_spectrum(g, eb_circle, 5, 12; dk=k -> 0.05, multithreaded=false, show_progress=false)
+        @test length(byk) > 0
         @test byn.k == byk.k && byn.ten == byk.ten && byn.control == byk.control
     end
 end

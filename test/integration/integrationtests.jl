@@ -1,7 +1,7 @@
 # Integration tier: spectrum-focused pipeline tests. Uncomment each include once its file exists.
 # `common.jl` (reference generators and tolerances) is included by runtests.jl before this file.
 
-# include("high_k/beyn_high_k_spectra.jl")
+include("high_k/beyn_high_k_spectra.jl")
 
 include("basis_methods/decompositionmethod_wavenumber.jl")
 include("basis_methods/particularsolutions_wavenumber.jl")

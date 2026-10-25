@@ -42,4 +42,4 @@ include("states/wavefunctions_tests.jl")
 include("states/boundaryfunctions_tests.jl")
 include("states/husimifunctions_tests.jl")
 
-# include("quality/aqua_tests.jl")
+include("quality/aqua_tests.jl")

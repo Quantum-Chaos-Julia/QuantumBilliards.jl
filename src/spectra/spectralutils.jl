@@ -503,7 +503,7 @@ function compute_spectrum(solver::BeynSolver, billiard::Bi, k1, k2; ten_tol::Uni
             states_win = [[BIMEigenstate(ks_win[i][j], symmetrize_layer_density(solver.kernel, X_win[i][:,j], pts[i], billiard), ts_win[i][j], pts[i]) for j in eachindex(ks_win[i])] for i in 1:nw]
             ks = reduce(vcat, ks_win); ts = reduce(vcat, ts_win); states = reduce(vcat, states_win)
             keep = (T(k1).<=real.(ks)).&(real.(ks).<=T(k2))
-            return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], fill(false, count(keep)); states=states[keep], ten_tol)
+            return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], fill(false, count(keep)); states=isempty(states) ? nothing : states[keep], ten_tol)
         end
         @maybe_showprogress show_progress for i in 1:nw
             ks_win[i], ts_win[i] = solve(solver, pts[i], k0[i], 2R[i]; multithreaded, cheb_config)
@@ -526,7 +526,7 @@ function compute_spectrum(solver::BeynSolver, billiard::Bi, k1, k2; ten_tol::Uni
         end
         states = [BIMEigenstate(ks[q], symmetrize_layer_density(solver.kernel, X_win[i][:,j], pts[i], billiard), ts[q], pts[i]) for (q,(i,j)) in enumerate(entries)]
         keep = (T(k1).<=real.(ks)).&(real.(ks).<=T(k2))
-        return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], control[keep]; states=states[keep], ten_tol)
+        return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], control[keep]; states=isempty(states) ? nothing : states[keep], ten_tol)
     end
     p = 0
     for i in 1:nw, q in eachindex(idx_keep[i])
