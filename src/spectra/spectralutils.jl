@@ -428,7 +428,7 @@ chosen from the Weyl spectral density.
 * `N2::Int`: Last requested Weyl-law state index.
 
 ## Keyword Arguments
-* `N_expect::Real=3`: Expected number of eigenvalues per local spectral window.
+* `N_expect::Real=3`: Expected number of eigenvalues per local spectral window, so each window has width `N_expect/spectral_density(k, billiard)`. The accelerated basis method is accurate only for windows narrower than about one mean level spacing, so values of order one or larger give wide windows that return spurious levels (rejected by `ten_tol`) and lose accuracy, especially at low `k`. Use `N_expect` below 1 (for example `0.35`) unless `k` is large.
 * `tol::Real=1e-4`: Additional overlap tolerance used when solving and matching neighboring spectral windows.
 * `ten_tol::Union{Nothing,Real}=5e-4`: Maximum accepted tension, see the `k1,k2` method.
 * `multithreaded::Bool=true`: Enable multithreaded matrix construction and eigensolution where supported.
@@ -838,6 +838,7 @@ function compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; ten_tol::Uni
             append!(ks, Complex{T}.(ki[keep])); append!(ts, T.(ti[keep]))
         end
         states===nothing && (states = AbsState[])
+        _cork_warn_if_incomplete(solver, billiard, length(ks), k1T, k2T)
         return _finalize_spectrum(billiard, solver, ks, ts, fill(false, length(ks)); states, ten_tol)
     end
     @maybe_showprogress show_progress for i in eachindex(intervals)
@@ -849,6 +850,7 @@ function compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; ten_tol::Uni
         end, eachindex(ki))
         append!(ks, Complex{T}.(ki[keep])); append!(ts, T.(ti[keep]))
     end
+    _cork_warn_if_incomplete(solver, billiard, length(ks), k1T, k2T)
     return _finalize_spectrum(billiard, solver, ks, ts, fill(false, length(ks)); ten_tol)
 end
 

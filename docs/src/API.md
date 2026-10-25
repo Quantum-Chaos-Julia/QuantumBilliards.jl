@@ -64,11 +64,6 @@ generalized_eigvals
 sm_results
 solve_vectors
 ```
-Missing documentation:
-* `print_benchmark_info`, `ParticularSolutionsMethod`, `BoundaryPointsSM`,
-  `BoundaryPointsDM`, `construct_matrices_benchmark` — exported in
-  `src/QuantumBilliards.jl` but no matching definition currently exists
-  anywhere in `src/`.
 
 ## Spectra
 ```@docs

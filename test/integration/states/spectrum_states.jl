@@ -94,6 +94,23 @@ end
     @test _ss_scaled_residual(psi, ref) < 1e-6
 end
 
+# solver: Beyn contour integral
+# kernel/basis: CFIE, SmoothPeriodicGrading, ppw=10, eigenvectors=true (cached circle spectrum, window [2.2, 4.0], first level j_{0,1})
+# billiard: Circle, radius 1
+# symmetry: None
+# reference: structural; Beyn BIM states store the layer density only, so `state.u` is `nothing`. The solver-free
+#   `boundary_function(state)` must refuse with an ArgumentError, while the SpectralData method recomputes `u` through the solver
+# functions to test: boundary_function (BIMEigenstate without stored u, SpectralData method)
+@testset "States in SpectralData - Circle CFIE Beyn - missing u throws without a solver" begin
+    data = _ss_circle_spectrum()
+    @test data.states[1].u === nothing
+    @test_throws ArgumentError boundary_function(data.states[1])
+    @test_throws "no stored boundary normal derivative" boundary_function(data.states[1], data.billiard)
+    u, s, _ = boundary_function(data, 1)
+    @test u !== nothing
+    @test length(u) == length(s)
+end
+
 # solver: Vergini-Saraceno
 # kernel/basis: Real Plane Waves, even-even sector (sym_x = 1, sym_y = 1), scaling factors (5.0, 10.0), eigenvectors=true
 # billiard: Rectangle (RectangleBilliard(1.0, 0.7), the full 2.0 x 1.4 rectangle centred at the origin)

@@ -1,7 +1,11 @@
-# Integration tests for CORKSolver (src/solvers/acceleratedmethods/cork.jl) through `compute_spectrum`.
+# Integration tests for CORKSolver (src/solvers/acceleratedmethods/cork.jl) through `compute_spectrum` and `solve_spectrum`.
 # CORK needs `nlevels` of the order of (or above) the number of levels in the window, and enough boundary points
-# (finding F2 of scratchpad/test-suite-redesign-plan.md): with the defaults it throws, with too small `nlevels` it
-# silently drops levels. The testsets use the calibrated settings and assert the level count to catch regressions.
+# (finding F2 of scratchpad/test-suite-redesign-plan.md): with the defaults it throws, and too small a boundary
+# discretization raises "Reached full CORK Krylov dimension". With nlevels = 10, 20 and 40 on the rectangle [3, 10]
+# (ppw 20, min_pts 800) `compute_spectrum` was observed to return all 16 levels, so silent drops through
+# `compute_spectrum` are no longer reproducible. The direct `solve_spectrum` path uses a fixed polynomial degree over the
+# whole window and drops levels in a wide window; it now warns when the count falls well below the Weyl prediction.
+# The testsets use the calibrated settings and assert the level count to catch regressions.
 
 # solver: CORK
 # kernel/basis: CFIE, SmoothPeriodicGrading, ppw=20, min_pts=800, nlevels=40
@@ -49,4 +53,40 @@ end
     @test all(data.ten .< TENSION_TOL_ACCEL)
     @test all(abs.(data.k_im) .< IMAG_TOL)
     @test all(diff(ks) .> SPECTRUM_ATOL_BIM)
+end
+
+# solver: CORK
+# kernel/basis: CFIE, GlobalCornerGrading, ppw=20, min_pts=800, nlevels=20, fixed polynomial degree p = 12
+# billiard: Rectangle (RectangleBilliard(1.0, 0.7), the full 2.0 x 1.4 rectangle)
+# symmetry: None
+# reference: analytic; the window [3, 10] holds 16 levels (Weyl count about 16.5). The direct call with window width 7 uses
+#   one polynomial of fixed degree and was observed to return only 9 of them, which must raise the completeness warning.
+# functions to test: solve_spectrum, _cork_warn_if_incomplete
+@testset "CORK (CFIE) - Rectangle - wide direct solve_spectrum warns about an incomplete spectrum" begin
+    billiard = RectangleBilliard(1.0, 0.7)
+    kernel = CombinedFieldIntegralEquationSolver(20.0, billiard; grading=GlobalCornerGrading(), min_pts=800)
+    solver = CORKSolver(kernel; nlevels=20)
+    ks, _ = @test_logs (:warn, r"Weyl law predicts") solve_spectrum(solver, billiard, 6.5, 7.0; multithreaded=false)
+    ks_ref = rectangle_spectrum(2.0, 1.4, 3.0, 10.0)
+    @test length(ks_ref) == 16
+    @test length(ks) < length(ks_ref)
+end
+
+# solver: CORK
+# kernel/basis: CFIE, GlobalCornerGrading, ppw=20, min_pts=800, nlevels=20
+# billiard: Rectangle (RectangleBilliard(1.0, 0.7), the full 2.0 x 1.4 rectangle)
+# symmetry: None
+# reference: analytic; a narrow window [5.4, 6.6] is resolved by the fixed polynomial degree, so the direct call returns all
+#   reference levels and the completeness check stays silent
+# functions to test: solve_spectrum, _cork_warn_if_incomplete
+@testset "CORK (CFIE) - Rectangle - narrow direct solve_spectrum returns the reference levels without a warning" begin
+    billiard = RectangleBilliard(1.0, 0.7)
+    kernel = CombinedFieldIntegralEquationSolver(20.0, billiard; grading=GlobalCornerGrading(), min_pts=800)
+    solver = CORKSolver(kernel; nlevels=20)
+    ks, _ = @test_logs solve_spectrum(solver, billiard, 6.0, 1.2; multithreaded=false)
+    ks_ref = rectangle_spectrum(2.0, 1.4, 5.4, 6.6)
+    ks = sort(real.(ks))
+    @test !isempty(ks_ref)
+    @test length(ks) == length(ks_ref)
+    @test all(isapprox.(ks, ks_ref; atol=SPECTRUM_ATOL_BIM))
 end

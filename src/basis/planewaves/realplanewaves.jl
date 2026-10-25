@@ -140,7 +140,7 @@ end
 @inline infer_quantum_numbers(::Nothing) = nothing
 
 """
-    RealPlaneWaves(dim::Int, symmetries::Union{Vector{BG},Nothing}, sym_qnumbers::Union{Vector{T},Nothing}; angle_arc = π, angle_shift = 0.0, sampler = LinearNodes(), use_taylor::Bool = true, taylor_degree::Int = 16, taylor_radius::Real = 0.5, taylor_tol::Real = 1e-11) where {T<:Real,BG<:BilliardGeometry.AbsReflection} → basis::RealPlaneWaves
+    RealPlaneWaves(dim::Int, symmetries::Union{Vector{<:BilliardGeometry.AbsReflection},Nothing}, sym_qnumbers::Union{Vector{<:Real},Nothing}; angle_arc = π, angle_shift = 0.0, sampler = LinearNodes(), use_taylor::Bool = true, taylor_degree::Int = 16, taylor_radius::Real = 0.5, taylor_tol::Real = 1e-11) → basis::RealPlaneWaves
 
 Construct a [`RealPlaneWaves`](@ref) basis for the given reflection symmetries
 and quantum numbers.
@@ -162,7 +162,7 @@ and quantum numbers.
 ## Returns
 * `basis`: A [`RealPlaneWaves`](@ref) basis with the requested configuration.
 """
-function RealPlaneWaves(dim::Int, symmetries::Union{Vector{BG},Nothing}, sym_qnumbers::Union{Vector{<:Real},Nothing}; angle_arc = Float64(π), angle_shift = 0.0, sampler = LinearNodes(), use_taylor::Bool = true, taylor_degree::Int = 16, taylor_radius::Real = 0.5, taylor_tol::Real = 1e-11) where {BG<:BilliardGeometry.AbsReflection}
+function RealPlaneWaves(dim::Int, symmetries::Union{Vector{<:BilliardGeometry.AbsReflection},Nothing}, sym_qnumbers::Union{Vector{<:Real},Nothing}; angle_arc = Float64(π), angle_shift = 0.0, sampler = LinearNodes(), use_taylor::Bool = true, taylor_degree::Int = 16, taylor_radius::Real = 0.5, taylor_tol::Real = 1e-11)
     taylor_degree >= 1 || throw(ArgumentError("taylor_degree must be at least 1"))
     taylor_radius > 0 || throw(ArgumentError("taylor_radius must be positive"))
     taylor_tol > 0 || throw(ArgumentError("taylor_tol must be positive"))
@@ -345,7 +345,7 @@ function RealPlaneWaves(dim::Int; sym_x::Union{Int,Nothing}=nothing, sym_y::Unio
 end
 
 """
-    RealPlaneWaves(dim::Int, symmetries::Union{Vector{BG},Nothing}; angle_arc = π, angle_shift = 0.0, sampler = LinearNodes()) where {BG<:BilliardGeometry.AbsReflection} → basis::RealPlaneWaves
+    RealPlaneWaves(dim::Int, symmetries::Union{Vector{<:BilliardGeometry.AbsReflection},Nothing}; angle_arc = π, angle_shift = 0.0, sampler = LinearNodes()) → basis::RealPlaneWaves
 
 Construct a [`RealPlaneWaves`](@ref) basis of dimension `dim` for the given
 `symmetries`, inferring default quantum numbers (all `+1`, even parity) via
@@ -367,9 +367,9 @@ Construct a [`RealPlaneWaves`](@ref) basis of dimension `dim` for the given
 ## Returns
 *  `basis` : A [`RealPlaneWaves`](@ref) basis with the given symmetries and default (`+1`) quantum numbers.
 """
-function RealPlaneWaves(dim::Int, symmetries::Union{Vector{BG}, Nothing}; angle_arc=Float64(π), angle_shift=0.0, sampler=LinearNodes(),
+function RealPlaneWaves(dim::Int, symmetries::Union{Vector{<:BilliardGeometry.AbsReflection}, Nothing}; angle_arc=Float64(π), angle_shift=0.0, sampler=LinearNodes(),
                         use_taylor::Bool=true, taylor_degree::Int=16,
-                        taylor_radius::Real=0.5, taylor_tol::Real=1e-11) where {BG<:BilliardGeometry.AbsReflection}
+                        taylor_radius::Real=0.5, taylor_tol::Real=1e-11)
     sym_qnumbers = infer_quantum_numbers(symmetries)
     return RealPlaneWaves(dim, symmetries, sym_qnumbers; angle_arc=angle_arc, angle_shift=angle_shift, sampler=sampler,
                           use_taylor=use_taylor, taylor_degree=taylor_degree,

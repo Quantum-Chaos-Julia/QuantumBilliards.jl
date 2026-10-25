@@ -1059,7 +1059,7 @@ function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ
             Ψ = eigenvectors ? reconstruct_cork_eigenvectors(S, Matrix{ComplexF64}(Vphys), m) : nothing
             return S, ks, Ψ, requested, allroots, edges, edge_good, m
         end
-        m == mdim && error("Reached full CORK Krylov dimension m=$mdim for matrix size N=$N without a stable requested spectrum.")
+        m == mdim && error("Reached full CORK Krylov dimension m=$mdim for matrix size N=$N without a stable requested spectrum. The boundary discretization is too coarse for the window (increase `ppw`/`min_pts` of the kernel) or the window holds too many levels (narrow it or lower `Rmax`/`nlevels`).")
         prev = copy(ks); have_prev = true; m = min(m + mstep, mdim)
     end
 end
@@ -1249,6 +1249,20 @@ end
 _cork_expected_count(solver::CORKSolver, billiard::AbsBilliard, k, dk) =
     weyl_window_count(billiard, Float64(k - dk / 2), Float64(dk); fundamental = solver.kernel.symmetry !== nothing)
 
+# CORK convergence is judged on the accepted Ritz set only, so levels that the Chebyshev polynomial or the
+# Krylov space cannot resolve are dropped without any signal. Compare the number of accepted roots in
+# `[k1,k2]` with the Weyl count (area, perimeter and corner terms) and warn on a large deficit. The tolerance
+# `max(0.3N, 3)` leaves room for Weyl fluctuations, so this is a warning and not an error.
+function _cork_warn_if_incomplete(solver::CORKSolver, billiard::AbsBilliard, nfound::Integer, k1, k2)
+    fundamental = solver.kernel.symmetry !== nothing
+    expected = state_at_k(k2, billiard; fundamental) - state_at_k(k1, billiard; fundamental)
+    deficit = expected - nfound
+    if deficit > max(0.3 * expected, 3.0)
+        @warn "CORK returned $nfound levels in [$k1, $k2] but the Weyl law predicts about $(round(expected; digits=1)); the spectrum is probably incomplete. Increase the polynomial degree `p` (direct `solve_spectrum` uses a fixed `p`, `compute_spectrum` tunes it), narrow the window, or increase `ppw`/`min_pts` of the kernel."
+    end
+    return nothing
+end
+
 """
     solve_wavenumber(solver::CORKSolver, billiard::Bi, k, dk; multithreaded::Bool=true) where {Bi<:AbsBilliard}
 
@@ -1280,6 +1294,12 @@ constructing boundary points at the expansion center `k`.
 Each accepted projected Ritz root is returned individually; nearby roots are
 not merged or expanded according to an inferred multiplicity.
 
+The Chebyshev polynomial has the fixed degree `solver.p` over the whole window,
+so windows much wider than a few mean level spacings per unit of `p` silently
+lose levels. A warning is emitted when the number of accepted roots falls
+well below the Weyl-law prediction; use [`compute_spectrum`](@ref) (which
+splits the range into windows and tunes `p`) for wide ranges.
+
 ## Arguments
 - `solver::CORKSolver`: Configured CORK eigensolver.
 - `billiard::Bi`: Billiard geometry.
@@ -1293,5 +1313,7 @@ not merged or expanded according to an inferred multiplicity.
 """
 function solve_spectrum(solver::CORKSolver, billiard::Bi, k, dk; multithreaded::Bool=true) where {Bi<:AbsBilliard}
     pts = evaluate_points(solver, billiard, k)
-    return solve(solver, pts, k, dk; multithreaded = multithreaded, expected = _cork_expected_count(solver, billiard, k, dk))
+    ks, ts = solve(solver, pts, k, dk; multithreaded = multithreaded, expected = _cork_expected_count(solver, billiard, k, dk))
+    _cork_warn_if_incomplete(solver, billiard, length(ks), k - dk / 2, k + dk / 2)
+    return ks, ts
 end

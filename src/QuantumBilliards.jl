@@ -19,7 +19,7 @@ export AbsBasis, AbsSolver, AbsBasisSolver, AbsBIMSolver
 
 include("utils/coordinatesystems.jl")
 include("utils/macros.jl")
-export use_threads, blas_multi, blas_1, blas_multi_then_1, try_MKL!
+export @use_threads, @blas_multi, @blas_1, @blas_multi_then_1, try_MKL!
 include("utils/billiardutils.jl")
 export make_triangle_and_basis, adapt_basis
 include("solvers/boundarypoints.jl")
@@ -69,15 +69,14 @@ include("solvers/chebyshev/dlp.jl")
 include("solvers/chebyshev/cfie.jl")
 export SweepBasisSolver, AcceleratedBasisSolver
 export SweepBIMSolver, AcceleratedBIMSolver
-export VerginiSaracenoSolver, print_benchmark_info
+export VerginiSaracenoSolver
 export DecompositionMethodSolver
 export ParticularSolutionsMethodSolver
 export BoundaryGrading, SmoothPeriodicGrading, CornerGrading, GlobalCornerGrading
 export DoubleLayerPotentialSolver, CombinedFieldIntegralEquationSolver, CompositeBIMSolver
 export ExpandedBIMSolver, BeynSolver, CORKSolver
 export ChebyshevConfig
-export BoundaryPointsSM, BoundaryPointsDM
-export evaluate_points, construct_matrices, construct_matrices_benchmark
+export evaluate_points, construct_matrices
 export solve, solve_vect, solve_vectors, solve_state
 export solve_wavenumber, solve_spectrum
 export k_sweep

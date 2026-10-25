@@ -124,8 +124,8 @@ root within a contour via Beyn's contour-integral method, while
 [`ExpandedBIMSolver`](@ref) recovers a single locally-corrected root via a
 second-order local Taylor expansion of `A(k)`. Every concrete
 `AcceleratedBIMSolver` also stores every one of its own numerical tuning
-parameters (Beyn's `m`/`nq`/`r`/`svd_tol`/`res_tol`, EBIM's Chebyshev
-configuration) as fields, so its widest-scope entry point,
+parameters (Beyn's `m`/`nq`/`r`/`svd_tol`/`res_tol`, EBIM's Taylor
+settings) as fields, so its widest-scope entry point,
 [`compute_spectrum`](@ref), takes only the wavenumber range `[k1,k2]` (plus a
 small number of merge-strategy keyword arguments) — unlike `-develop`'s
 `solve_spectrum_beyn`/`solve_spectrum_ebim`, which scatter these same knobs

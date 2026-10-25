@@ -181,16 +181,25 @@ time, not resampled or re-solved per call.
 *  `u` : The Rellich-normalized physical boundary normal derivative `∂ₙψ`, on the complete physical boundary.
 *  `s` : The arc-length coordinates corresponding to `u`. Not, in general, uniformly spaced (a `GlobalCornerGrading` solver clusters nodes near corners) — see [`husimi_function(state::BIMEigenstate)`](@ref).
 *  `norm` : The Rellich-identity value of the raw (pre-rescaling) density used to normalize `u` (`state.bnd_norm`); kept for interface parity with the basis-solver method, not itself expected to be close to `1`.
+
+Throws an `ArgumentError` when `state.u === nothing` (states produced by accelerated BIM solvers such as [`BeynSolver`](@ref) keep only the layer density); use [`boundary_function(state, billiard, solver)`](@ref) or the [`SpectralData`](@ref) methods, which recompute `u`.
 """
 function boundary_function(state::BIMEigenstate; b=5.0, multithreaded=true)
-    return state.u, state.pts.s, state.bnd_norm
+    return _stored_boundary_u(state), state.pts.s, state.bnd_norm
+end
+
+# Shared guard of the solver-free `BIMEigenstate` boundary-function methods: they only read stored fields, so a
+# missing `u` must raise instead of propagating `nothing` into downstream code.
+function _stored_boundary_u(state::BIMEigenstate)
+    state.u === nothing && throw(ArgumentError("BIMEigenstate has no stored boundary normal derivative `u` (accelerated BIM solvers keep only the layer density); pass the solver, `boundary_function(state, billiard, solver)`, or use the SpectralData methods"))
+    return state.u
 end
 
 # Disambiguates `boundary_function(bim_state, billiard)` from the generic
 # `S<:AbsState` method above, which would otherwise silently match and fail
 # on fields (`k_basis`, `basis`) BIMEigenstate doesn't have. No `solver` is
 # available here to recompute a missing `state.u`, so this simply forwards
-# to the 1-arg read of the precomputed fields.
+# to the 1-arg read of the precomputed fields (which throws when `u` is missing).
 boundary_function(state::BIMEigenstate, billiard::AbsBilliard; b=5.0, multithreaded=true) = boundary_function(state; b, multithreaded)
 
 """
@@ -360,7 +369,7 @@ discretization is not, in general, uniformly spaced in arc length.
 *  `multithreaded::Bool = true` : Unused, accepted for interface compatibility; `state.u` is already computed by [`compute_eigenstate`](@ref).
 """
 function momentum_function(state::BIMEigenstate; b=5.0, multithreaded=true)
-    return momentum_function(state.u, state.pts.s, state.pts.ds)
+    return momentum_function(_stored_boundary_u(state), state.pts.s, state.pts.ds)
 end
 
 # Disambiguates `momentum_function(bim_state, billiard)` from the generic

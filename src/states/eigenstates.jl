@@ -257,7 +257,7 @@ a BIM computation, splitting `k` into its real part and its imaginary residual
 ## Returns
 * `state::BIMEigenstate`: Constructed BIM eigenstate.
 """
-function BIMEigenstate(k::Number, vec::Union{Nothing,Vector{K}}, ten::T, pts::BoundaryPoints{T}; u::Union{Nothing,Vector{K}}=nothing, bnd_norm::Union{Nothing,T}=nothing) where {K<:Number,T<:Real}
+function BIMEigenstate(k::Number, vec::Vector{K}, ten::T, pts::BoundaryPoints{T}; u::Union{Nothing,Vector{K}}=nothing, bnd_norm::Union{Nothing,T}=nothing) where {K<:Number,T<:Real}
     return BIMEigenstate{K,T}(T(real(k)), T(imag(k)), vec, ten, pts, u, bnd_norm)
 end
 

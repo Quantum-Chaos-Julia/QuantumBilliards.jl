@@ -377,6 +377,25 @@ end
         u3, s3, n3 = boundary_function(st_missing, BF_CIRCLE, bf_SweepStub())
         @test u3 == fill(BF_STUB_U, 32) && s3 === pts.s && n3 == BF_STUB_NORM
     end
+
+    @testset "a missing u without a solver throws instead of returning nothing" begin
+        st_missing = BIMEigenstate{Float64,Float64}(BF_J01, 0.0, nothing, 1e-9, pts, nothing, nothing)
+        @test_throws ArgumentError boundary_function(st_missing)
+        @test_throws "no stored boundary normal derivative" boundary_function(st_missing)
+        @test_throws ArgumentError boundary_function(st_missing; b=7.0, multithreaded=false)
+    end
+
+    @testset "a missing u with a billiard but no solver throws" begin
+        st_missing = BIMEigenstate{Float64,Float64}(BF_J01, 0.0, nothing, 1e-9, pts, nothing, nothing)
+        @test_throws ArgumentError boundary_function(st_missing, BF_CIRCLE)
+        @test_throws "no stored boundary normal derivative" boundary_function(st_missing, BF_CIRCLE)
+    end
+
+    @testset "the solver form still recomputes a missing u" begin
+        st_missing = BIMEigenstate{Float64,Float64}(BF_J01, 0.0, nothing, 1e-9, pts, nothing, nothing)
+        u3, _, n3 = boundary_function(st_missing, BF_CIRCLE, bf_SweepStub())
+        @test u3 == fill(BF_STUB_U, 32) && n3 == BF_STUB_NORM
+    end
 end
 
 @testset "momentum_function(u, s) - analytic spectra" begin
@@ -515,6 +534,19 @@ end
         power, _ = momentum_function(st_missing, BF_CIRCLE, bf_SweepStub())
         @test power[1] ≈ BF_STUB_U^2 atol = 1e-12                       # constant u: only the DC bin
         @test maximum(abs, power[2:41]) <= 1e-12
+    end
+
+    @testset "a missing u without a solver throws instead of failing downstream" begin
+        st_missing = BIMEigenstate{Float64,Float64}(BF_J01, 0.0, nothing, 1e-9, pts, nothing, nothing)
+        @test_throws ArgumentError momentum_function(st_missing)
+        @test_throws "no stored boundary normal derivative" momentum_function(st_missing)
+        @test_throws ArgumentError momentum_function(st_missing; b=10.0, multithreaded=false)
+    end
+
+    @testset "a missing u with a billiard but no solver throws" begin
+        st_missing = BIMEigenstate{Float64,Float64}(BF_J01, 0.0, nothing, 1e-9, pts, nothing, nothing)
+        @test_throws ArgumentError momentum_function(st_missing, BF_CIRCLE)
+        @test_throws "no stored boundary normal derivative" momentum_function(st_missing, BF_CIRCLE)
     end
 end
 

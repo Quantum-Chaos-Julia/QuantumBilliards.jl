@@ -3,7 +3,8 @@
 #                                             evaluate_cork_polynomial, validate_polynomial, get_A0, cache_block!,
 #                                             compact_project!, compact_block_qr!, pack! / unpack!, init_cork, compute_tail! /
 #                                             promote_tail! / extend!, ritz_roots, reconstruct_cork_eigenvectors, adaptive_cork,
-#                                             _cork_solve_core via solve / solve_vectors, solve_wavenumber, solve_spectrum)
+#                                             _cork_solve_core via solve / solve_vectors, solve_wavenumber, solve_spectrum,
+#                                             _cork_warn_if_incomplete)
 # The symmetry-reduced polynomial (build_B_reduced) needs real symmetry orbits and is left to integration coverage; constructor
 # validation is covered in solvers/solverconstructors_tests.jl.
 #
@@ -30,7 +31,8 @@ using Random: MersenneTwister
 using QuantumBilliards: construct_matrices, _bim_numeric_type, TaylorWorkspace, power_to_cheb, taylor_to_cheb!, CORKPolynomial,
                         build_cork_polynomial, evaluate_cork_polynomial, validate_polynomial, get_A0, cache_block!,
                         compact_project!, compact_block_qr!, pack!, unpack!, init_cork, compute_tail!, promote_tail!, extend!,
-                        ritz_roots, reconstruct_cork_eigenvectors, adaptive_cork, _cork_solve_core, _cork_kernel_name
+                        ritz_roots, reconstruct_cork_eigenvectors, adaptive_cork, _cork_solve_core, _cork_kernel_name,
+                        _cork_warn_if_incomplete
 
 # Roots, polynomial strength and orthogonal Q of the synthetic problem; the cache is the token returned by `_taylor_cache`.
 struct ck_Problem <: QuantumBilliards.SweepBIMSolver
@@ -635,5 +637,47 @@ end
     @testset "kernel name used by the debug diagnostics" begin
         @test _cork_kernel_name(DoubleLayerPotentialSolver(2.0, billiard; min_pts=16)) == "DLP"
         @test _cork_kernel_name(ck_problem()) == string(ck_Problem)
+    end
+end
+
+# The synthetic kernel has no symmetry, so the Weyl count is that of the full unit circle (area/perimeter terms of `state_at_k`).
+# Helper definitions use the prefix `ck_`.
+ck_weyl(k1, k2) = QuantumBilliards.state_at_k(k2, ck_circle; fundamental=false) - QuantumBilliards.state_at_k(k1, ck_circle; fundamental=false)
+ck_tolerance(expected) = max(0.3 * expected, 3.0)
+
+@testset "_cork_warn_if_incomplete: Weyl-law completeness warning" begin
+    solver = ck_solver()
+    k1, k2 = 10.0, 20.0
+    expected = ck_weyl(k1, k2)                                               # well above the absolute floor of 3
+
+    @testset "a count equal to the Weyl count does not warn and returns nothing" begin
+        @test expected > 3 / 0.3
+        @test @test_logs(_cork_warn_if_incomplete(solver, ck_circle, round(Int, expected), k1, k2)) === nothing
+    end
+
+    @testset "a deficit below max(0.3 expected, 3) does not warn" begin
+        nfound = ceil(Int, expected - ck_tolerance(expected))                # deficit at most the tolerance
+        @test expected - nfound <= ck_tolerance(expected)
+        @test_logs _cork_warn_if_incomplete(solver, ck_circle, nfound, k1, k2)
+    end
+
+    @testset "a deficit above max(0.3 expected, 3) warns" begin
+        nfound = floor(Int, expected - ck_tolerance(expected)) - 1
+        @test expected - nfound > ck_tolerance(expected)
+        @test_logs (:warn, r"Weyl law predicts") _cork_warn_if_incomplete(solver, ck_circle, nfound, k1, k2)
+    end
+
+    @testset "no levels found in a window with many expected levels warns and names the window" begin
+        @test @test_logs((:warn, r"CORK returned 0 levels in \[10\.0, 20\.0\] but the Weyl law predicts about .*probably incomplete"),
+                         _cork_warn_if_incomplete(solver, ck_circle, 0, k1, k2)) === nothing
+    end
+
+    @testset "a window with fewer than 3 expected levels never warns, also for an empty result" begin
+        @test ck_weyl(3.0, 3.5) < 3
+        @test @test_logs(_cork_warn_if_incomplete(solver, ck_circle, 0, 3.0, 3.5)) === nothing
+    end
+
+    @testset "more levels found than expected does not warn" begin
+        @test_logs _cork_warn_if_incomplete(solver, ck_circle, round(Int, 2 * expected), k1, k2)
     end
 end
