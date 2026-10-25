@@ -28,7 +28,7 @@ function _ss_rectangle_spectrum()
         billiard = RectangleBilliard(1.0, 0.7)
         basis = RealPlaneWaves(20; sym_x=1, sym_y=1)
         solver = VerginiSaracenoSolver(5.0, 10.0; eigenvectors=true)
-        compute_spectrum(solver, basis, billiard, 20.0, 23.0, 0.2; multithreaded=false, show_progress=false)
+        compute_spectrum(solver, basis, billiard, 20.0, 23.0, 0.2; ten_tol=nothing, multithreaded=false, show_progress=false)
     end
 end
 

@@ -34,7 +34,7 @@ function _refl_stadium_spectrum(chars::Tuple)
     return get!(REFLECTION_SPECTRA_CACHE, (:stadium, chars)) do
         billiard = StadiumBilliard(0.5)
         kernel = CombinedFieldIntegralEquationSolver(8.0, billiard; grading=GlobalCornerGrading(kressq=2), sym_characters=chars)
-        compute_spectrum(_refl_beyn_light(kernel), billiard, 3.0, 7.0; multithreaded=false, show_progress=false)
+        compute_spectrum(_refl_beyn_light(kernel), billiard, 3.0, 7.0; ten_tol=nothing, multithreaded=false, show_progress=false)
     end
 end
 
@@ -44,7 +44,7 @@ function _refl_sinai_spectrum(chars::Tuple)
         billiard = SinaiBilliard(1.0, 0.25)
         ncomponents = length(QuantumBilliards._group_boundary_by_domain_id(full_boundary(billiard)))
         kernel = CompositeBIMSolver((CombinedFieldIntegralEquationSolver(10.0, billiard; grading=GlobalCornerGrading(kressq=2), min_pts=64, sym_characters=chars) for _ in 1:ncomponents)...)
-        compute_spectrum(_refl_beyn_light(kernel), billiard, 3.0, 8.0; multithreaded=false, show_progress=false)
+        compute_spectrum(_refl_beyn_light(kernel), billiard, 3.0, 8.0; ten_tol=nothing, multithreaded=false, show_progress=false)
     end
 end
 

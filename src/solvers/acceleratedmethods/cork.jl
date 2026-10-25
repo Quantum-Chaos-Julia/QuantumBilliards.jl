@@ -1262,11 +1262,11 @@ Find the accepted CORK eigenvalue nearest `k` in `[k-dk/2,k+dk/2]`.
 - `multithreaded::Bool`: Whether polynomial assembly uses Julia threads.
 
 ## Returns
-- `Tuple{ComplexF64,Float64}`: Nearest accepted wavenumber and its residual.
+- `Tuple{ComplexF64,Float64}`: Nearest accepted wavenumber and its residual, or `(nothing, nothing)` if none was found.
 """
 function solve_wavenumber(solver::CORKSolver, billiard::Bi, k, dk; multithreaded::Bool=true) where {Bi<:AbsBilliard}
     pts = evaluate_points(solver, billiard, k); ks, ts = solve(solver, pts, k, dk; multithreaded = multithreaded, expected = _cork_expected_count(solver, billiard, k, dk))
-    isempty(ks) && error("CORKSolver found no eigenvalue candidates in [$(k - dk / 2),$(k + dk / 2)]")
+    isempty(ks) && return nothing, nothing
     idx = findmin(abs.(ks .- k))[2]
     return ks[idx], ts[idx]
 end

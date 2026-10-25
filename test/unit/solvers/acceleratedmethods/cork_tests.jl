@@ -621,9 +621,9 @@ end
         @test real(k) ≈ 3.3 atol = 1e-6
     end
 
-    @testset "solve_wavenumber with no root in the window throws" begin
+    @testset "solve_wavenumber with no root in the window returns (nothing, nothing)" begin
         # the Weyl estimate of the unit circle for dk = 0.1 is below 0.5, so the empty Ritz set is accepted
-        @test_throws "found no eigenvalue candidates" solve_wavenumber(solver, billiard, 4.0, 0.1; multithreaded=false)
+        @test solve_wavenumber(solver, billiard, 4.0, 0.1; multithreaded=false) === (nothing, nothing)
     end
 
     @testset "solve_spectrum returns every accepted root" begin

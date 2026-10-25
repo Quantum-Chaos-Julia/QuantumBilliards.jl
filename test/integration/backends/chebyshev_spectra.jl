@@ -51,7 +51,7 @@ end
     kernel = DoubleLayerPotentialSolver(5.0, billiard; grading=GlobalCornerGrading())
     solver = ExpandedBIMSolver(kernel; use_taylor=false)
     k1, k2 = 5.5, 6.7
-    data = compute_spectrum(solver, billiard, k1, k2; multithreaded=false, show_progress=false)
+    data = compute_spectrum(solver, billiard, k1, k2; ten_tol=nothing, multithreaded=false, show_progress=false)
     ks_ref = real.(cheb_veech_direct_beyn(k1, k2).k)
     ks = real.(data.k)
     confident = findall(<(TENSION_TOL_EBIM), data.ten)
@@ -91,7 +91,7 @@ end
     kernel = CombinedFieldIntegralEquationSolver(10.0, billiard; grading=SmoothPeriodicGrading())
     solver = ExpandedBIMSolver(kernel; use_taylor=false)
     k1, k2 = 2.0, 3.0
-    data = compute_spectrum(solver, billiard, k1, k2; multithreaded=false, show_progress=false)
+    data = compute_spectrum(solver, billiard, k1, k2; ten_tol=nothing, multithreaded=false, show_progress=false)
     ks_ref = circle_spectrum(1.0, k1, k2)
     ks = real.(data.k)
     confident = findall(<(TENSION_TOL_EBIM), data.ten)

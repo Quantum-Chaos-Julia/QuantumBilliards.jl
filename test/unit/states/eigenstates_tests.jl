@@ -58,6 +58,23 @@ struct es_AccBIM <: QuantumBilliards.AcceleratedBIMSolver
 end
 QuantumBilliards.solve_wavenumber(::es_AccBIM, ::AbsBilliard, k, dk; multithreaded::Bool=true) = (k + 0.5 * dk, 1e-9)
 
+# Accelerated basis stub that only implements `solve`, so the generic `solve_wavenumber` is exercised.
+struct es_AccBasisSolve <: QuantumBilliards.AcceleratedBasisSolver
+    min_dim::Int
+    dim_scaling_factor::Float64
+    ks::Vector{Float64}       # candidate offsets from k
+    ts::Vector{Float64}
+end
+QuantumBilliards.evaluate_points(::es_AccBasisSolve, ::AbsBilliard, k) = ES_PTS
+QuantumBilliards.solve(s::es_AccBasisSolve, basis::AbsBasis, pts, k, dk; multithreaded::Bool=true) =
+    (k .+ s.ks, s.ts)
+
+# Accelerated BIM stub whose eigenvalue search finds nothing.
+struct es_AccBIMEmpty <: QuantumBilliards.AcceleratedBIMSolver
+    kernel::es_SweepBIM
+end
+QuantumBilliards.solve_wavenumber(::es_AccBIMEmpty, ::AbsBilliard, k, dk; multithreaded::Bool=true) = (nothing, nothing)
+
 @testset "BasisEigenstate struct" begin
     st = BasisEigenstate(2.5, [1.0, 2.0], 0.1, ES_BASIS)
     @test st isa BasisEigenstate{Float64,Float64,typeof(ES_BASIS)}
@@ -380,5 +397,33 @@ end
     @testset "dk is forwarded to solve_wavenumber" begin
         data = compute_eigenstate(solver, ES_CIRCLE, k; dk=0.3)
         @test data.k ≈ [k + 0.5 * 0.3]
+    end
+
+    @testset "no eigenvalue found: ArgumentError" begin
+        empty_solver = es_AccBIMEmpty(kernel)
+        @test_throws ArgumentError compute_eigenstate(empty_solver, ES_CIRCLE, k)
+        @test_throws ArgumentError compute_eigenstate(empty_solver, ES_CIRCLE, k; dk=0.3, multithreaded=false)
+        err = try compute_eigenstate(empty_solver, ES_CIRCLE, k; dk=0.3); nothing catch e; e end
+        @test err isa ArgumentError
+        @test occursin("dk=0.3", err.msg) && occursin("k=4.0", err.msg)
+    end
+end
+
+@testset "solve_wavenumber - AcceleratedBasisSolver (generic method)" begin
+    k = 10.0; dk = 0.4
+
+    @testset "nearest candidate is returned" begin
+        solver = es_AccBasisSolve(4, 2.0, [-0.3, 0.05, 0.2], [0.3, 0.1, 0.2])
+        k0, t0 = solve_wavenumber(solver, ES_BASIS, ES_CIRCLE, k, dk)
+        @test k0 ≈ k + 0.05
+        @test t0 == 0.1
+        k0, t0 = solve_wavenumber(solver, ES_BASIS, ES_CIRCLE, k, dk; multithreaded=false)
+        @test k0 ≈ k + 0.05 && t0 == 0.1
+    end
+
+    @testset "empty window returns (nothing, nothing) instead of throwing" begin
+        solver = es_AccBasisSolve(4, 2.0, Float64[], Float64[])
+        @test solve_wavenumber(solver, ES_BASIS, ES_CIRCLE, k, dk) === (nothing, nothing)
+        @test solve_wavenumber(solver, ES_BASIS, ES_CIRCLE, k, dk; multithreaded=false) === (nothing, nothing)
     end
 end

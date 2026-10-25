@@ -1,5 +1,6 @@
 # Unit tests for
 #   src/spectra/spectralutils.jl   (SpectralData, k_range, filter, append!/vcat, match_wavenumbers,
+#                                   _ten_ok, _ten_keep, _vs_max_halfwidth, _clamp_dk, _finalize_spectrum,
 #                                   overlap_and_merge!, overlap_and_merge_ebim!, _local_gap,
 #                                   sweep_windows, weyl_window_count)
 #   src/solvers/acceleratedmethods/beyn.jl   (weyl_window_width, plan_weyl_windows,
@@ -567,4 +568,148 @@ end
     V32, X32, A032, _ = beyn_buffer_matrices(Float32, 4, 2, MersenneTwister(1))
     @test eltype(V32) == ComplexF32 && eltype(X32) == ComplexF32 && eltype(A032) == ComplexF32
     @test @inferred(beyn_buffer_matrices(Float64, 4, 2, MersenneTwister(1))) isa NTuple{4,Matrix{ComplexF64}}
+end
+
+# ten_tol helpers (src/spectra/spectralutils.jl, INTERNAL HELPERS)
+using QuantumBilliards: _ten_ok, _ten_keep, _vs_max_halfwidth, _clamp_dk, _finalize_spectrum
+
+# Solver stand-in: _finalize_spectrum only uses nameof(typeof(solver)) in its warnings.
+struct SpectraFinalizeStub end
+
+@testset "_ten_ok" begin
+    @test _ten_ok(nothing, 1e9)
+    @test _ten_ok(nothing, 0.0)
+    @test _ten_ok(0.1, 0.05)
+    @test _ten_ok(0.1, 0.1)             # boundary inclusive
+    @test !_ten_ok(0.1, 0.1 + 1e-12)
+    @test !_ten_ok(0.1, 5.0)
+    @test _ten_ok(1, 1)                 # integer tolerance
+end
+
+@testset "_ten_keep" begin
+    @test _ten_keep(0.1, [0.05, 0.2, 0.1]) == [1, 3]
+    @test _ten_keep(nothing, [1.0, 2.0]) == [1, 2]
+    @test _ten_keep(nothing, Float64[]) == Int[]
+    @test _ten_keep(0.1, Float64[]) == Int[]
+    @test _ten_keep(0.01, [0.05, 0.2]) == Int[]
+    @test _ten_keep(1.0, [0.05, 0.2]) == [1, 2]
+end
+
+@testset "_vs_max_halfwidth" begin
+    @test _vs_max_halfwidth(nothing) == Inf
+    @test _vs_max_halfwidth(0.2) ≈ sqrt(0.1)
+    @test _vs_max_halfwidth(0.2) ≈ 0.316227766016838
+    @test _vs_max_halfwidth(8.0) == 2.0
+    # edge of the window satisfies ten = 2 (ks-k)^2 = ten_tol
+    @test 2 * _vs_max_halfwidth(0.37)^2 ≈ 0.37
+    @test _vs_max_halfwidth(0.0) == 0.0
+end
+
+@testset "_clamp_dk" begin
+    @test _clamp_dk(0.5, 0.3) == 0.3
+    @test _clamp_dk(0.2, 0.3) == 0.2
+    @test _clamp_dk(0.5, Inf) == 0.5
+    f = _clamp_dk(k -> 0.5, 0.3)
+    @test f isa Function
+    @test f(1.0) == 0.3
+    g = _clamp_dk(k -> 0.1k, 0.3)
+    @test g(1.0) ≈ 0.1
+    @test g(10.0) == 0.3                # clamp active only for large k
+    @test _clamp_dk(k -> 0.5, Inf)(2.0) == 0.5
+end
+
+@testset "_finalize_spectrum" begin
+    b = RectangleBilliard(1.0, 0.5)
+    solver = SpectraFinalizeStub()
+    ks = [3.0, 1.0, 2.0, 4.0]
+    ts = [1e-3, 5e-3, 2e-3, 0.5]
+    ctrl = [false, true, false, true]
+    states = [SpectraTestState(i) for i in 1:4]
+
+    @testset "ten_tol=nothing: sorted, no warning" begin
+        data = @test_logs _finalize_spectrum(b, solver, copy(ks), copy(ts), copy(ctrl); states=copy(states))
+        @test data isa SpectralData
+        @test data.billiard === b && data.solver === solver
+        @test data.k == [1.0, 2.0, 3.0, 4.0]
+        @test data.ten == [5e-3, 2e-3, 1e-3, 0.5]
+        @test data.control == [true, false, false, true]
+        @test [s.id for s in data.states] == [2, 3, 1, 4]
+        # without states
+        d2 = @test_logs _finalize_spectrum(b, solver, copy(ks), copy(ts), copy(ctrl))
+        @test d2.states === nothing
+        @test d2.k == [1.0, 2.0, 3.0, 4.0]
+    end
+
+    @testset "sorts by real part for complex ks" begin
+        kc = [3.0 + 0.1im, 1.0 - 0.2im, 2.0 + 0.0im]
+        data = @test_logs _finalize_spectrum(b, solver, kc, [1e-3, 2e-3, 3e-3], [false, false, false])
+        @test data.k == [1.0, 2.0, 3.0]
+        @test data.k_im == [-0.2, 0.0, 0.1]
+        @test data.ten == [2e-3, 3e-3, 1e-3]
+    end
+
+    @testset "ten_tol filters and warns" begin
+        data = @test_logs (:warn, r"SpectraFinalizeStub: discarded 1 eigenvalue candidate\(s\) with tension above ten_tol=0\.1") begin
+            _finalize_spectrum(b, solver, copy(ks), copy(ts), copy(ctrl); states=copy(states), ten_tol=0.1)
+        end
+        @test data.k == [1.0, 2.0, 3.0]
+        @test data.ten == [5e-3, 2e-3, 1e-3]
+        @test data.control == [true, false, false]
+        @test [s.id for s in data.states] == [2, 3, 1]
+    end
+
+    @testset "ten_tol boundary kept, no warning when nothing dropped" begin
+        data = @test_logs _finalize_spectrum(b, solver, copy(ks), copy(ts), copy(ctrl); ten_tol=0.5)
+        @test length(data) == 4
+        data = @test_logs (:warn, r"discarded 1 ") _finalize_spectrum(b, solver, copy(ks), copy(ts), copy(ctrl); ten_tol=0.4999)
+        @test length(data) == 3
+    end
+
+    @testset "ndropped from earlier stages is reported" begin
+        data = @test_logs (:warn, r"discarded 2 eigenvalue candidate") begin
+            _finalize_spectrum(b, solver, copy(ks), copy(ts), copy(ctrl); ten_tol=1.0, ndropped=2)
+        end
+        @test length(data) == 4
+        # passed count adds to the count dropped here
+        data = @test_logs (:warn, r"discarded 3 eigenvalue candidate") begin
+            _finalize_spectrum(b, solver, copy(ks), copy(ts), copy(ctrl); ten_tol=0.1, ndropped=2)
+        end
+        @test length(data) == 3
+        # also with ten_tol=nothing
+        @test_logs (:warn, r"discarded 2 .*ten_tol=nothing") _finalize_spectrum(b, solver, copy(ks), copy(ts), copy(ctrl); ndropped=2)
+    end
+
+    @testset "everything filtered: empty SpectralData, no throw" begin
+        local data
+        @test_logs (:warn, r"discarded 4 eigenvalue candidate") (:warn, r"no eigenvalues found") begin
+            data = _finalize_spectrum(b, solver, copy(ks), copy(ts), copy(ctrl); states=copy(states), ten_tol=1e-6)
+        end
+        @test data isa SpectralData
+        @test length(data) == 0
+        @test isempty(data.k) && isempty(data.ten) && isempty(data.control)
+        # states passed in: empty Vector is kept, not coerced to nothing
+        @test data.states isa Vector && isempty(data.states)
+        @test eltype(data.states) == SpectraTestState
+    end
+
+    @testset "everything filtered without states: states stays nothing" begin
+        data = @test_logs (:warn, r"discarded 4 ") (:warn, r"no eigenvalues found") _finalize_spectrum(b, solver, copy(ks), copy(ts), copy(ctrl); ten_tol=1e-6)
+        @test length(data) == 0
+        @test data.states === nothing
+    end
+
+    @testset "empty input: only the empty warning" begin
+        local data
+        @test_logs (:warn, r"no eigenvalues found") begin
+            data = _finalize_spectrum(b, solver, Float64[], Float64[], Bool[])
+        end
+        @test length(data) == 0
+        @test data.states === nothing
+        # empty states vector passed in stays an empty Vector
+        d_empty = @test_logs (:warn, r"no eigenvalues found") _finalize_spectrum(b, solver, Float64[], Float64[], Bool[]; states=SpectraTestState[])
+        @test d_empty.states isa Vector{SpectraTestState} && isempty(d_empty.states)
+        @test_logs (:warn, r"no eigenvalues found") _finalize_spectrum(b, solver, Float64[], Float64[], Bool[]; ten_tol=0.1)
+        # ndropped alone on empty input gives both warnings
+        @test_logs (:warn, r"discarded 1 ") (:warn, r"no eigenvalues found") _finalize_spectrum(b, solver, Float64[], Float64[], Bool[]; ndropped=1)
+    end
 end

@@ -19,6 +19,10 @@ using QuantumBilliards: adjust_scaling_and_samplers, DLP, CFIE, _bim_numeric_typ
 # `hasmethod` with a plain argument-type list.
 sc_has(f, types...) = hasmethod(f, Tuple{types...})
 
+# Whether the method of `f` selected by the argument-type list accepts keyword `kw`. Only the keyword's presence is
+# checked (its default value is not observable without running the method).
+sc_has_kw(f, kw::Symbol, types...) = kw in Base.kwarg_decl(which(f, Tuple{types...}))
+
 # Concrete argument types used in the `hasmethod` contracts.
 const sc_BASIS_T = typeof(RealPlaneWaves(4))
 const sc_PTS_T = BoundaryPoints{Float64}
@@ -329,6 +333,8 @@ end
         @test sc_has(solve_spectrum, S, sc_BASIS_T, sc_RECT_T, Float64, Float64)
         @test sc_has(compute_eigenstate, S, sc_BASIS_T, sc_RECT_T, Float64)
         @test sc_has(compute_spectrum, S, sc_BASIS_T, sc_RECT_T, Float64, Float64, Float64)
+        @test sc_has_kw(compute_spectrum, :ten_tol, S, sc_BASIS_T, sc_RECT_T, Float64, Float64, Float64)   # k1, k2, dk form
+        @test sc_has_kw(compute_spectrum, :ten_tol, S, sc_BASIS_T, sc_RECT_T, Int, Int)                    # N1, N2 form
         @test !sc_has(k_sweep, S, sc_BASIS_T, sc_RECT_T, Vector{Float64})              # no sweep for accelerated solvers
         @test !sc_has(solve, S, sc_BASIS_T, sc_PTS_T, Float64)                          # needs the window half-width dk
     end
@@ -639,6 +645,8 @@ end
         @test sc_has(solve_spectrum, S, typeof(circle), Float64, Float64)
         @test sc_has(compute_spectrum, S, typeof(circle), Float64, Float64)
         @test sc_has(compute_spectrum, S, typeof(circle), Int, Int)
+        @test sc_has_kw(compute_spectrum, :ten_tol, S, typeof(circle), Float64, Float64)
+        @test sc_has_kw(compute_spectrum, :ten_tol, S, typeof(circle), Int, Int)
         @test sc_has(compute_eigenstate, S, typeof(circle), Float64)
         @test !sc_has(k_sweep, S, typeof(circle), Vector{Float64})
     end
@@ -703,6 +711,8 @@ end
         @test sc_has(solve_spectrum, S, typeof(circle), Float64, Float64)
         @test sc_has(compute_spectrum, S, typeof(circle), Float64, Float64)
         @test sc_has(compute_spectrum, S, typeof(circle), Int, Int)
+        @test sc_has_kw(compute_spectrum, :ten_tol, S, typeof(circle), Float64, Float64)
+        @test sc_has_kw(compute_spectrum, :ten_tol, S, typeof(circle), Int, Int)
         @test sc_has(compute_eigenstate, S, typeof(circle), Float64)
         @test !sc_has(solve_vectors, S, sc_PTS_T, Float64, Float64)                         # EBIM returns no eigenvectors
     end
@@ -771,6 +781,8 @@ end
         @test sc_has(solve_spectrum, S, typeof(circle), Float64, Float64)
         @test sc_has(compute_spectrum, S, typeof(circle), Float64, Float64)
         @test sc_has(compute_spectrum, S, typeof(circle), Int, Int)
+        @test sc_has_kw(compute_spectrum, :ten_tol, S, typeof(circle), Float64, Float64)
+        @test sc_has_kw(compute_spectrum, :ten_tol, S, typeof(circle), Int, Int)
         @test sc_has(compute_eigenstate, S, typeof(circle), Float64)
         # CORK assembles its Chebyshev polynomial internally and does not define `construct_matrices`.
         @test !sc_has(construct_matrices, S, sc_PTS_T, Float64)

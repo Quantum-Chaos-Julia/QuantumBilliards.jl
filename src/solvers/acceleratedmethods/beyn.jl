@@ -623,12 +623,12 @@ Solve for the eigenvalue closest to the given wavenumber `k` within a circular B
 * `multithreaded::Bool=true`: Enable multithreaded matrix construction.
 
 ## Returns
-* `k::Complex{T}`: Eigenvalue closest to the target wavenumber.
-* `residual::T`: Corresponding nonlinear residual.
+* `k::Complex{T}`: Eigenvalue closest to the target wavenumber, or `nothing` if the contour contains none.
+* `residual::T`: Corresponding nonlinear residual, or `nothing` if the contour contains none.
 """
 function solve_wavenumber(solver::BeynSolver, billiard::Bi, k, dk; multithreaded::Bool=true) where {Bi<:AbsBilliard}
     pts = evaluate_points(solver, billiard, k); ks, residuals = solve(solver, pts, k, dk; multithreaded)
-    isempty(ks) && error("BeynSolver found no eigenvalue candidates in window")
+    isempty(ks) && return nothing, nothing
     idx = findmin(abs.(ks .- k))[2]
     return ks[idx], residuals[idx]
 end

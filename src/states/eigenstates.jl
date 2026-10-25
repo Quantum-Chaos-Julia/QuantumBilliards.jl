@@ -332,5 +332,6 @@ state fields.
 """
 function compute_eigenstate(solver::AcceleratedBIMSolver, billiard::AbsBilliard, k; dk::Real=0.1, multithreaded::Bool=true)
     k0, _ = solve_wavenumber(solver, billiard, k, dk; multithreaded)
+    k0 === nothing && throw(ArgumentError("no eigenvalue found within dk=$dk of k=$k"))
     return compute_eigenstate(solver.kernel, billiard, k0; multithreaded)
 end

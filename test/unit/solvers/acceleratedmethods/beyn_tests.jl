@@ -414,8 +414,8 @@ end
         @test real(k) ≈ 3.3 atol = 1e-6
     end
 
-    @testset "solve_wavenumber with no root in the window throws" begin
-        @test_throws ErrorException solve_wavenumber(solver, billiard, 5.2, 0.4; multithreaded=false)
+    @testset "solve_wavenumber with no root in the window returns (nothing, nothing)" begin
+        @test solve_wavenumber(solver, billiard, 5.2, 0.4; multithreaded=false) === (nothing, nothing)
     end
 
     @testset "solve_spectrum returns every validated root" begin

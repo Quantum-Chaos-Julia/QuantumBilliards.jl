@@ -20,7 +20,7 @@ function _rot_c3_spectrum(chars::Tuple)
         kernel = CombinedFieldIntegralEquationSolver(8.0, billiard; grading=SmoothPeriodicGrading(), sym_characters=chars)
         solver = BeynSolver(kernel; m=6, nq=16, r=16, Rmax=0.5, svd_tol=1e-10, res_tol=2e-5,
             taylor_degree=10, use_chebyshev=false, imag_k_check=false, eigenvectors=false)
-        compute_spectrum(solver, billiard, 3.0, 12.0; multithreaded=false, show_progress=false)
+        compute_spectrum(solver, billiard, 3.0, 12.0; ten_tol=nothing, multithreaded=false, show_progress=false)
     end
 end
 

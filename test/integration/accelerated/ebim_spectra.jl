@@ -15,7 +15,8 @@
     kernel = DoubleLayerPotentialSolver(5.0, billiard; grading=GlobalCornerGrading())
     solver = ExpandedBIMSolver(kernel)
     k1, k2 = 5.5, 6.7
-    data = compute_spectrum(solver, billiard, k1, k2; multithreaded=false, show_progress=false)
+    # ten_tol=nothing: the default EBIM filter (5e-4) is tighter than TENSION_TOL_EBIM and would drop genuine levels
+    data = compute_spectrum(solver, billiard, k1, k2; ten_tol=nothing, multithreaded=false, show_progress=false)
     ks_ref = [6.065090986269762]
     ks = real.(data.k)
     confident = findall(<(TENSION_TOL_EBIM), data.ten)
@@ -34,7 +35,7 @@ end
     kernel = CombinedFieldIntegralEquationSolver(10.0, billiard; grading=SmoothPeriodicGrading())
     solver = ExpandedBIMSolver(kernel)
     k1, k2 = 2.0, 3.0
-    data = compute_spectrum(solver, billiard, k1, k2; multithreaded=false, show_progress=false)
+    data = compute_spectrum(solver, billiard, k1, k2; ten_tol=nothing, multithreaded=false, show_progress=false)
     ks_ref = circle_spectrum(1.0, k1, k2)
     ks = real.(data.k)
     confident = findall(<(TENSION_TOL_EBIM), data.ten)
@@ -54,7 +55,7 @@ end
     kernel = CombinedFieldIntegralEquationSolver(10.0, billiard; grading=GlobalCornerGrading())
     solver = ExpandedBIMSolver(kernel)
     k1, k2 = 3.0, 10.0
-    data = compute_spectrum(solver, billiard, k1, k2; multithreaded=false, show_progress=false)
+    data = compute_spectrum(solver, billiard, k1, k2; ten_tol=nothing, multithreaded=false, show_progress=false)
     ks_ref = rectangle_spectrum(2.0, 1.4, k1, k2)
     ks = real.(data.k)
     confident = findall(<(TENSION_TOL_EBIM), data.ten)
