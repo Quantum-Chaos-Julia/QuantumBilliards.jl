@@ -599,11 +599,13 @@ end
         @test_throws "dk(k) must be positive" compute_spectrum(solver, eb_circle, 1.0, 1.5; dk=k -> 0.0, show_progress=false)
     end
 
-    @testset "no candidate in the interval throws" begin
+    @testset "no candidate in the interval returns an empty spectrum" begin
         empty_solver = eb_scripted((k0, nl) -> (ComplexF64[], Float64[]); use_taylor=false)
-        @test_throws "found no candidates" compute_spectrum(empty_solver, eb_circle, 1.0, 1.5; dk=k -> dk, show_progress=false)
+        data = compute_spectrum(empty_solver, eb_circle, 1.0, 1.5; dk=k -> dk, show_progress=false)
+        @test length(data) == 0
         outside = eb_scripted((k0, nl) -> (ComplexF64[k0 + 0.2], [1e-3]); use_taylor=false)   # every candidate above k2
-        @test_throws "found no candidates" compute_spectrum(outside, eb_circle, 1.0, 1.0 + 1e-9; dk=k -> dk, show_progress=false)
+        data = compute_spectrum(outside, eb_circle, 1.0, 1.0 + 1e-9; dk=k -> dk, show_progress=false)
+        @test length(data) == 0
     end
 
     @testset "the number-of-states interface uses the Weyl-law wavenumber range" begin

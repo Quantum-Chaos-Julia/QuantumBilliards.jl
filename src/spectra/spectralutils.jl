@@ -134,9 +134,9 @@ end
 ################################################################################
 
 # Sort all aligned spectral quantities by Re(k).
-function _finalize_spectrum(billiard::Bi, solver::So, ks::Vector{K}, ts::Vector{T}, control::Vector{Bool}; states::S=nothing) where {Bi<:AbsBilliard,So,K<:Number,T<:Real,S<:Union{Nothing,Vector{<:AbsState}}}
-    isempty(ks) && throw(ArgumentError("compute_spectrum found no candidates in the requested range"))
+function _finalize_spectrum(billiard::Bi, solver::So, ks::Vector{K}, ts::Vector{T}, control::Vector{Bool}; states::Union{Nothing,Vector}=nothing) where {Bi<:AbsBilliard,So,K<:Number,T<:Real}
     p = sortperm(ks; by=real)
+    states !== nothing && isempty(states) && (states = nothing)
     return SpectralData(billiard, solver, ks[p], ts[p], control[p]; states=states===nothing ? nothing : states[p])
 end
 
@@ -380,7 +380,7 @@ function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billi
         end
     end
     keep = (k1T .<= real.(ks)) .& (real.(ks) .<= k2T)
-    return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], control[keep]; states = solver.eigenvectors ? states[keep] : nothing)
+    return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], control[keep]; states = solver.eigenvectors ? identity.(states[keep]) : nothing)
 end
 
 """
@@ -676,11 +676,10 @@ function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::F
             panel_start = panel_stop + 1
         end
     end
-    isempty(ks) && throw(ArgumentError("compute_spectrum found no candidates in the requested range"))
     keep = (k1T .<= real.(ks)) .& (real.(ks) .<= k2T)
     ks = ks[keep]
     ts = ts[keep]
-    isempty(ks) && throw(ArgumentError("compute_spectrum found no candidates in the requested range"))
+    isempty(ks) && return _finalize_spectrum(billiard, solver, Complex{T}[], T[], Bool[])
     kout = Complex{T}[]
     tout = T[]
     control = Bool[]
@@ -794,7 +793,6 @@ function compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; multithreade
             states===nothing ? (states = si) : append!(states, si)
             append!(ks, Complex{T}.(ki[keep])); append!(ts, T.(ti[keep]))
         end
-        states===nothing && throw(ArgumentError("compute_spectrum found no candidates in the requested range"))
         return _finalize_spectrum(billiard, solver, ks, ts, fill(false, length(ks)); states)
     end
     @maybe_showprogress show_progress for i in eachindex(intervals)

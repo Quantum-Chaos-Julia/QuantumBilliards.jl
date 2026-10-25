@@ -603,7 +603,7 @@ function EBIMTaylorCache(solver::SweepBIMSolver, pts::BoundaryPoints{Float64}, k
     p >= 2 || throw(ArgumentError("EBIM Taylor degree must be at least 2"))
     cache = _taylor_cache(solver, pts)
     if solver.symmetry === nothing
-        N = length(pts)
+        N = boundary_matrix_size(solver, pts)
         coeffs = Array{ComplexF64,3}(undef, N, N, p + 1)
         work = [TaylorWorkspace(p) for _ = 1:Threads.maxthreadid()]
         @use_threads multithreading=multithreaded for j = 1:N

@@ -43,11 +43,10 @@ function boundary_limits(curves; grd::Int = 1000, padding::Real = 0.01)
     for crv in curves
         L = crv.length
         N_bnd = max(512, round(Int, grd / L))
-        t = range(0.0, 1.0, N_bnd)[1:end-1]
+        t = range(0.0, 1.0, N_bnd)
         pts = curve(crv, t)
         append!(x_bnd, getindex.(pts, 1)); append!(y_bnd, getindex.(pts, 2))
     end
-    x_bnd[end] = x_bnd[1]; y_bnd[end] = y_bnd[1]
     xlim = extrema(x_bnd); ylim = extrema(y_bnd)
     return pad_limits(xlim, ylim; padding)
 end
