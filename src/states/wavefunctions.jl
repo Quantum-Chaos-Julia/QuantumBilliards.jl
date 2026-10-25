@@ -1,292 +1,539 @@
-"""
-    pad_limits(xlim, ylim; padding::Real = 0.01) → (xlim_padded::Tuple, ylim_padded::Tuple)
+################################################################################
+# BIM WAVEFUNCTION RECONSTRUCTION
+#
+# Dirichlet eigenfunctions are reconstructed from either the native BIM layer
+# density or the physical boundary normal derivative u = ∂ₙψ:
+#
+#     DLP density:       ψ = D_k μ
+#     CFIE density:      ψ ∝ -(D_k + i k S_k) μ
+#     physical ∂ₙψ:      ψ = 1/4 ∫∂Ω Y₀(k|x-q|) u(q) ds_q
+#
+# Chebyshev acceleration requires only Hankel functions:
+#
+#     DLP:    H₁⁽¹⁾
+#     CFIE:   H₀⁽¹⁾, H₁⁽¹⁾
+#     SLP:    H₀⁽¹⁾ through Y₀ = Im H₀⁽¹⁾.
+#
+# Direct and Chebyshev evaluation use separate kernels so that all types in the
+# threaded spatial loop remain concrete.
+################################################################################
 
-Pads a pair of `(min, max)` limits `xlim` and `ylim` symmetrically by
-`padding` on each side.
+############## HELPER FUNCTIONS #############
 
-## Arguments
-* `xlim`: The `(xmin, xmax)` limits to pad.
-* `ylim`: The `(ymin, ymax)` limits to pad.
-
-## Keyword arguments
-*  `padding::Real = 0.01` : Amount subtracted from the lower limit and added to the upper limit of each pair.
-
-## Returns
-*  `xlim_padded` : `(xlim[1] - padding, xlim[2] + padding)`.
-*  `ylim_padded` : `(ylim[1] - padding, ylim[2] + padding)`.
-"""
-function pad_limits(xlim, ylim; padding=0.01)
+function pad_limits(xlim, ylim; padding::Real = 0.01)
     return (xlim[1] - padding, xlim[2] + padding), (ylim[1] - padding, ylim[2] + padding)
 end
 
-"""
-    rectify_grid(grid::AbstractVector) → new_grid::AbstractVector
+# Number of grid points needed to sample a length `d` at `b` points per de
+# Broglie wavelength `2π/k`, floored at a minimum of 512 points.
+_debroglie_grid_size(k::Real, d::Real, b::Real) = max(round(Int, k * d * b / (2 * pi)), 512)
 
-Shifts `grid` so that its entry closest to zero is exactly `0`, then keeps
-only the strictly positive half of the shifted grid; returns `grid`
-unchanged if it does not straddle zero.
-
-## Description
-This is used to build a half-grid for wavefunction evaluation on the
-fundamental domain of a reflection-symmetric billiard, where only the `x > 0`
-(or `y > 0`) half-plane needs to be sampled.
-
-## Arguments
-* `grid`: The coordinate grid to rectify.
-
-## Returns
-*  `new_grid` : The shifted, strictly-positive half of `grid` if `grid` straddles zero (i.e. `grid[1] <= 0 <= grid[end]`), otherwise `grid` unchanged.
-"""
-function rectify_grid(grid)
-    type = eltype(grid)
-    if grid[1] <= zero(type) <= grid[end]
+function rectify_grid(grid::AbstractVector{T}) where {T<:Real}
+    if grid[1] <= zero(T) <= grid[end]
         idx = argmin(abs.(grid))
-        new_grid = grid .- grid[idx] #.- ds/2.0
-        return new_grid[new_grid .> zero(type)]
-    else
-        return grid
+        new_grid = grid .- grid[idx]
+        return new_grid[new_grid .> zero(T)]
     end
+    return grid
 end
 
-"""
-    boundary_limits(curves; grd::Int = 1000, padding::Real = 0.01) → (xlim::Tuple, ylim::Tuple)
-
-Computes padded bounding-box limits `(xlim, ylim)` enclosing a collection of
-boundary `curves`.
-
-## Description
-Each curve is sampled at `N_bnd = max(512, round(Int, grd/L))` equally spaced
-parameter values (with `L` the curve length), the sampled points from all
-curves are pooled, and the extrema of their `x` and `y` coordinates are
-padded with [`pad_limits`](@ref).
-
-## Arguments
-* `curves`: A collection of boundary curves to sample, e.g. from `get_boundary_curves`.
-
-## Keyword arguments
-*  `grd::Int = 1000` : Target total sampling density (points per unit curve length) used to set the number of points sampled per curve.
-*  `padding::Real = 0.01` : Padding added to the bounding box, passed to [`pad_limits`](@ref).
-
-## Returns
-*  `xlim` : Padded `(xmin, xmax)` limits enclosing all sampled boundary points.
-*  `ylim` : Padded `(ymin, ymax)` limits enclosing all sampled boundary points.
-"""
-function boundary_limits(curves; grd=1000, padding=0.01) 
-    x_bnd = Vector{Any}()
-    y_bnd = Vector{Any}()
-    for crv in curves #names of variables not very nice
+function boundary_limits(curves; grd::Int = 1000, padding::Real = 0.01)
+    T = typeof(first(curves).length)
+    x_bnd = Vector{T}(); y_bnd = Vector{T}()
+    for crv in curves
         L = crv.length
-        N_bnd = max(512,round(Int, grd/L))
-        t = range(0.0,1.0, N_bnd)[1:end-1]
-        pts = curve(crv,t)
-        append!(x_bnd, getindex.(pts,1))
-        append!(y_bnd, getindex.(pts,2))
+        N_bnd = max(512, round(Int, grd / L))
+        t = range(0.0, 1.0, N_bnd)
+        pts = curve(crv, t)
+        append!(x_bnd, getindex.(pts, 1)); append!(y_bnd, getindex.(pts, 2))
     end
-    x_bnd[end] = x_bnd[1]
-    y_bnd[end] = y_bnd[1]
-    xlim = extrema(x_bnd)
-    #dx =  xlim[2] - xlim[1]
-    ylim = extrema(y_bnd)
-    #dy =  ylim[2] - ylim[1]
-    return pad_limits(xlim, ylim; padding=padding)
+    xlim = extrema(x_bnd); ylim = extrema(y_bnd)
+    return pad_limits(xlim, ylim; padding)
 end
 
 
+@inline function _is_inside_full(billiard::Bi, pt::SVector{2,T}) where {T<:Real,Bi<:AbsBilliard}
+    BilliardGeometry.is_inside(billiard, pt) && return true
+    @inbounds for sym in billiard.symmetries
+        BilliardGeometry.is_inside(billiard, BilliardGeometry.apply_symmetry(sym, pt)) && return true
+    end
+    return false
+end
+
+
+function _wavefunction_grid(k::T, billiard::Bi, b::T; inside_only::Bool = true, fundamental_domain::Bool = true) where {T<:Real,Bi<:AbsBilliard}
+    curves = fundamental_domain ? get_boundary_curves(billiard) : full_boundary(billiard)
+    xlim, ylim = boundary_limits(curves); dx = T(2pi) / (b * k)
+    nx = max(512, ceil(Int, (xlim[2] - xlim[1]) / dx) + 1); ny = max(512, ceil(Int, (ylim[2] - ylim[1]) / dx) + 1)
+    xgrid = collect(range(T(xlim[1]), T(xlim[2]), length = nx)); ygrid = collect(range(T(ylim[1]), T(ylim[2]), length = ny))
+    pts = vec([SVector{2,T}(x, y) for x in xgrid, y in ygrid])
+    if inside_only
+        mask = BitVector(undef, length(pts))
+        inside = fundamental_domain ? BilliardGeometry.is_inside : _is_inside_full
+        Threads.@threads for i in eachindex(pts)
+            mask[i] = inside(billiard, pts[i])
+        end
+        indices = findall(mask)
+    else
+        indices = collect(eachindex(pts))
+    end
+    return xgrid, ygrid, pts, indices, nx, ny
+end
+
+@inline function _y0(r::T, k::T, cheb::ChebHankelPlanH, ::Val{:cheb}, ::Type{T}) where {T<:Real}
+    rf = Float64(r); p, t = panel_t(cheb, rf)
+    return T(imag(eval_h(cheb, p, t, rf)))
+end
+
+@inline _y0(r::T, k::T, ::Nothing, ::Val{:direct}, ::Type{T}) where {T<:Real} = T(Bessels.bessely0(k * r))
+
+@inline function _h1(r::T, k::T, cheb::ChebHankelPlanH, ::Val{:cheb}, ::Type{T}) where {T<:Real}
+    rf = Float64(r); p, t = panel_t(cheb, rf)
+    return Complex{T}(eval_h(cheb, p, t, rf))
+end
+
+@inline _h1(r::T, k::T, ::Nothing, ::Val{:direct}, ::Type{T}) where {T<:Real} = Complex{T}(Bessels.hankelh1(1, k * r))
+
+@inline function _h01(r::T, k::T, cheb::Tuple{ChebHankelPlanH,ChebHankelPlanH}, ::Val{:cheb}, ::Type{T}) where {T<:Real}
+    rf = Float64(r); p, t = panel_t(cheb[1], rf)
+    return Complex{T}(eval_h(cheb[1], p, t, rf)), Complex{T}(eval_h(cheb[2], p, t, rf))
+end
+
+@inline function _h01(r::T, k::T, ::Nothing, ::Val{:direct}, ::Type{T}) where {T<:Real}
+    z = k * r
+    return Complex{T}(Bessels.hankelh1(0, z)), Complex{T}(Bessels.hankelh1(1, z))
+end
+
 """
-    compute_psi(state::S, x_grid::AbstractVector, y_grid::AbstractVector; inside_only::Bool = true, memory_limit::Real = 10.0e9, multithreaded::Bool = true) where {S<:AbsState} → Psi::Vector
+    ϕ_slp(x::T, y::T, k::T, bd::BoundaryPoints{T}, u::AbstractVector{K}, cheb, mode::Val) where {T<:Real,K<:Number}
 
-Evaluates the wavefunction of `state` on the Cartesian grid formed by
-`x_grid` and `y_grid`, returning it as a flattened vector.
+Evaluate the single-layer reconstruction of a Dirichlet eigenfunction at `(x,y)` from its physical boundary normal derivative `u = ∂ₙψ`.
 
-## Description
-The evaluation points are the tensor-product grid `(x,y)` for `y in y_grid`,
-`x in x_grid`, optionally restricted to points inside `state.billiard` when
-`inside_only = true` (via `is_inside`). If the estimated memory required to
-build the full basis matrix (`sizeof(eltype(vec)) * basis.dim * n_pts`) is
-below `memory_limit`, the basis matrix is built in one shot with
-`basis_matrix` and multiplied by the coefficient vector; otherwise the
-wavefunction is accumulated basis function by basis function with
-`basis_fun`, skipping coefficients smaller than `state.eps` in magnitude,
-trading memory for compute time. Points outside the billiard (when
-`inside_only = true`) are set to `NaN`.
+The reconstruction is
+
+    ψ(x) = 1/4 ∫∂Ω Y₀(k|x-q|)u(q)ds_q,
+
+discretized using the boundary quadrature weights `bd.ds`. The cylindrical function is evaluated either directly or from a Chebyshev approximation according to `mode`.
 
 ## Arguments
-* `state`: The eigenstate (`S<:AbsState`) whose wavefunction is evaluated.
-* `x_grid`: Grid of `x` coordinates.
-* `y_grid`: Grid of `y` coordinates.
-
-## Keyword arguments
-*  `inside_only::Bool = true` : Whether to evaluate only at points inside `state.billiard`, setting the wavefunction to `NaN` elsewhere.
-*  `memory_limit::Real = 10.0e9` : Memory threshold (in bytes) above which the wavefunction is accumulated basis function by basis function instead of via a full basis matrix.
-*  `multithreaded::Bool = true` : Whether the basis matrix construction is multithreaded.
+- `x::T`, `y::T`: Cartesian coordinates of the evaluation point.
+- `k::T`: Wave number.
+- `bd::BoundaryPoints{T}`: Full physical boundary discretization.
+- `u::AbstractVector{K}`: Physical boundary normal derivative `∂ₙψ`.
+- `cheb`: Chebyshev Hankel plan, or `nothing` for direct evaluation.
+- `mode::Val`: Evaluation mode, `Val(:cheb)` or `Val(:direct)`.
 
 ## Returns
-*  `Psi` : The wavefunction values on the flattened grid `(x_grid, y_grid)`, ordered as `x` varying fastest.
+- Reconstructed eigenfunction value at `(x,y)`.
 """
-function compute_psi(state::S, x_grid, y_grid; inside_only=true, memory_limit = 10.0e9, multithreaded = true) where {S<:AbsState}
-    let vec = state.vec, k = state.k_basis, basis=state.basis, billiard=state.billiard, eps=state.eps #basis is correct size
-        sz = length(x_grid)*length(y_grid)
-        pts = collect(SVector(x,y) for y in y_grid for x in x_grid)
-        if inside_only
-            pts_mask = is_inside(billiard,pts)
-            pts = pts[pts_mask]
-        end
-        n_pts = length(pts)
-        #estimate max memory needed for the matrices
-        type = eltype(vec)
-        memory = sizeof(type)*basis.dim*n_pts
-        Psi = zeros(type,sz)
+@inline function ϕ_slp(x::T, y::T, k::T, bd::BoundaryPoints{T}, u::AbstractVector{K}, cheb, mode::Val) where {T<:Real,K<:Number}
+    acc = zero(promote_type(T, K))
+    @inbounds for j in eachindex(u)
+        p = bd.xy[j]; dx = x - p[1]; dy = y - p[2]; r2 = muladd(dx, dx, dy * dy)
+        r2 == zero(T) && continue
+        r = sqrt(r2); acc += _y0(r, k, cheb, mode, T) * bd.ds[j] * u[j]
+    end
+    return acc * T(0.25)
+end
 
-        if memory < memory_limit
-            B = basis_matrix(basis, k, pts; multithreaded)
-            Psi_pts = B*vec
-            if inside_only
-                Psi[pts_mask] .= Psi_pts
-            else
-                Psi .= Psi_pts
+"""
+    ϕ_dlp(x::T, y::T, k::T, bd::BoundaryPoints{T}, μ::AbstractVector{K}, cheb, mode::Val) where {T<:Real,K<:Number}
+
+Evaluate the double-layer potential at `(x,y)` from a DLP layer density `μ`.
+
+For the outgoing Helmholtz Green function `G = (i/4)H₀⁽¹⁾(kr)`, the reconstruction is evaluated using its normal derivative and the boundary quadrature weights `bd.ds`. The Hankel function is evaluated either directly or from a Chebyshev approximation according to `mode`.
+
+## Arguments
+- `x::T`, `y::T`: Cartesian coordinates of the evaluation point.
+- `k::T`: Wave number.
+- `bd::BoundaryPoints{T}`: Full physical boundary discretization.
+- `μ::AbstractVector{K}`: DLP layer density.
+- `cheb`: Chebyshev `H₁⁽¹⁾` plan, or `nothing` for direct evaluation.
+- `mode::Val`: Evaluation mode, `Val(:cheb)` or `Val(:direct)`.
+
+## Returns
+- Double-layer potential at `(x,y)`.
+"""
+@inline function ϕ_dlp(x::T, y::T, k::T, bd::BoundaryPoints{T}, μ::AbstractVector{K}, cheb, mode::Val) where {T<:Real,K<:Number}
+    acc = zero(promote_type(K, Complex{T})); k4 = k * T(0.25)
+    @inbounds for j in eachindex(μ)
+        p = bd.xy[j]; n = bd.normal[j]; dx = x - p[1]; dy = y - p[2]; r2 = muladd(dx, dx, dy * dy)
+        r2 == zero(T) && continue
+        r = sqrt(r2); inn = muladd(dx, n[1], dy * n[2])
+        acc += (im * k4) * _h1(r, k, cheb, mode, T) * (inn / r) * μ[j] * bd.ds[j]
+    end
+    return acc
+end
+
+"""
+    ϕ_cfie(x::T, y::T, k::T, bd::BoundaryPoints{T}, μ::AbstractVector{K}, cheb, mode::Val) where {T<:Real,K<:Number}
+
+Evaluate the combined-field potential at `(x,y)` from a CFIE layer density `μ`.
+
+The reconstruction combines double- and single-layer Helmholtz potentials using the CFIE discretization stored in `bd`. Both `H₀⁽¹⁾` and `H₁⁽¹⁾` are evaluated either directly or from Chebyshev approximations according to `mode`.
+
+## Arguments
+- `x::T`, `y::T`: Cartesian coordinates of the evaluation point.
+- `k::T`: Wave number.
+- `bd::BoundaryPoints{T}`: Full physical boundary discretization.
+- `μ::AbstractVector{K}`: CFIE layer density.
+- `cheb`: Tuple of Chebyshev `H₀⁽¹⁾` and `H₁⁽¹⁾` plans, or `nothing` for direct evaluation.
+- `mode::Val`: Evaluation mode, `Val(:cheb)` or `Val(:direct)`.
+
+## Returns
+- Combined-field potential at `(x,y)`.
+"""
+@inline function ϕ_cfie(x::T, y::T, k::T, bd::BoundaryPoints{T}, μ::AbstractVector{K}, cheb, mode::Val) where {T<:Real,K<:Number}
+    acc = zero(promote_type(K, Complex{T})); k2 = k * T(0.5)
+    @inbounds for j in eachindex(μ)
+        p = bd.xy[j]; t = bd.tangent[j]; dx = x - p[1]; dy = y - p[2]; r2 = muladd(dx, dx, dy * dy)
+        r2 == zero(T) && continue
+        r = sqrt(r2); h0, h1 = _h01(r, k, cheb, mode, T)
+        A = k2 * muladd(t[2], dx, -t[1] * dy) / r; B = k2 * hypot(t[1], t[2])
+        acc -= bd.ws[j] * μ[j] * (im * A * h1 - B * h0)
+    end
+    return acc
+end
+
+# Extract the concrete DLP/CFIE kernel a BIMEigenstate's boundary data was built from,
+# whether `solver` is the kernel itself (SweepBIMSolver) or an accelerated wrapper around it.
+_bim_kernel(solver::SweepBIMSolver) = solver
+_bim_kernel(solver::AcceleratedBIMSolver) = solver.kernel
+
+function _cheb_interval(ks, bds, xgrid, ygrid)
+    xmin = Float64(first(xgrid)); xmax = Float64(last(xgrid)); ymin = Float64(first(ygrid)); ymax = Float64(last(ygrid)); rmax = 0.0
+    @inbounds for bd in bds, p in bd.xy
+        x = Float64(p[1]); y = Float64(p[2])
+        rmax = max(rmax, hypot(xmin - x, ymin - y), hypot(xmin - x, ymax - y), hypot(xmax - x, ymin - y), hypot(xmax - x, ymax - y))
+    end
+    kc = ComplexF64.(ks)
+    return kc, hankel_z_chebyshev_cutoff / maximum(abs, kc), 1.05 * rmax
+end
+
+function _density_kernel(solver::DLP, ks, bds, xgrid, ygrid, cfg)
+    kc, rmin, rmax = _cheb_interval(ks, bds, xgrid, ygrid)
+    hp, _, _ = _tune_cheb_plans(rmin, rmax, kc, cfg; h_orders = (1,))
+    return hp.h1, ϕ_dlp
+end
+
+function _density_kernel(solver::CFIE, ks, bds, xgrid, ygrid, cfg)
+    kc, rmin, rmax = _cheb_interval(ks, bds, xgrid, ygrid)
+    hp, _, _ = _tune_cheb_plans(rmin, rmax, kc, cfg; h_orders = (0, 1))
+    return collect(zip(hp.h0, hp.h1)), ϕ_cfie
+end
+
+# Fill value for grid points excluded by a mask (real or complex `V`):
+# `NaN` (both real/imaginary parts, when applicable) so Makie's
+# heatmap/surface plots render exterior points transparently via their
+# default `nan_color`, or `zero(V)` otherwise.
+@inline _mask_fill(::Type{V}, use_NaN_mask::Bool) where {V<:Real} = use_NaN_mask ? convert(V, NaN) : zero(V)
+@inline _mask_fill(::Type{V}, use_NaN_mask::Bool) where {V<:Complex} = use_NaN_mask ? V(NaN, NaN) : zero(V)
+
+function _evaluate_wavefunctions(ks::Vector{T}, us::Vector{Vector{K}}, bds::Vector{P}, pts, indices, nx::Int, ny::Int, plans, ϕ::F, mode::M; MIN_CHUNK::Int = 4096, show_progress::Bool = true, use_NaN_mask::Bool = false) where {T<:Real,K<:Number,P<:BoundaryPoints,F,M<:Val}
+    V = ϕ === ϕ_slp ? promote_type(T, K) : promote_type(K, Complex{T})
+    out = Vector{Matrix{V}}(undef, length(ks)); n = length(indices)
+    nt = max(1, min(Threads.nthreads(), cld(n, MIN_CHUNK))); q, r = divrem(n, nt)
+    @maybe_showprogress show_progress for i in eachindex(ks)
+        ψ = fill(_mask_fill(V, use_NaN_mask), nx * ny); k = ks[i]; u = us[i]; bd = bds[i]; plan = plans === nothing ? nothing : plans[i]
+        Threads.@threads :static for t in 1:nt
+            lo = (t - 1) * q + min(t - 1, r) + 1; hi = lo + q - 1 + (t <= r)
+            @inbounds for j in lo:hi
+                idx = indices[j]; p = pts[idx]
+                ψ[idx] = ϕ(p[1], p[2], k, bd, u, plan, mode)
             end
+        end
+        out[i] = reshape(ψ, nx, ny)
+    end
+    return out
+end
 
+"""
+    wavefunction(states::AbstractVector{<:BIMEigenstate{K,T}}, billiard::AbsBilliard, solver::AbsBIMSolver; b::Real = 5, inside_only::Bool = true, fundamental_domain::Bool = true, MIN_CHUNK::Int = 4096, use_chebyshev::Bool = true, show_progress::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(T), use_NaN_mask::Bool = false) where {K<:Number,T<:Real}
+
+Reconstruct BIM eigenstates on a common Cartesian grid.
+
+## Arguments
+- `states::AbstractVector{<:BIMEigenstate{K,T}}`: BIM eigenstates.
+- `billiard::AbsBilliard`: Billiard the states were computed on (no longer stored on the state itself).
+- `solver::AbsBIMSolver`: Solver the states were computed with (either the `SweepBIMSolver` kernel itself, or an `AcceleratedBIMSolver` wrapping one) — used only to select the DLP/CFIE reconstruction kernel via [`_bim_kernel`](@ref).
+
+## Keyword Arguments
+- `b::Real = 5`: Grid points per wavelength.
+- `inside_only::Bool = true`: Evaluate only inside the billiard.
+- `fundamental_domain::Bool = true`: Restrict the reconstruction grid extent
+  and (when `inside_only = true`) the mask to `billiard`'s fundamental
+  domain alone, rather than the complete physical domain. `vec`/`u` are
+  already expanded onto the complete boundary regardless of this flag, so
+  density evaluation on the restricted grid remains correct. Matches
+  [`plot_boundary!`](@ref)'s fundamental-domain outline convention.
+- `MIN_CHUNK::Int = 4096`: Minimum spatial points per active thread.
+- `use_chebyshev::Bool = true`: Use Chebyshev-accelerated Hankel evaluation.
+- `show_progress::Bool = true`: Display reconstruction progress.
+- `cheb_config::ChebyshevConfig = ChebyshevConfig(T)`: Chebyshev configuration.
+- `use_NaN_mask::Bool = false`: When `inside_only = true`, fill exterior
+  values with `NaN` instead of zero (e.g. so plotting functions render them
+  transparently).
+
+## Returns
+- `Psi2ds::Vector{Matrix}`: Reconstructed wavefunctions.
+- `xgrid::Vector{T}`: Cartesian x coordinates.
+- `ygrid::Vector{T}`: Cartesian y coordinates.
+"""
+function wavefunction(states::AbstractVector{<:BIMEigenstate{K,T}}, billiard::AbsBilliard, solver::AbsBIMSolver; b::Real = 5, inside_only::Bool = true, fundamental_domain::Bool = true, MIN_CHUNK::Int = 4096, use_chebyshev::Bool = true, show_progress::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(T), use_NaN_mask::Bool = false) where {K<:Number,T<:Real}
+    isempty(states) && throw(ArgumentError("states must be nonempty"))
+    kernel = _bim_kernel(solver)
+    P = typeof(first(states).pts)
+    ks = T[real(s.k) for s in states]; bds = P[s.pts for s in states]
+    density = all(s.vec !== nothing for s in states)
+    density || all(s.u !== nothing for s in states) || error("states must provide the same boundary representation")
+    us = density ? Vector{K}[s.vec::Vector{K} for s in states] : Vector{K}[s.u::Vector{K} for s in states]
+    bval = T(b)
+    xgrid, ygrid, pts, indices, nx, ny = _wavefunction_grid(maximum(ks), billiard, bval; inside_only, fundamental_domain)
+    if density
+        if use_chebyshev
+            plans, ϕ = _density_kernel(kernel, ks, bds, xgrid, ygrid, cheb_config)
+            Psi = _evaluate_wavefunctions(ks, us, bds, pts, indices, nx, ny, plans, ϕ, Val(:cheb); MIN_CHUNK, show_progress, use_NaN_mask)
         else
-            println("Warning: memory limit of $(Base.format_bytes(memory_limit)) exceded $(Base.format_bytes(memory)).")
-            if inside_only
-                for i in eachindex(vec)
-                    if abs(vec[i]) > eps 
-                        Psi[pts_mask] .+= vec[i].*basis_fun(basis,i,k,pts)
-                    end
-                end
-            else
-                for i in eachindex(vec)
-                    if abs(vec[i]) > eps 
-                        Psi .+= vec[i].*basis_fun(basis,i,k,pts)
-                    end
-                end
-            end
+            ϕ = kernel isa DLP ? ϕ_dlp : ϕ_cfie
+            Psi = _evaluate_wavefunctions(ks, us, bds, pts, indices, nx, ny, nothing, ϕ, Val(:direct); MIN_CHUNK, show_progress, use_NaN_mask)
         end
-        if inside_only
-            Psi[.!pts_mask] .= convert(type, NaN)
+    else
+        if use_chebyshev
+            kc, rmin, rmax = _cheb_interval(ks, bds, xgrid, ygrid)
+            hp, _, _ = _tune_cheb_plans(rmin, rmax, kc, cheb_config; h_orders = (0,))
+            Psi = _evaluate_wavefunctions(ks, us, bds, pts, indices, nx, ny, hp.h0, ϕ_slp, Val(:cheb); MIN_CHUNK, show_progress, use_NaN_mask)
+        else
+            Psi = _evaluate_wavefunctions(ks, us, bds, pts, indices, nx, ny, nothing, ϕ_slp, Val(:direct); MIN_CHUNK, show_progress, use_NaN_mask)
         end
-        return Psi
     end
+    return Psi, xgrid, ygrid
 end
 
 """
-    wavefunction(state::S; b::Real = 5.0, inside_only::Bool = true, fundamental_domain::Bool = true, memory_limit::Real = 10.0e9, multithreaded::Bool = true) where {S<:AbsState} → (Psi2d::Matrix, x_grid::Vector, y_grid::Vector)
+    wavefunction(state::BIMEigenstate{K,T}, billiard::AbsBilliard, solver::AbsBIMSolver; b::Real = 5, inside_only::Bool = true, fundamental_domain::Bool = true, MIN_CHUNK::Int = 4096, use_chebyshev::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(T), use_NaN_mask::Bool = false) where {K<:Number,T<:Real}
 
-Computes the wavefunction of an eigenstate `state` on a regular grid covering
-its billiard, optionally unfolding it from the fundamental domain onto the
-full billiard.
-
-## Description
-A bounding box for `state.billiard` is computed with [`boundary_limits`](@ref)
-at a sampling density of `max(1000, round(Int, k*L*b/(2*pi)))` (with `L` the
-boundary length), and grids `x_grid`, `y_grid` are built with
-`max(round(Int, k*d*b/(2*pi)), 512)` points along each dimension `d` (`dx` or
-`dy`), giving roughly `b` grid points per de Broglie wavelength. If the basis
-carries reflection symmetries, the corresponding grid(s) are restricted to
-the fundamental domain with [`rectify_grid`](@ref). The wavefunction is then
-evaluated with [`compute_psi`](@ref) and reshaped into a 2D array `Psi2d`. If
-`fundamental_domain = false` and the basis has symmetries, `Psi2d` and the
-grids are unfolded onto the full billiard with
-[`apply_symmetries_to_wavefunction`](@ref).
+Reconstruct one BIM eigenstate.
 
 ## Arguments
-* `state`: The eigenstate (`S<:AbsState`) for which the wavefunction is computed.
+- `state::BIMEigenstate{K,T}`: BIM eigenstate.
+- `billiard::AbsBilliard`: Billiard the state was computed on.
+- `solver::AbsBIMSolver`: Solver the state was computed with.
 
-## Keyword arguments
-*  `b::Real = 5.0` : Oversampling factor controlling the grid resolution; roughly `b` grid points per de Broglie wavelength.
-*  `inside_only::Bool = true` : Whether to evaluate only at points inside `state.billiard`, passed to [`compute_psi`](@ref).
-*  `fundamental_domain::Bool = true` : Whether to return the wavefunction restricted to the symmetry-reduced fundamental domain (`true`) or unfolded onto the full billiard (`false`).
-*  `memory_limit::Real = 10.0e9` : Memory threshold (in bytes) passed to [`compute_psi`](@ref).
-*  `multithreaded::Bool = true` : Whether the underlying matrix construction is multithreaded.
+## Keyword Arguments
+- `b::Real = 5`: Grid points per wavelength.
+- `inside_only::Bool = true`: Evaluate only inside the billiard.
+- `fundamental_domain::Bool = true`: Restrict the reconstruction grid extent
+  and (when `inside_only = true`) the mask to `billiard`'s fundamental
+  domain alone, rather than the complete physical domain. `vec`/`u` are
+  already expanded onto the complete boundary regardless of this flag, so
+  density evaluation on the restricted grid remains correct. Matches
+  [`plot_boundary!`](@ref)'s fundamental-domain outline convention.
+- `MIN_CHUNK::Int = 4096`: Minimum spatial points per active thread.
+- `use_chebyshev::Bool = true`: Use Chebyshev-accelerated Hankel evaluation.
+- `cheb_config::ChebyshevConfig = ChebyshevConfig(T)`: Chebyshev configuration.
+- `use_NaN_mask::Bool = false`: When `inside_only = true`, fill exterior
+  values with `NaN` instead of zero (e.g. so plotting functions render them
+  transparently).
 
 ## Returns
-*  `Psi2d` : The wavefunction values on the grid `(x_grid, y_grid)`.
-*  `x_grid` : The `x` coordinates of the grid.
-*  `y_grid` : The `y` coordinates of the grid.
+- `Psi::Matrix`: Reconstructed wavefunction.
+- `xgrid::Vector{T}`: Cartesian x coordinates.
+- `ygrid::Vector{T}`: Cartesian y coordinates.
 """
-function wavefunction(state::S; b=5.0, inside_only=true, fundamental_domain = true, memory_limit = 10.0e9, multithreaded = true) where {S<:AbsState}
-    let k = state.k, billiard=state.billiard, symmetries=state.basis.symmetries     
-        #println(new_basis.dim)
-        type = eltype(state.vec)
-        #try to find a lazy way to do this
-        L = CompositeCurve(get_boundary_curves(billiard)).length
-        
-        xlim,ylim = boundary_limits(get_boundary_curves(billiard); grd=max(1000,round(Int, k*L*b/(2*pi))))
-        dx = xlim[2] - xlim[1]
-        dy = ylim[2] - ylim[1]
-        nx = max(round(Int, k*dx*b/(2*pi)), 512)
-        ny = max(round(Int, k*dy*b/(2*pi)), 512)
-        x_grid::Vector{type} = collect(type,range(xlim... , nx))
-        y_grid::Vector{type} = collect(type,range(ylim... , ny))
+function wavefunction(state::BIMEigenstate{K,T}, billiard::AbsBilliard, solver::AbsBIMSolver; b::Real = 5, inside_only::Bool = true, fundamental_domain::Bool = true, MIN_CHUNK::Int = 4096, use_chebyshev::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(T), use_NaN_mask::Bool = false) where {K<:Number,T<:Real}
+    Psi, xgrid, ygrid = wavefunction([state], billiard, solver; b, inside_only, fundamental_domain, MIN_CHUNK, use_chebyshev, show_progress = false, cheb_config, use_NaN_mask)
+    return Psi[1], xgrid, ygrid
+end
 
+################################################################################
+# BASIS WAVEFUNCTION RECONSTRUCTION  ψ(x) = Σⱼ cⱼ φⱼ(k,x),
+################################################################################
+
+"""
+    compute_psi(state::S, x_grid::AbstractVector, y_grid::AbstractVector; inside_only::Bool = true, memory_limit::Real = 10.0e9, multithreaded::Bool = true, use_NaN_mask::Bool = false) where {S<:AbsState}
+
+Evaluate the wavefunction of `state` on a Cartesian grid.
+
+The basis expansion ψ(x) = Σⱼ cⱼ φⱼ(k,x)
+is evaluated through basis-matrix multiplication ψ = B(k)c.
+
+To bound memory usage, the evaluation points are divided into chunks such that
+each basis matrix occupies at most approximately `memory_limit`. Each chunk is
+constructed with `basis_matrix`, so the standard filtering of numerically small
+basis-matrix elements is applied before multiplication by the state vector.
+
+If `inside_only = true`, only points inside the billiard are evaluated;
+exterior values are set to zero by default, or `NaN` when `use_NaN_mask = true`.
+
+## Arguments
+- `state::S`: Eigenstate whose basis expansion is evaluated.
+- `x_grid::AbstractVector`: Cartesian x coordinates.
+- `y_grid::AbstractVector`: Cartesian y coordinates.
+
+## Kwargs
+- `inside_only::Bool = true`: Evaluate only inside the billiard.
+- `memory_limit::Real = 10.0e9`: Approximate maximum memory in bytes allocated
+  to each basis-matrix chunk.
+- `multithreaded::Bool = true`: Use multithreaded basis-matrix construction.
+- `use_NaN_mask::Bool = false`: When `inside_only = true`, fill exterior
+  values with `NaN` instead of zero (e.g. so plotting functions render them
+  transparently).
+
+## Returns
+- `Psi::Vector{T}`: Flattened wavefunction values with x varying fastest.
+"""
+function compute_psi(state::S, billiard::AbsBilliard, x_grid, y_grid; inside_only = true, memory_limit = 10.0e9, multithreaded = true, use_NaN_mask::Bool = false) where {S<:BasisEigenstate}
+    vec = state.vec; k = state.k_basis; basis = state.basis
+    T = eltype(vec)
+    pts = [SVector(x, y) for y in y_grid for x in x_grid]
+    mask = inside_only ? is_inside(billiard, pts) : trues(length(pts))
+    idx = findall(mask); pts_eval = pts[idx]
+    Psi = inside_only ? fill(_mask_fill(T, use_NaN_mask), length(pts)) : zeros(T, length(pts))
+    chunk_size = max(1, floor(Int, 0.8 * memory_limit / (sizeof(T) * basis.dim)))
+    for lo in 1:chunk_size:length(pts_eval)
+        hi = min(lo + chunk_size - 1, length(pts_eval))
+        ids = lo:hi
+        B = basis_matrix(basis, k, pts_eval[ids]; multithreaded)
+        Psi[idx[ids]] .= B * vec
+    end
+    return Psi
+end
+
+"""
+    wavefunction(state::S; b::Real = 5.0, inside_only::Bool = true, fundamental_domain::Bool = true, memory_limit::Real = 10.0e9, multithreaded::Bool = true, use_NaN_mask::Bool = false) where {S<:AbsState}
+
+Compute a basis-expanded eigenstate on a Cartesian grid.
+If the basis carries reflection symmetries, the corresponding coordinate
+grids are reduced with [`rectify_grid`](@ref). For
+`fundamental_domain = false`, the result is subsequently unfolded onto the
+complete billiard with `apply_symmetries_to_wavefunction`.
+
+## Arguments
+- `state::S`: Eigenstate to evaluate.
+
+## Kwargs
+- `b::Real = 5.0`: Approximate grid points per wavelength.
+- `inside_only::Bool = true`: Evaluate only inside the billiard.
+- `fundamental_domain::Bool = true`: Return the symmetry-reduced fundamental
+  domain rather than the unfolded wavefunction.
+- `memory_limit::Real = 10.0e9`: Maximum memory in bytes for the full basis
+  matrix.
+- `multithreaded::Bool = true`: Use multithreaded basis-matrix construction.
+- `use_NaN_mask::Bool = false`: When `inside_only = true`, fill exterior
+  values with `NaN` instead of zero (e.g. so plotting functions render them
+  transparently).
+
+## Returns
+- `Psi2d::Matrix{T}`: Wavefunction values on the Cartesian grid.
+- `x_grid::Vector{T}`: Cartesian x coordinates.
+- `y_grid::Vector{T}`: Cartesian y coordinates.
+"""
+function wavefunction(state::S, billiard::AbsBilliard; b = 5.0, inside_only = true, fundamental_domain = true, memory_limit = 10.0e9, multithreaded = true, use_NaN_mask::Bool = false) where {S<:BasisEigenstate}
+    let k = state.k, symmetries = state.basis.symmetries
+        type = eltype(state.vec)
+        L = CompositeCurve(get_boundary_curves(billiard)).length
+        xlim, ylim = boundary_limits(get_boundary_curves(billiard); grd = max(1000, round(Int, k * L * b / (2 * pi))))
+        dx = xlim[2] - xlim[1]; dy = ylim[2] - ylim[1]
+        nx = _debroglie_grid_size(k, dx, b); ny = _debroglie_grid_size(k, dy, b)
+        x_grid::Vector{type} = collect(type, range(xlim..., nx)); y_grid::Vector{type} = collect(type, range(ylim..., ny))
         if ~isnothing(symmetries)
             has_x = any(s -> s isa BilliardGeometry.XAxisReflection, symmetries)
             has_y = any(s -> s isa BilliardGeometry.YAxisReflection, symmetries)
-            if has_x
+            if has_y
                 x_grid = rectify_grid(x_grid)
                 nx = length(x_grid)
             end
-            if has_y
+            if has_x
                 y_grid = rectify_grid(y_grid)
                 ny = length(y_grid)
             end
         end
-
-        Psi::Vector{type} = compute_psi(state,x_grid,y_grid; inside_only, memory_limit, multithreaded) 
-        #println("Psi type $(eltype(Psi)), $(memory_size(Psi))")
-        Psi2d::Array{type,2} = reshape(Psi, (nx,ny))
-        if ~fundamental_domain 
+        Psi::Vector{type} = compute_psi(state, billiard, x_grid, y_grid; inside_only, memory_limit, multithreaded, use_NaN_mask)
+        Psi2d::Array{type,2} = reshape(Psi, (nx, ny))
+        if ~fundamental_domain
             if ~isnothing(symmetries)
-                Psi2d, x_grid, y_grid = apply_symmetries_to_wavefunction(Psi2d,x_grid,y_grid,symmetries,state.basis.sym_qnumbers)
+                Psi2d, x_grid, y_grid = apply_symmetries_to_wavefunction(Psi2d, x_grid, y_grid, symmetries, state.basis.sym_qnumbers)
             end
         end
         return Psi2d, x_grid, y_grid
     end
 end
 
+################################################################################
+# SpectralData API
+#
+# The functions below are the primary entry points for reconstructing
+# wavefunctions from a computed SpectralData: `wavefunction(data)` batches
+# over every stored state (dispatching on whether it wraps BIMEigenstates,
+# reconstructed on one shared grid, or BasisEigenstates, each on its own
+# per-state grid), while `wavefunction(data, i)` reconstructs a single state
+# with the same unwrapped (Matrix, x, y) shape as calling `wavefunction`
+# directly on that state used to have.
+################################################################################
+
+_wavefunction_data(states::AbstractVector{<:BIMEigenstate}, billiard::AbsBilliard, solver; kwargs...) = wavefunction(states, billiard, solver; kwargs...)
+function _wavefunction_data(states::AbstractVector{<:BasisEigenstate}, billiard::AbsBilliard, solver; kwargs...)
+    results = [wavefunction(s, billiard; kwargs...) for s in states]
+    return first.(results), getindex.(results, 2), getindex.(results, 3)
+end
+
+_wavefunction_state(state::BIMEigenstate, billiard::AbsBilliard, solver; kwargs...) = wavefunction(state, billiard, solver; kwargs...)
+_wavefunction_state(state::BasisEigenstate, billiard::AbsBilliard, solver; kwargs...) = wavefunction(state, billiard; kwargs...)
+
 """
-    wavefunction(state::BasisState; xlim::Tuple = (-2.0, 2.0), ylim::Tuple = (-2.0, 2.0), b::Real = 5.0) → (Psi2d::Matrix, x_grid::Vector, y_grid::Vector)
+    wavefunction(data::SpectralData; kwargs...)
 
-Computes a single basis function represented by `state` on a regular grid
-over the fixed box `xlim × ylim`, without reference to any billiard geometry.
+Reconstruct every eigenstate stored in `data` (see [`compute_spectrum`](@ref),
+[`compute_eigenstate`](@ref)). For `data.states::AbstractVector{<:BIMEigenstate}`
+this reuses the shared-grid batched reconstruction and returns
+`(Psi::Vector{Matrix}, xgrid, ygrid)`; for `data.states::AbstractVector{<:BasisEigenstate}`
+each state is reconstructed on its own grid and `(Psis::Vector{Matrix}, xs::Vector, ys::Vector)`
+is returned. `kwargs` are forwarded to the underlying single-/batched-state
+`wavefunction` method.
+"""
+function wavefunction(data::SpectralData; kwargs...)
+    states = _require_states(data)
+    return _wavefunction_data(states, data.billiard, data.solver; kwargs...)
+end
 
-## Description
-Grids `x_grid`, `y_grid` are built with `max(round(Int, k*d*b/(2*pi)), 512)`
-points along each dimension `d` (`dx` or `dy`, from `xlim`/`ylim`), giving
-roughly `b` grid points per de Broglie wavelength. The `idx`-th basis function
-of `state.basis` is evaluated directly on the grid with `basis_fun` and
-reshaped into a 2D array.
+"""
+    wavefunction(data::SpectralData, i::Integer; kwargs...)
 
+Reconstruct the `i`-th eigenstate stored in `data`, returning the same
+unwrapped `(Psi::Matrix, x, y)` shape as calling `wavefunction` on a single
+state directly.
+"""
+function wavefunction(data::SpectralData, i::Integer; kwargs...)
+    states = _require_states(data)
+    return _wavefunction_state(states[i], data.billiard, data.solver; kwargs...)
+end
+
+"""
+    wavefunction(state::BasisState; xlim::Tuple = (-2.0, 2.0), ylim::Tuple = (-2.0, 2.0), b::Real = 5.0)
+
+Evaluate a single basis function on a Cartesian grid.
 ## Arguments
-* `state`: The [`BasisState`](@ref) whose basis function is evaluated.
+- `state::BasisState`: Basis state to evaluate.
 
-## Keyword arguments
-*  `xlim::Tuple = (-2.0, 2.0)` : The `(xmin, xmax)` extent of the evaluation grid.
-*  `ylim::Tuple = (-2.0, 2.0)` : The `(ymin, ymax)` extent of the evaluation grid.
-*  `b::Real = 5.0` : Oversampling factor controlling the grid resolution; roughly `b` grid points per de Broglie wavelength.
+## Kwargs
+- `xlim::Tuple = (-2.0, 2.0)`: Cartesian x limits.
+- `ylim::Tuple = (-2.0, 2.0)`: Cartesian y limits.
+- `b::Real = 5.0`: Approximate grid points per wavelength.
 
 ## Returns
-*  `Psi2d` : The basis function values on the grid `(x_grid, y_grid)`.
-*  `x_grid` : The `x` coordinates of the grid.
-*  `y_grid` : The `y` coordinates of the grid.
+- `Psi2d::Matrix{T}`: Basis-function values on the Cartesian grid.
+- `x_grid::Vector{T}`: Cartesian x coordinates.
+- `y_grid::Vector{T}`: Cartesian y coordinates.
 """
-function wavefunction(state::BasisState; xlim =(-2.0,2.0), ylim=(-2.0,2.0), b=5.0) 
-    let k = state.k, basis=state.basis      
-        #println(new_basis.dim)
+function wavefunction(state::BasisState; xlim = (-2.0, 2.0), ylim = (-2.0, 2.0), b = 5.0)
+    let k = state.k, basis = state.basis
         type = eltype(state.vec)
-        #try to find a lazy way to do this
-        dx = xlim[2] - xlim[1]
-        dy = ylim[2] - ylim[1]
-        nx = max(round(Int, k*dx*b/(2*pi)), 512)
-        ny = max(round(Int, k*dy*b/(2*pi)), 512)
-        x_grid::Vector{type} = collect(type,range(xlim... , nx))
-        y_grid::Vector{type} = collect(type,range(ylim... , ny))
-        pts_grid = [SVector(x,y) for y in y_grid for x in x_grid]
-        Psi::Vector{type} = basis_fun(basis,state.idx,k,pts_grid) 
-        #println("Psi type $(eltype(Psi)), $(memory_size(Psi))")
-        Psi2d::Array{type,2} = reshape(Psi, (nx,ny))
+        dx = xlim[2] - xlim[1]; dy = ylim[2] - ylim[1]
+        nx = _debroglie_grid_size(k, dx, b); ny = _debroglie_grid_size(k, dy, b)
+        x_grid::Vector{type} = collect(type, range(xlim..., nx)); y_grid::Vector{type} = collect(type, range(ylim..., ny))
+        pts_grid = [SVector(x, y) for y in y_grid for x in x_grid]
+        Psi::Vector{type} = basis_fun(basis, state.idx, k, pts_grid)
+        Psi2d::Array{type,2} = reshape(Psi, (nx, ny))
         return Psi2d, x_grid, y_grid
     end
 end
-
-

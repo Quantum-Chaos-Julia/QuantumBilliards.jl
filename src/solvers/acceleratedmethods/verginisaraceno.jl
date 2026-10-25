@@ -1,3 +1,38 @@
+################################################################################
+# VERGINI-SARACENO SCALING METHOD
+#
+# This file implements the Vergini-Saraceno scaling method for computing many
+# quantum-billiard eigenvalues near a single scaling wavenumber k₀ from one
+# generalized eigenvalue problem.
+#
+# For a basis {ϕₙ(k)} satisfying the Helmholtz equation in the billiard, define
+# the boundary matrices
+#
+#                         F = Bᵀ W B,
+#
+#                  Fₖ = Bᵀ W Bₖ + Bₖᵀ W B,
+#
+# where B contains the basis functions evaluated on the boundary, Bₖ their
+# wavenumber derivatives, and W contains the Vergini-Saraceno boundary weights
+#
+#                         wᵢ = dsᵢ/(rᵢ·nᵢ).
+#
+# The local spectrum around k₀ is obtained from the generalized eigenproblem
+#
+#                         F x = μ Fₖ x.
+#
+# Each generalized eigenvalue μ gives the scaling estimate
+#
+#                  kVS = k₀ - 2/μ + 2/(k₀ μ²),
+#
+# with the associated tension estimate
+#
+#                         t = 2(2/μ)².
+#
+# A single generalized diagonalization therefore produces multiple eigenvalue
+# estimates around k₀. Candidates are subsequently restricted to the requested
+# window |kVS-k₀|<Δk.
+################################################################################
 
 """
     VerginiSaracenoSolver{T} <: AcceleratedBasisSolver
@@ -19,6 +54,7 @@ wavenumber `k` (see [`solve`](@ref), [`sm_results`](@ref)).
 * `eps`: Relative tolerance used to filter small eigenvalues in the generalized eigenvalue decomposition.
 * `min_dim`: Minimum basis dimension.
 * `min_pts`: Minimum number of boundary sampling points.
+* `eigenvectors::Bool`: Whether `compute_spectrum` retains the basis eigenvectors returned by the scaling solve.
 
 ## API
 The following functions can be evaluated for this type:
@@ -36,106 +72,108 @@ mutable struct VerginiSaracenoSolver{T} <: AcceleratedBasisSolver where {T<:Real
     eps::T
     min_dim::Int64
     min_pts::Int64
+    eigenvectors::Bool
 end
 
 """
-    VerginiSaracenoSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}; min_dim::Int = 100, min_pts::Int = 500) where T<:Real → solver::VerginiSaracenoSolver{T}
+    VerginiSaracenoSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}; min_dim::Int=100, min_pts::Int=500, eigenvectors::Bool=true) where {T<:Real}
 
-Constructs a [`VerginiSaracenoSolver`](@ref) with a single `GaussLegendreNodes`
-sampler shared by every fundamental boundary curve.
+Construct a [`VerginiSaracenoSolver`](@ref) with a single
+[`GaussLegendreNodes`](@ref) sampler shared by every fundamental boundary
+curve.
 
 ## Arguments
-* `dim_scaling_factor`: Scaling factor used to determine the basis dimension.
-* `pts_scaling_factor`: Scaling factor, or vector thereof (one per fundamental boundary curve), used to determine the number of boundary sampling points.
+* `dim_scaling_factor::T`: Scaling factor used to determine the basis dimension from the boundary length and wavenumber.
+* `pts_scaling_factor::Union{T,Vector{T}}`: Boundary-point scaling factor, or one factor per fundamental boundary curve.
 
-## Keyword arguments
-* `min_dim::Int = 100`: Minimum basis dimension.
-* `min_pts::Int = 500`: Minimum number of boundary sampling points.
+## Keyword Arguments
+* `min_dim::Int=100`: Minimum basis dimension.
+* `min_pts::Int=500`: Minimum number of boundary sampling points.
+* `eigenvectors::Bool`: Whether `compute_spectrum` retains the basis eigenvectors returned by the scaling solve.
 
 ## Returns
-* `solver`: A [`VerginiSaracenoSolver{T}`](@ref) instance.
+* `VerginiSaracenoSolver{T}`: Configured solver.
 """
-function VerginiSaracenoSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}; min_dim = 100, min_pts = 500) where T<:Real 
-    d = dim_scaling_factor
-    bs = typeof(pts_scaling_factor) == T ? [pts_scaling_factor] : pts_scaling_factor
-    sampler = [GaussLegendreNodes()]
-    timer = TimerOutput()
-return VerginiSaracenoSolver(d, bs, sampler, eps(T), min_dim, min_pts)
+function VerginiSaracenoSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}; min_dim::Int=100, min_pts::Int=500, eigenvectors::Bool=true) where {T<:Real}
+    d = dim_scaling_factor; bs = pts_scaling_factor isa T ? [pts_scaling_factor] : pts_scaling_factor; sampler = [GaussLegendreNodes()]
+    return VerginiSaracenoSolver(d, bs, sampler, eps(T), min_dim, min_pts, eigenvectors)
 end
 
 """
-    VerginiSaracenoSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}, samplers::Vector{AbsSampler}; min_dim::Int = 100, min_pts::Int = 500) where T<:Real → solver::VerginiSaracenoSolver{T}
+    VerginiSaracenoSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}, samplers::Vector{AbsSampler}; min_dim::Int=100, min_pts::Int=500, eigenvectors::Bool=true) where {T<:Real}
 
-Constructs a [`VerginiSaracenoSolver`](@ref) with a user-supplied sampler for each
-fundamental boundary curve.
+Construct a [`VerginiSaracenoSolver`](@ref) with a user-supplied sampler for
+each fundamental boundary curve.
 
 ## Arguments
-* `dim_scaling_factor`: Scaling factor used to determine the basis dimension.
-* `pts_scaling_factor`: Scaling factor, or vector thereof (one per fundamental boundary curve), used to determine the number of boundary sampling points.
-* `samplers`: Vector of samplers, one per fundamental boundary curve.
+* `dim_scaling_factor::T`: Scaling factor used to determine the basis dimension from the boundary length and wavenumber.
+* `pts_scaling_factor::Union{T,Vector{T}}`: Boundary-point scaling factor, or one factor per fundamental boundary curve.
+* `samplers::Vector{AbsSampler}`: Boundary samplers.
 
-## Keyword arguments
-* `min_dim::Int = 100`: Minimum basis dimension.
-* `min_pts::Int = 500`: Minimum number of boundary sampling points.
+## Keyword Arguments
+* `min_dim::Int=100`: Minimum basis dimension.
+* `min_pts::Int=500`: Minimum number of boundary sampling points.
+* `eigenvectors::Bool`: Whether `compute_spectrum` retains the basis eigenvectors returned by the scaling solve.
 
 ## Returns
-* `solver`: A [`VerginiSaracenoSolver{T}`](@ref) instance.
+* `VerginiSaracenoSolver{T}`: Configured solver.
 """
-function VerginiSaracenoSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}, samplers::Vector{AbsSampler}; min_dim = 100, min_pts = 500) where {T<:Real} 
-    d = dim_scaling_factor
-    bs = typeof(pts_scaling_factor) == T ? [pts_scaling_factor] : pts_scaling_factor
-    timer = TimerOutput()
-    return VerginiSaracenoSolver(d, bs, samplers, eps(T), min_dim, min_pts)
+function VerginiSaracenoSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}, samplers::Vector{AbsSampler}; min_dim::Int=100, min_pts::Int=500, eigenvectors::Bool=true) where {T<:Real}
+    d = dim_scaling_factor; bs = pts_scaling_factor isa T ? [pts_scaling_factor] : pts_scaling_factor
+    return VerginiSaracenoSolver(d, bs, samplers, eps(T), min_dim, min_pts, eigenvectors)
 end
 
 """
     evaluate_points(solver::VerginiSaracenoSolver, billiard::Bi, k) where {Bi<:AbsBilliard} → pts::BoundaryPoints
 
-Samples the boundary of `billiard` and computes the Vergini–Saraceno quadrature
-weights needed to construct the matrices in [`construct_matrices`](@ref).
+Samples the fundamental boundary of `billiard` and computes the quadrature
+weights required by the Vergini–Saraceno scaling method.
 
 ## Description
-The scaling factors and samplers are first adjusted to match the number of
-fundamental boundary curves with [`adjust_scaling_and_samplers`](@ref). Each curve
-is then sampled with its own sampler, using a number of points that scales with
-`solver.pts_scaling_factor` and the wavenumber `k`, and the quadrature weight at
-each point is computed as `w = ds / (r ⋅ n)`, where `r` is the boundary point and
-`n` its outward unit normal.
+Each fundamental boundary curve is sampled in its native parameter `t`. For
+quadrature nodes `tᵢ` with parameter-space weights `dtᵢ`, the physical
+arclength weights are
+
+`dsᵢ = |r'(tᵢ)| dtᵢ`.
+
+The outward unit normal is obtained by normalizing the gradient of the domain
+function pointwise. The Vergini–Saraceno weights are then
+
+`w_vsᵢ = dsᵢ / (r(tᵢ) ⋅ nᵢ)`.
+
+This construction includes the parametrization Jacobian explicitly and is
+therefore valid for arbitrary regular parametrizations; it does not assume
+that the curve parameter is proportional to arclength.
 
 ## Arguments
-* `solver`: The [`VerginiSaracenoSolver`](@ref) used to determine the sampling parameters.
-* `billiard`: The billiard whose boundary is sampled.
-* `k`: The wavenumber used to determine the number of boundary sampling points.
+* `solver::VerginiSaracenoSolver`: Solver defining the boundary sampling density.
+* `billiard::Bi`: Billiard whose fundamental boundary is sampled.
+* `k`: Wavenumber used to determine the number of boundary sampling points.
 
 ## Returns
-* `pts`: A [`BoundaryPoints`](@ref) instance with the `xy` and `w_vs` fields populated.
+* `pts::BoundaryPoints`: Boundary points with `xy` and `w_vs` populated.
 """
-function evaluate_points(solver::VerginiSaracenoSolver,billiard::Bi,k) where {Bi<:AbsBilliard}
-    bs,samplers=adjust_scaling_and_samplers(solver,billiard)
+function evaluate_points(solver::VerginiSaracenoSolver, billiard::Bi, k) where {Bi<:AbsBilliard}
+    bs, samplers = adjust_scaling_and_samplers(solver, billiard)
     curves = get_boundary_curves(billiard)
-    type = eltype(solver.pts_scaling_factor)
+    T = eltype(solver.pts_scaling_factor)
     Ns = _determine_bp_sizes(curves, bs, k)
     M = length(Ns)
-    xy_all = Vector{Vector{SVector{2,type}}}(undef, M)
-    w_all = Vector{Vector{type}}(undef, M)
-
+    xy_all = Vector{Vector{SVector{2,T}}}(undef, M)
+    w_all = Vector{Vector{T}}(undef, M)
     for i in eachindex(curves)
-        crv = curves[i]
-        L = crv.length
-        sampler = samplers[i]
+        crv = curves[i]; sampler = samplers[i]
         t, dt = sample_points(sampler, Ns[i])
-        ds = L*dt #this needs modification!!!
-        xy = curve(crv,t)
+        xy = curve(crv, t)
+        ds = norm.(tangent(crv, t)) .* dt
         normal = domain_gradient_vector(crv, xy)
-        normal .= normal./norm(normal)
+        normal ./= norm.(normal)
         rn = dot.(xy, normal)
         w = ds ./ rn
-        xy_all[i] = xy
-        w_all[i] = w       
+        xy_all[i] = xy; w_all[i] = w
     end
-    return BoundaryPoints(vcat(xy_all...);w_vs = vcat(w_all...))
+    return BoundaryPoints(vcat(xy_all...); w_vs=vcat(w_all...))
 end
-
 
 """
     construct_matrices(solver::VerginiSaracenoSolver, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool = true) where {Ba<:AbsBasis} → (F::Matrix, Fk::Matrix)
@@ -165,10 +203,7 @@ triangle, to minimize memory allocations.
 * `F`: The `F = B' * W * B` matrix.
 * `Fk`: The `Fk = B' * W * dB/dk + (dB/dk)' * W * B` matrix.
 """
-
-# Your function with timing and debug info
-function construct_matrices(solver::VerginiSaracenoSolver, basis::Ba, pts::BoundaryPoints, k; 
-                            multithreaded = true) where {Ba<:AbsBasis}    
+function construct_matrices(solver::VerginiSaracenoSolver, basis::Ba, pts::BoundaryPoints, k; multithreaded = true) where {Ba<:AbsBasis}    
     @timeit_debug "construct_matrices" begin
         xy = pts.xy
         w = pts.w_vs
@@ -208,6 +243,68 @@ function construct_matrices(solver::VerginiSaracenoSolver, basis::Ba, pts::Bound
         end
         @debug "Fk computed" size=size(Fk) 
         
+        return F, Fk
+    end
+end
+
+"""
+    construct_matrices(solver::VerginiSaracenoSolver, basis::Ba, pts::BoundaryPoints, cache::Ca, k; multithreaded::Bool = true) where {Ba<:AbsBasis,Ca<:BasisCache} → (F::Matrix, Fk::Matrix)
+
+Construct the Vergini–Saraceno matrices `F` and `Fk` using a cached
+representation of the basis.
+
+## Description
+The basis matrix `B` and its wavenumber derivative `dB/dk` are evaluated
+simultaneously from `cache` using [`basis_and_dk_matrices`](@ref). The
+Vergini–Saraceno matrices are then constructed as `F = B' * W * B` and
+`Fk = B' * W * dB/dk + (dB/dk)' * W * B`, where `W` is the diagonal
+quadrature weight matrix built from `pts.w_vs` and normalized by the number
+of basis symmetries.
+
+Both matrices are assembled with BLAS `syrk!` and `syr2k!` rank-k updates on
+the upper triangle, which is subsequently mirrored to the lower triangle.
+
+## Arguments
+* `solver`: The [`VerginiSaracenoSolver`](@ref) whose matrices are constructed.
+* `basis`: Basis associated with `cache`.
+* `pts`: [`BoundaryPoints`](@ref) containing the Vergini–Saraceno quadrature weights.
+* `cache`: [`BasisCache`](@ref) used to evaluate the basis and its wavenumber derivative.
+* `k`: Wavenumber at which the cached representation is evaluated.
+
+## Keyword Arguments
+* `multithreaded::Bool = true`: Whether the cached basis evaluation is multithreaded.
+
+## Returns
+* `F`: The `F = B' * W * B` matrix.
+* `Fk`: The `Fk = B' * W * dB/dk + (dB/dk)' * W * B` matrix.
+"""
+function construct_matrices(solver::VerginiSaracenoSolver, basis::Ba, pts::BoundaryPoints, cache::Ca, k; multithreaded::Bool = true) where {Ba<:AbsBasis,Ca<:BasisCache}
+    @timeit_debug "construct_matrices_cached" begin
+        w = pts.w_vs
+        N = basis.dim
+        M = length(pts.xy)
+        nsym = one(eltype(w)) * (isnothing(basis.symmetries) ? 1 : length(basis.symmetries) + 1)
+        @debug "Cached matrix construction started" N M k nsym
+
+        @timeit_debug "basis_and_dk_matrices" begin
+            G, dG = _weight_scaled_basis_and_dk_matrices(cache, k, w, nsym; multithreaded)
+        end
+        @debug "Cached basis matrices computed" size=size(G)
+
+        @timeit_debug "compute_F" begin
+            F = Matrix{eltype(G)}(undef, N, N)
+            @blas_multi MAX_BLAS_THREADS BLAS.syrk!('U', 'T', one(eltype(G)), G, zero(eltype(G)), F)
+            _symmetrize_from_upper!(F)
+        end
+        @debug "F computed" size=size(F)
+
+        @timeit_debug "compute_Fk" begin
+            Fk = Matrix{eltype(G)}(undef, N, N)
+            @blas_multi_then_1 MAX_BLAS_THREADS BLAS.syr2k!('U', 'T', one(eltype(G)), G, dG, zero(eltype(G)), Fk)
+            _symmetrize_from_upper!(Fk)
+        end
+
+        @debug "Fk computed" size=size(Fk)
         return F, Fk
     end
 end
@@ -268,9 +365,51 @@ generalized eigenvalues `mu` are computed with [`generalized_eigvals`](@ref)
 """
 function solve(solver::VerginiSaracenoSolver, basis::Ba, pts::BoundaryPoints, k, dk; multithreaded = true) where {Ba<:AbsBasis}
     F, Fk = construct_matrices(solver, basis, pts, k; multithreaded)
-    mu = generalized_eigvals(Symmetric(F),Symmetric(Fk);eps=solver.eps)
+    @blas_multi_then_1 MAX_BLAS_THREADS mu = generalized_eigvals(Symmetric(F),Symmetric(Fk);eps=solver.eps)
     ks, ten = sm_results(mu,k)
     idx = abs.(ks.-k) .< dk
+    ks = ks[idx]
+    ten = ten[idx]
+    p = sortperm(ks)
+    return ks[p], ten[p]
+end
+
+"""
+    solve(solver::VerginiSaracenoSolver, basis::Ba, pts::BoundaryPoints, cache::Ca, k, dk; multithreaded::Bool = true) where {Ba<:AbsBasis,Ca<:BasisCache} → (ks::Vector, ten::Vector)
+
+Solve the Vergini–Saraceno generalized eigenvalue problem using a cached basis
+representation, returning all estimated wavenumbers within `dk` of `k` and
+their tensions, sorted by wavenumber.
+
+## Description
+The matrices `F` and `Fk` are constructed with the cached
+[`construct_matrices`](@ref) method, which evaluates the basis matrix and its
+wavenumber derivative from `cache`. The generalized eigenvalues `mu` are then
+computed with [`generalized_eigvals`](@ref), truncated using `solver.eps`, and
+converted to wavenumbers and tensions with [`sm_results`](@ref).
+
+Only candidates satisfying `abs(ks - k) < dk` are retained.
+
+## Arguments
+* `solver`: The [`VerginiSaracenoSolver`](@ref) used to solve the generalized eigenvalue problem.
+* `basis`: Basis associated with `cache`.
+* `pts`: The [`BoundaryPoints`](@ref) containing the Vergini–Saraceno quadrature weights.
+* `cache`: [`BasisCache`](@ref) used to evaluate the basis and its wavenumber derivative.
+* `k`: Scaling wavenumber around which the generalized eigenvalue problem is constructed.
+* `dk`: Half-width of the wavenumber window around `k` used to filter candidates.
+
+## Keyword Arguments
+* `multithreaded::Bool = true`: Whether the cached basis evaluation is multithreaded.
+
+## Returns
+* `ks`: Sorted vector of estimated wavenumbers within `dk` of `k`.
+* `ten`: Vector of tensions associated with `ks`.
+"""
+function solve(solver::VerginiSaracenoSolver, basis::Ba, pts::BoundaryPoints, cache::Ca, k, dk; multithreaded::Bool = true) where {Ba<:AbsBasis,Ca<:BasisCache}
+    F, Fk = construct_matrices(solver, basis, pts, cache, k; multithreaded)
+    @blas_multi_then_1 MAX_BLAS_THREADS mu = generalized_eigvals(Symmetric(F), Symmetric(Fk); eps = solver.eps)
+    ks, ten = sm_results(mu, k)
+    idx = abs.(ks .- k) .< dk
     ks = ks[idx]
     ten = ten[idx]
     p = sortperm(ks)
@@ -351,5 +490,55 @@ function solve_vectors(solver::VerginiSaracenoSolver, basis::Ba, pts::BoundaryPo
     X = (sqrt.(ten))' .* X
     p = sortperm(ks)
     return  ks[p], ten[p], X[:,p]
+end
+
+"""
+    solve_vectors(solver::VerginiSaracenoSolver, basis::Ba, pts::BoundaryPoints, cache::Ca, k, dk; multithreaded::Bool = true) where {Ba<:AbsBasis,Ca<:BasisCache} → (ks::Vector, ten::Vector, X::Matrix)
+
+Solve the Vergini–Saraceno generalized eigenvalue problem using a cached basis
+representation, returning the estimated wavenumbers, tensions and eigenvectors
+for all candidates within `dk` of `k`, sorted by wavenumber.
+
+## Description
+The matrices `F` and `Fk` are constructed with the cached
+[`construct_matrices`](@ref) method, which evaluates the basis matrix and its
+wavenumber derivative from `cache`. The generalized eigenproblem is solved with
+[`generalized_eigen`](@ref), truncated using `solver.eps`, to obtain the
+generalized eigenvalues `mu`, reduced eigenvectors `Z` and change-of-basis
+matrix `C`.
+
+The generalized eigenvalues are converted to wavenumbers and tensions with
+[`sm_results`](@ref), and only candidates satisfying `abs(ks - k) < dk` are
+retained. The corresponding eigenvectors are transformed back into the
+original basis as `X = C * Z` and rescaled by `sqrt.(ten)`.
+
+## Arguments
+* `solver`: The [`VerginiSaracenoSolver`](@ref) used to solve the generalized eigenvalue problem.
+* `basis`: Basis associated with `cache`.
+* `pts`: The [`BoundaryPoints`](@ref) containing the Vergini–Saraceno quadrature weights.
+* `cache`: [`BasisCache`](@ref) used to evaluate the basis and its wavenumber derivative.
+* `k`: Scaling wavenumber around which the generalized eigenvalue problem is constructed.
+* `dk`: Half-width of the wavenumber window around `k` used to filter candidates.
+
+## Keyword Arguments
+* `multithreaded::Bool = true`: Whether the cached basis evaluation is multithreaded.
+
+## Returns
+* `ks`: Sorted vector of estimated wavenumbers within `dk` of `k`.
+* `ten`: Vector of tensions associated with `ks`.
+* `X`: Matrix whose columns are the retained eigenvectors expressed in the original basis and scaled by `sqrt.(ten)`.
+"""
+function solve_vectors(solver::VerginiSaracenoSolver, basis::Ba, pts::BoundaryPoints, cache::Ca, k, dk; multithreaded::Bool = true) where {Ba<:AbsBasis,Ca<:BasisCache}
+    F, Fk = construct_matrices(solver, basis, pts, cache, k; multithreaded)
+    @blas_multi_then_1 MAX_BLAS_THREADS mu, Z, C = generalized_eigen(Symmetric(F), Symmetric(Fk); eps = solver.eps)
+    ks, ten = sm_results(mu, k)
+    idx = abs.(ks .- k) .< dk
+    ks = ks[idx]
+    ten = ten[idx]
+    Z = Z[:, idx]
+    X = C * Z
+    X = sqrt.(ten)' .* X
+    p = sortperm(ks)
+    return ks[p], ten[p], X[:, p]
 end
 

@@ -1,6 +1,3 @@
-using Bessels
-using CoordinateTransformations, Rotations, StaticArrays
-
 #TODO Replace independant sin and cos calls with sincos
 #TODO Steer's reccurence formula for besselj might provide speedup, already in Bessels but we have to compute redundant terms.
 """
@@ -68,8 +65,10 @@ J_{\\nu}'(r) = \\tfrac{1}{2}\\left(J_{\\nu-1}(r) - J_{\\nu+1}(r)\\right).
 function Jvp(nu,r::T) where {T<:Real}
     j_minus=Jv(nu-one(T),r)
     j_plus=Jv(nu+one(T),r)
-    return 0.5*(j_minus-j_plus)
+    return (j_minus-j_plus)/2
 end
+
+@inline _r_Jvp(nu,x,r)=iszero(r) ? zero(r) : r*Jvp(nu,x)
 
 """
     ca_fb_dk(nu, k, r, phi) → df
@@ -94,14 +93,14 @@ to `k` via the chain rule gives:
 ## Returns
 *  `df` : Value of \$\\partial f/\\partial k\$.
 """
-ca_fb_dk(nu,k,r,phi)=r*Jvp(nu,k*r)*sin(nu*phi)
+ca_fb_dk(nu,k,r,phi)=_r_Jvp(nu,k*r,r)*sin(nu*phi)
 
 """
-CornerAdaptedFourierBessel{T,Sy} <: AbsBasis
+    CornerAdaptedFourierBessel{T,Sy} <: AbsBasis
 
-`CornerAdaptedFourierBessel` is a concrete basis type representing corner-adapted
-Fourier-Bessel functions for boundary value problems in domains with sharp
-corners.
+`CornerAdaptedFourierBessel` is a concrete basis type representing
+corner-adapted Fourier-Bessel functions for boundary value problems in domains
+with sharp corners.
 
 ## Description
 The basis functions are constructed in a local polar coordinate system centered
@@ -110,13 +109,28 @@ Dirichlet boundary condition is satisfied exactly on both edges meeting at the
 corner. This follows the corner-adapted approach of Betcke & Trefethen,
 "Reviving the Method of Particular Solutions".
 
+The basis can optionally use an analytic Taylor representation in the
+wavenumber. When `use_taylor = true`, compatible accelerated solvers may
+construct a [`BasisCache`](@ref) and reuse it for basis evaluations within
+`taylor_radius` of its expansion center. The Taylor degree is controlled by
+`taylor_degree`.
+
+If `gradients = true`, basis caches additionally store the geometric and
+angular data required for Cartesian spatial-gradient evaluation.
+
 ## Attributes
-* `cs`: Local [`PolarCS`](@ref) coordinate system centered at the corner.
+* `origin`: Position of the corner, origin of the local polar frame.
+* `rot_angle`: Rotation angle of the local polar frame.
 * `dim`: Number of basis functions.
 * `corner_angle`: Opening angle of the corner.
 * `nu`: Angular order constant, with term order equal to `nu * i` for basis index `i`.
-* `symmetries`: Optional vector of symmetries applied to the basis, or `nothing`.
+* `symmetries`: Optional vector of reflection symmetries applied to the basis, or `nothing`.
 * `rotation_angle_discontinuity`: Angle at which the local angular coordinate wraps, used to avoid branch-cut artifacts.
+* `use_taylor`: Whether compatible accelerated solvers may use the analytic Taylor representation of the basis.
+* `taylor_degree`: Degree of the analytic Taylor expansion in the wavenumber.
+* `taylor_radius`: Maximum distance from a Taylor expansion center over which the cached representation is reused.
+* `taylor_tol`: Tolerance used to determine the validity of the Taylor expansion.
+* `gradients`: Whether Taylor caches additionally store data required for Cartesian spatial-gradient evaluation.
 
 ## API
 The following functions can be evaluated for this type:
@@ -125,18 +139,25 @@ The following functions can be evaluated for this type:
 - [`dk_fun`](@ref)
 - [`gradient`](@ref)
 - [`basis_and_gradient`](@ref)
+- [`CornerAdaptedTaylorCache`](@ref)
 """
-struct CornerAdaptedFourierBessel{T,Sy} <: AbsBasis where  {T<:Real,Sy<:Union{AbsSymmetry,Nothing}}
-    cs::PolarCS{T}
-    dim::Int64 #using concrete type
+struct CornerAdaptedFourierBessel{T,Sy} <: AbsBasis where {T<:Real,Sy<:Union{AbsSymmetry,Nothing}}
+    origin::SVector{2,T}
+    rot_angle::T
+    dim::Int64
     corner_angle::T
-    nu::T #order constant, order=nu*i
-    symmetries::Union{Vector{Any},Nothing}
+    nu::T
+    symmetries::Union{Vector{BilliardGeometry.AbsReflection},Nothing}
     rotation_angle_discontinuity::T
+    use_taylor::Bool
+    taylor_degree::Int
+    taylor_radius::T
+    taylor_tol::T
+    gradients::Bool
 end
 
 """
-    CornerAdaptedFourierBessel(dim::Int64, corner_angle::T, origin::SVector{2,T}, rot_angle::T; rotation_angle_discontinuity = zero(T)) where {T<:Real} → basis::CornerAdaptedFourierBessel
+    CornerAdaptedFourierBessel(dim::Int64, corner_angle::T, origin::SVector{2,T}, rot_angle::T; rotation_angle_discontinuity = zero(T), use_taylor::Bool = true, taylor_degree::Int = 16, taylor_radius::T = T(0.5), gradients::Bool = false) where {T<:Real} → basis::CornerAdaptedFourierBessel
 
 Construct a [`CornerAdaptedFourierBessel`](@ref) basis of dimension `dim`
 adapted to a corner with opening angle `corner_angle`, located at `origin` and
@@ -145,75 +166,83 @@ rotated by `rot_angle`. No symmetries are attached.
 ## Description
 The angular order `nu = pi/corner_angle` of each basis function is fixed by the
 corner angle so that the Dirichlet boundary condition is satisfied exactly on
-both edges meeting at the corner. See Betcke & Trefethen, "Reviving the Method
-of Particular Solutions", for background.
+both edges meeting at the corner.
+
+The basis may optionally use an analytic Taylor representation in the
+wavenumber. The expansion degree and cache-reuse radius are controlled by
+`taylor_degree` and `taylor_radius`, respectively. Optional spatial-gradient
+data can be enabled with `gradients`.
 
 ## Arguments
 * `dim`: Number of basis functions.
 * `corner_angle`: Opening angle of the corner.
-* `origin`: Position of the corner, used as the origin of the local [`PolarCS`](@ref).
-* `rot_angle`: Rotation angle of the local coordinate system.
+* `origin`: Position of the corner, used as the origin of the local polar frame.
+* `rot_angle`: Rotation angle of the local polar frame.
 
-## Keyword arguments
-*  `rotation_angle_discontinuity::T = zero(T)` : Angle at which the local angular coordinate wraps, used to avoid branch-cut artifacts.
+## Keyword Arguments
+* `rotation_angle_discontinuity = zero(T)`: Angle at which the local angular coordinate wraps, used to avoid branch-cut artifacts.
+* `use_taylor::Bool = true`: Whether compatible accelerated solvers may use the analytic Taylor representation of the basis.
+* `taylor_degree::Int = 16`: Degree of the analytic Taylor expansion in the wavenumber.
+* `taylor_radius::T = T(0.5)`: Maximum distance from a Taylor expansion center over which the cached representation is reused.
+* `taylor_tol::T = T(1e-11)`: Tolerance used to determine the validity of the Taylor expansion.
+* `gradients::Bool = false`: Whether Taylor caches additionally store data required for Cartesian spatial-gradient evaluation.
 
 ## Returns
-*  `basis` : A [`CornerAdaptedFourierBessel`](@ref) basis with no attached symmetries.
+* `basis`: A [`CornerAdaptedFourierBessel`](@ref) basis with no attached symmetries.
 """
-function CornerAdaptedFourierBessel(dim::Int64,corner_angle::T,origin::SVector{2,T},rot_angle::T;rotation_angle_discontinuity=zero(T)) where {T<:Real}
-    cs=PolarCS(origin,rot_angle)
-    nu=pi/corner_angle
-    return CornerAdaptedFourierBessel{Float64,Nothing}(cs,dim,corner_angle,nu,nothing,rotation_angle_discontinuity)
+function CornerAdaptedFourierBessel(dim::Int64, corner_angle::T, origin::SVector{2,T}, rot_angle::T; rotation_angle_discontinuity = zero(T), use_taylor::Bool = true, taylor_degree::Int = 16, taylor_radius::T = T(0.5), taylor_tol::T = T(1e-11), gradients::Bool = false) where {T<:Real}
+    _check_corner_adapted_args(dim, corner_angle, taylor_degree, taylor_radius, taylor_tol)
+    nu = T(pi) / corner_angle
+    return CornerAdaptedFourierBessel{T,Nothing}(origin, rot_angle, dim, corner_angle, nu, nothing, rotation_angle_discontinuity, use_taylor, taylor_degree, taylor_radius, taylor_tol, gradients)
 end
 
 """
-    CornerAdaptedFourierBessel(dim::Int64, corner_angle::T, cs::CoordinateSystem, symmetry::Union{Vector{Any},Nothing}; rotation_angle_discontinuity = zero(T)) where {T<:Real} → basis::CornerAdaptedFourierBessel
-
-Construct a [`CornerAdaptedFourierBessel`](@ref) basis of dimension `dim`
-adapted to a corner with opening angle `corner_angle`, using an existing
-coordinate system `cs` and attaching the given `symmetry`.
-
-## Arguments
-* `dim`: Number of basis functions.
-* `corner_angle`: Opening angle of the corner.
-* `cs`: Local coordinate system centered at the corner.
-* `symmetry`: Vector of symmetries to attach to the basis, or `nothing`.
-
-## Keyword arguments
-*  `rotation_angle_discontinuity::T = zero(T)` : Angle at which the local angular coordinate wraps, used to avoid branch-cut artifacts.
-
-## Returns
-*  `basis` : A [`CornerAdaptedFourierBessel`](@ref) basis using the given coordinate system and symmetries.
-"""
-function CornerAdaptedFourierBessel(dim::Int64,corner_angle::T,cs::CoordinateSystem,symmetry::Union{Vector{Any},Nothing};rotation_angle_discontinuity=zero(T)) where {T<:Real}
-    nu=pi/corner_angle
-    return CornerAdaptedFourierBessel{Float64,Nothing}(cs,dim,corner_angle,nu,symmetry,rotation_angle_discontinuity)
-end
-
-"""
-    CornerAdaptedFourierBessel(dim::Int64, corner_angle::T, origin::SVector{2,T}, rot_angle::T, symmetry::Union{Vector{Any},Nothing}; rotation_angle_discontinuity = zero(T)) where {T<:Real} → basis::CornerAdaptedFourierBessel
+    CornerAdaptedFourierBessel(dim::Int64, corner_angle::T, origin::SVector{2,T}, rot_angle::T, symmetry::Union{Vector{<:BilliardGeometry.AbsReflection},Nothing}; rotation_angle_discontinuity = zero(T), use_taylor::Bool = true, taylor_degree::Int = 16, taylor_radius::T = T(0.5), taylor_tol::T = T(1e-11), gradients::Bool = false) where {T<:Real} → basis::CornerAdaptedFourierBessel
 
 Construct a [`CornerAdaptedFourierBessel`](@ref) basis of dimension `dim`
 adapted to a corner with opening angle `corner_angle`, located at `origin` and
-rotated by `rot_angle`, attaching the given `symmetry`.
+rotated by `rot_angle`, with the specified reflection symmetries attached.
+
+## Description
+The local polar frame is given by `origin` and `rot_angle`, while the angular
+order `nu = pi/corner_angle` is determined by the corner opening angle.
+
+The basis may optionally use an analytic Taylor representation in the
+wavenumber. The expansion degree and cache-reuse radius are controlled by
+`taylor_degree` and `taylor_radius`, respectively. Optional spatial-gradient
+data can be enabled with `gradients`.
 
 ## Arguments
 * `dim`: Number of basis functions.
 * `corner_angle`: Opening angle of the corner.
-* `origin`: Position of the corner, used as the origin of the local [`PolarCS`](@ref).
-* `rot_angle`: Rotation angle of the local coordinate system.
-* `symmetry`: Vector of symmetries to attach to the basis, or `nothing`.
+* `origin`: Position of the corner, used as the origin of the local polar frame.
+* `rot_angle`: Rotation angle of the local polar frame.
+* `symmetry`: Vector of reflection symmetries to attach to the basis, or `nothing`.
 
-## Keyword arguments
-*  `rotation_angle_discontinuity::T = zero(T)` : Angle at which the local angular coordinate wraps, used to avoid branch-cut artifacts.
+## Keyword Arguments
+* `rotation_angle_discontinuity = zero(T)`: Angle at which the local angular coordinate wraps, used to avoid branch-cut artifacts.
+* `use_taylor::Bool = true`: Whether compatible accelerated solvers may use the analytic Taylor representation of the basis.
+* `taylor_degree::Int = 16`: Degree of the analytic Taylor expansion in the wavenumber.
+* `taylor_radius::T = T(0.5)`: Maximum distance from a Taylor expansion center over which the cached representation is reused.
+* `taylor_tol::T = T(1e-11)`: Tolerance used to determine the validity of the Taylor expansion.
+* `gradients::Bool = false`: Whether Taylor caches additionally store data required for Cartesian spatial-gradient evaluation.
 
 ## Returns
-*  `basis` : A [`CornerAdaptedFourierBessel`](@ref) basis with the given origin, rotation, and symmetries.
+* `basis`: A [`CornerAdaptedFourierBessel`](@ref) basis with the specified origin, rotation and symmetries.
 """
-function CornerAdaptedFourierBessel(dim::Int64,corner_angle::T,origin::SVector{2,T},rot_angle::T,symmetry::Union{Vector{Any},Nothing};rotation_angle_discontinuity=zero(T)) where {T<:Real}
-    cs=PolarCS(origin,rot_angle)
-    nu=pi/corner_angle
-    return CornerAdaptedFourierBessel{Float64,Nothing}(cs,dim,corner_angle,nu,symmetry,rotation_angle_discontinuity)
+function CornerAdaptedFourierBessel(dim::Int64, corner_angle::T, origin::SVector{2,T}, rot_angle::T, symmetry::Union{Vector{<:BilliardGeometry.AbsReflection},Nothing}; rotation_angle_discontinuity = zero(T), use_taylor::Bool = true, taylor_degree::Int = 16, taylor_radius::T = T(0.5), taylor_tol::T = T(1e-11), gradients::Bool = false) where {T<:Real}
+    _check_corner_adapted_args(dim, corner_angle, taylor_degree, taylor_radius, taylor_tol)
+    nu = T(pi) / corner_angle
+    return CornerAdaptedFourierBessel{T,Nothing}(origin, rot_angle, dim, corner_angle, nu, symmetry, rotation_angle_discontinuity, use_taylor, taylor_degree, taylor_radius, taylor_tol, gradients)
+end
+
+function _check_corner_adapted_args(dim, corner_angle, taylor_degree, taylor_radius, taylor_tol)
+    dim >= 1 || throw(ArgumentError("dim must be at least 1"))
+    corner_angle > 0 || throw(ArgumentError("corner_angle must be positive"))
+    taylor_degree >= 1 || throw(ArgumentError("taylor_degree must be at least 1"))
+    taylor_radius > 0 || throw(ArgumentError("taylor_radius must be positive"))
+    taylor_tol > 0 || throw(ArgumentError("taylor_tol must be positive"))
+    return nothing
 end
 
 """
@@ -227,7 +256,7 @@ Convert a [`CornerAdaptedFourierBessel`](@ref) basis to use `Float32` precision.
 ## Returns
 *  `basis32` : A new basis with `dim`, `corner_angle`, and coordinate system fields converted to `Float32`.
 """
-toFloat32(basis::CornerAdaptedFourierBessel) = CornerAdaptedFourierBessel(basis.dim,Float32(basis.corner_angle),Float32.(basis.cs.origin),Float32(basis.cs.rot_angle))
+toFloat32(basis::CornerAdaptedFourierBessel) = CornerAdaptedFourierBessel(basis.dim, Float32(basis.corner_angle), Float32.(basis.origin), Float32(basis.rot_angle), basis.symmetries; rotation_angle_discontinuity = Float32(basis.rotation_angle_discontinuity), use_taylor = basis.use_taylor, taylor_degree = basis.taylor_degree, taylor_radius = Float32(basis.taylor_radius), taylor_tol = Float32(basis.taylor_tol), gradients = basis.gradients)
 
 """
     resize_basis(basis::CornerAdaptedFourierBessel, billiard::Bi, dim::Int, k) where {Bi<:AbsBilliard} → basis_new::CornerAdaptedFourierBessel
@@ -244,11 +273,11 @@ reusing `basis` unchanged if it already has the requested dimension.
 ## Returns
 *  `basis_new` : `basis` itself if `basis.dim == dim`, otherwise a new basis with dimension `dim` and the same corner angle, coordinate system, symmetries and rotation angle discontinuity.
 """
-function resize_basis(basis::CornerAdaptedFourierBessel,billiard::Bi,dim::Int,k) where {Bi<:AbsBilliard}
-    if basis.dim==dim
+function resize_basis(basis::CornerAdaptedFourierBessel, billiard::Bi, dim::Int, k) where {Bi<:AbsBilliard}
+    if basis.dim == dim
         return basis
     else
-        return CornerAdaptedFourierBessel(dim,basis.corner_angle,basis.cs,basis.symmetries;rotation_angle_discontinuity=basis.rotation_angle_discontinuity)
+        return CornerAdaptedFourierBessel(dim, basis.corner_angle, basis.origin, basis.rot_angle, basis.symmetries; rotation_angle_discontinuity = basis.rotation_angle_discontinuity, use_taylor = basis.use_taylor, taylor_degree = basis.taylor_degree, taylor_radius = basis.taylor_radius, taylor_tol = basis.taylor_tol, gradients = basis.gradients)
     end
 end
 
@@ -272,12 +301,11 @@ corner, and the term [`ca_fb`](@ref) is evaluated with angular order `nu * i`.
 *  `out` : Values of the basis function at the input points.
 """
 @inline function basis_fun(basis::CornerAdaptedFourierBessel{T},i::Int,k::T,pts::AbstractArray) where {T<:Real}
-    pm=basis.cs.local_map
     ν=basis.nu
     M=length(pts)
     r=Vector{T}(undef,M)
     φ=Vector{T}(undef,M)
-    _polar_coords!(r,φ,pm,pts,basis.rotation_angle_discontinuity)
+    _polar_coords!(r,φ,pts,basis.origin,basis.rot_angle,basis.rotation_angle_discontinuity)
     out=Vector{T}(undef,M)
     m=ν*i
     @inbounds @simd for j=1:M
@@ -309,13 +337,12 @@ corner once, and the term [`ca_fb`](@ref) is evaluated with angular order
 *  `B` : Basis matrix of size `(length(pts), length(indices))`.
 """
 @inline function basis_fun(basis::CornerAdaptedFourierBessel{T},indices::AbstractArray,k::T,pts::AbstractArray;multithreaded::Bool=true) where {T<:Real}
-    pm=basis.cs.local_map
     ν=basis.nu
     M=length(pts)
     N=length(indices)
     r=Vector{T}(undef,M)
     φ=Vector{T}(undef,M)
-    _polar_coords!(r,φ,pm,pts,basis.rotation_angle_discontinuity)
+    _polar_coords!(r,φ,pts,basis.origin,basis.rot_angle,basis.rotation_angle_discontinuity)
     B=Matrix{T}(undef,M,N)
     @use_threads multithreading=multithreaded for c=1:N
         m=ν*indices[c]
@@ -347,16 +374,15 @@ corner, and the term [`ca_fb_dk`](@ref) is evaluated with angular order `nu * i`
 *  `dk` : Column `i` of \$\\partial B/\\partial k\$, the wavenumber derivative of the basis matrix.
 """
 @inline function dk_fun(basis::CornerAdaptedFourierBessel{T},i::Int,k::T,pts::AbstractArray) where {T<:Real}
-    pm=basis.cs.local_map
     ν=basis.nu
     m=ν*i
     M=length(pts)
     r=Vector{T}(undef,M)
     φ=Vector{T}(undef,M)
-    _polar_coords!(r,φ,pm,pts,basis.rotation_angle_discontinuity)
+    _polar_coords!(r,φ,pts,basis.origin,basis.rot_angle,basis.rotation_angle_discontinuity)
     dk=Vector{T}(undef,M)
     @inbounds @simd for j in 1:M
-        dk[j]=r[j]*Jvp(m,k*r[j])*sin(m*φ[j])
+        dk[j]=_r_Jvp(m,k*r[j],r[j])*sin(m*φ[j])
     end
     return dk
 end
@@ -385,19 +411,18 @@ corner once, and the term [`ca_fb_dk`](@ref) is evaluated with angular order
 *  `dB_dk` : Wavenumber derivative of the basis matrix, of size `(length(pts), length(indices))`.
 """
 @inline function dk_fun(basis::CornerAdaptedFourierBessel{T},indices::AbstractArray,k::T,pts::AbstractArray;multithreaded::Bool=true) where {T<:Real}
-    pm=basis.cs.local_map
     ν=basis.nu
     M=length(pts)
     N=length(indices)
     r=Vector{T}(undef,M)
     φ=Vector{T}(undef,M)
-    _polar_coords!(r,φ,pm,pts,basis.rotation_angle_discontinuity)
+    _polar_coords!(r,φ,pts,basis.origin,basis.rot_angle,basis.rotation_angle_discontinuity)
     dB_dk=Matrix{T}(undef,M,N)
     @use_threads multithreading=multithreaded for c in 1:N
         m=ν*indices[c]
         col=@view dB_dk[:,c]
         @inbounds @simd for j in 1:M
-            col[j]=r[j]*Jvp(m,k*r[j])*sin(m*φ[j])
+            col[j]=_r_Jvp(m,k*r[j],r[j])*sin(m*φ[j])
         end
     end
     return dB_dk
@@ -432,20 +457,18 @@ with \$\\partial_r f = k J_{\\nu}'(kr)\\sin(\\nu\\varphi)\$ and
 *  `(dx, dy)` : Vectors with the `x` and `y` components of the gradient of basis function `i` at the input points.
 """
 function gradient(basis::CornerAdaptedFourierBessel,i::Int,k::T,pts::AbstractArray) where {T<:Real}
-    pm=basis.cs.local_map
     ν=basis.nu
     m=ν*i
     M=length(pts)
     r=Vector{T}(undef,M)
     φ=Vector{T}(undef,M)
-    _polar_coords!(r,φ,pm,pts,basis.rotation_angle_discontinuity)
+    _polar_coords!(r,φ,pts,basis.origin,basis.rot_angle,basis.rotation_angle_discontinuity)
     dx=Vector{T}(undef,M)
     dy=Vector{T}(undef,M)
     @inbounds for j in 1:M
         rj=r[j]
         invr=(rj==0 ? zero(T) : inv(rj))
-        sφ=sin(φ[j])
-        cφ=cos(φ[j])
+        sφ,cφ=sincos(φ[j]+basis.rot_angle)
         jv=Jv(m,k*rj)
         dj=Jvp(m,k*rj)
         fr=k*dj*sin(m*φ[j])
@@ -480,13 +503,12 @@ each index in `indices`, optionally in parallel across threads.
 *  `(dB_dx, dB_dy)` : Matrices with the `x` and `y` components of the gradients, each of size `(length(pts), length(indices))`.
 """
 function gradient(basis::CornerAdaptedFourierBessel,indices::AbstractArray,k::T,pts::AbstractArray;multithreaded::Bool=true) where {T<:Real}
-    pm=basis.cs.local_map
     ν=basis.nu
     M=length(pts)
     N=length(indices)
     r=Vector{T}(undef,M)
     φ=Vector{T}(undef,M)
-    _polar_coords!(r,φ,pm,pts,basis.rotation_angle_discontinuity)
+    _polar_coords!(r,φ,pts,basis.origin,basis.rot_angle,basis.rotation_angle_discontinuity)
     dB_dx=Matrix{T}(undef,M,N); dB_dy=Matrix{T}(undef,M,N)
     @use_threads multithreading=multithreaded for c in 1:N
         m=ν*indices[c]
@@ -495,8 +517,7 @@ function gradient(basis::CornerAdaptedFourierBessel,indices::AbstractArray,k::T,
         @inbounds for j in 1:M
             rj=r[j]
             invr=(rj==0 ? zero(T) : inv(rj))
-            sφ=sin(φ[j])
-            cφ=cos(φ[j])
+            sφ,cφ=sincos(φ[j]+basis.rot_angle)
             jv=Jv(m,k*rj)
             dj=Jvp(m,k*rj)
             fr=k*dj*sin(m*φ[j])
@@ -529,21 +550,19 @@ evaluations.
 *  `(bf, dx, dy)` : Basis function values and the `x` and `y` components of its gradient at the input points.
 """
 function basis_and_gradient(basis::CornerAdaptedFourierBessel,i::Int,k::T,pts::AbstractArray) where {T<:Real}
-    pm=basis.cs.local_map
     ν=basis.nu
     m=ν*i
     M=length(pts)
     r=Vector{T}(undef,M)
     φ=Vector{T}(undef,M)
-    _polar_coords!(r,φ,pm,pts,basis.rotation_angle_discontinuity)
+    _polar_coords!(r,φ,pts,basis.origin,basis.rot_angle,basis.rotation_angle_discontinuity)
     bf=Vector{T}(undef,M)
     dx=Vector{T}(undef,M)
     dy=Vector{T}(undef,M)
     @inbounds for j in 1:M
         rj=r[j]
         invr=(rj==0 ? zero(T) : inv(rj))
-        sφ=sin(φ[j])
-        cφ=cos(φ[j])
+        sφ,cφ=sincos(φ[j]+basis.rot_angle)
         jv=Jv(m,k*rj)
         dj=Jvp(m,k*rj)
         s=sin(m*φ[j])
@@ -581,13 +600,12 @@ transformations and Bessel function evaluations.
 *  `(B, dB_dx, dB_dy)` : Basis matrix and the `x` and `y` components of its gradients, each of size `(length(pts), length(indices))`.
 """
 function basis_and_gradient(basis::CornerAdaptedFourierBessel,indices::AbstractArray,k::T,pts::AbstractArray;multithreaded::Bool=true) where {T<:Real}
-    pm=basis.cs.local_map
     ν=basis.nu
     M=length(pts)
     N=length(indices)
     r=Vector{T}(undef,M)
     φ=Vector{T}(undef,M)
-    _polar_coords!(r,φ,pm,pts,basis.rotation_angle_discontinuity)
+    _polar_coords!(r,φ,pts,basis.origin,basis.rot_angle,basis.rotation_angle_discontinuity)
     B=Matrix{T}(undef,M,N)
     dB_dx=Matrix{T}(undef,M,N)
     dB_dy=Matrix{T}(undef,M,N)
@@ -599,8 +617,7 @@ function basis_and_gradient(basis::CornerAdaptedFourierBessel,indices::AbstractA
         @inbounds for j in 1:M
             rj=r[j]
             invr=(rj==0 ? zero(T) : inv(rj))
-            sφ=sin(φ[j])
-            cφ=cos(φ[j])
+            sφ,cφ=sincos(φ[j]+basis.rot_angle)
             jv=Jv(m,k*rj)
             dj=Jvp(m,k*rj)
             s=sin(m*φ[j])

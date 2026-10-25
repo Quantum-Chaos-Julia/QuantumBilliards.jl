@@ -1,6 +1,16 @@
 
-const MAX_BLAS_THREADS=Sys.CPU_THREADS
+const MAX_BLAS_THREADS = Sys.isapple() ? Sys.CPU_THREADS : max(1, Sys.CPU_THREADS ÷ 2)
 
+#expand for other types of numbers
+function set_precision(a)
+    t = typeof(a)
+    return t == Float32 ? Float32(1e-8) : convert(t,1e-16) 
+end
+
+# Runs a loop with ProgressMeter only when requested.
+macro maybe_showprogress(show_progress, loop)
+    return esc(:($show_progress ? (@showprogress $loop) : $loop))
+end
 """
     use_threads(args...)
     
@@ -80,5 +90,26 @@ macro blas_multi_then_1(n,expr)
         LinearAlgebra.BLAS.set_num_threads($(esc(n)))
         $(esc(expr))
         LinearAlgebra.BLAS.set_num_threads(1)
+    end
+end
+
+"""
+    try_MKL!()
+
+Tries to use the MKL on x86_64 architecture if possible. Otherwise it defaults to the stock BLAS backend :lbt.
+macOS currently not supported due to Accelerate.jl causing issues with non-even FFTW. MKL.jl does not have this issue (for now).
+"""
+function try_MKL!()
+    if Sys.ARCH==:x86_64
+        try
+            @eval using MKL
+            println(BLAS.get_config())
+        catch e
+            println(e)
+            @warn "Install Math Kernel Library (MKL) via MKL.jl"
+            @info "Defaulting to stock BLAS backend: $(BLAS.vendor())"
+        end
+    else
+        @info "Not on x86_64 architecture ($(Sys.ARCH)), defaulting to stock BLAS backend: $(BLAS.vendor())"
     end
 end
