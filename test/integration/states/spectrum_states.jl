@@ -18,7 +18,7 @@ function _ss_circle_spectrum()
         billiard = CircleBilliard(1.0)
         kernel = CombinedFieldIntegralEquationSolver(10.0, billiard; grading=SmoothPeriodicGrading())
         solver = BeynSolver(kernel; use_chebyshev=false, eigenvectors=true)
-        compute_spectrum(solver, billiard, 2.2, 4.0; multithreaded=false, show_progress=false)
+        compute_spectrum(solver, billiard, 2.2, 4.0; multithreaded=true, show_progress=false)
     end
 end
 
@@ -28,7 +28,7 @@ function _ss_rectangle_spectrum()
         billiard = RectangleBilliard(1.0, 0.7)
         basis = RealPlaneWaves(20; sym_x=1, sym_y=1)
         solver = VerginiSaracenoSolver(5.0, 10.0; eigenvectors=true)
-        compute_spectrum(solver, basis, billiard, 20.0, 23.0, 0.2; ten_tol=nothing, multithreaded=false, show_progress=false)
+        compute_spectrum(solver, basis, billiard, 20.0, 23.0, 0.2; ten_tol=nothing, multithreaded=true, show_progress=false)
     end
 end
 
@@ -126,7 +126,7 @@ end
         modes = [(m, n) for m in 1:2:15, n in 1:2:15 if abs(pi * sqrt((m / 2)^2 + (n / 1.4)^2) - k) < SPECTRUM_ATOL_VS]
         @test length(modes) == 1
         m, n = only(modes)
-        Psi, xg, yg = wavefunction(data, i; fundamental_domain=false, multithreaded=false)
+        Psi, xg, yg = wavefunction(data, i; fundamental_domain=false, multithreaded=true)
         @test size(Psi) == (length(xg), length(yg))
         idx = [(ix, iy) for ix in 1:length(xg), iy in 1:length(yg) if abs(xg[ix]) < 0.95 && abs(yg[iy]) < 0.65]
         psi = [Psi[ix, iy] for (ix, iy) in idx]
@@ -169,7 +169,7 @@ end
     # compute_spectrum without eigenvectors stores no states, and the state wrappers refuse
     billiard = CircleBilliard(1.0)
     kernel = CombinedFieldIntegralEquationSolver(10.0, billiard; grading=SmoothPeriodicGrading())
-    nostates = compute_spectrum(BeynSolver(kernel; use_chebyshev=false, eigenvectors=false), billiard, 2.2, 2.6; multithreaded=false, show_progress=false)
+    nostates = compute_spectrum(BeynSolver(kernel; use_chebyshev=false, eigenvectors=false), billiard, 2.2, 2.6; multithreaded=true, show_progress=false)
     @test nostates.states === nothing
     @test_throws ArgumentError wavefunction(nostates, 1)
 end

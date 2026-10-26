@@ -28,7 +28,7 @@ _drv_rectangle_levels(k1, k2) = rectangle_spectrum(2.0, 1.4, k1, k2)
     basis = RealPlaneWaves(20; sym_x=1, sym_y=1)
     solver = VerginiSaracenoSolver(5.0, 10.0; eigenvectors=false)
     k1, k2 = 20.0, 23.0
-    data_k = compute_spectrum(solver, basis, billiard, k1, k2, 0.2; ten_tol=nothing, multithreaded=false, show_progress=false)
+    data_k = compute_spectrum(solver, basis, billiard, k1, k2, 0.2; ten_tol=nothing, multithreaded=true, show_progress=false)
     ref_k = rectangle_spectrum(2.0, 1.4, k1, k2; parity_x=1, parity_y=1)
     ks_k = sort(real.(data_k.k))
     @test length(ref_k) == 8
@@ -37,7 +37,7 @@ _drv_rectangle_levels(k1, k2) = rectangle_spectrum(2.0, 1.4, k1, k2)
     @test all(data_k.ten .< TENSION_TOL_VS)
     N1, N2 = 20, 26
     kN1, kN2 = k_range_for_states(billiard, N1, N2)
-    data_N = compute_spectrum(solver, basis, billiard, N1, N2; N_expect=0.35, ten_tol=nothing, multithreaded=false, show_progress=false)
+    data_N = compute_spectrum(solver, basis, billiard, N1, N2; N_expect=0.35, ten_tol=nothing, multithreaded=true, show_progress=false)
     ref_N = rectangle_spectrum(2.0, 1.4, kN1, kN2; parity_x=1, parity_y=1)
     ks_N = sort(real.(data_N.k))
     @test all(k -> kN1 <= k <= kN2, ks_N)
@@ -59,8 +59,8 @@ end
     solver = BeynSolver(kernel; use_chebyshev=false, eigenvectors=false)
     k1, k2 = k_range_for_states(billiard, 3, 8; fundamental=false)
     ref = _drv_rectangle_levels(k1, k2)
-    data_k = compute_spectrum(solver, billiard, k1, k2; multithreaded=false, show_progress=false)
-    data_N = compute_spectrum(solver, billiard, 3, 8; multithreaded=false, show_progress=false)
+    data_k = compute_spectrum(solver, billiard, k1, k2; multithreaded=true, show_progress=false)
+    data_N = compute_spectrum(solver, billiard, 3, 8; multithreaded=true, show_progress=false)
     @test length(ref) == 5
     for data in (data_k, data_N)
         ks = sort(real.(data.k))
@@ -84,8 +84,8 @@ end
     solver = CORKSolver(kernel; nlevels=40)
     k1, k2 = k_range_for_states(billiard, 3, 8; fundamental=false)
     ref = _drv_rectangle_levels(k1, k2)
-    data_k = compute_spectrum(solver, billiard, k1, k2; multithreaded=false, show_progress=false)
-    data_N = compute_spectrum(solver, billiard, 3, 8; multithreaded=false, show_progress=false)
+    data_k = compute_spectrum(solver, billiard, k1, k2; multithreaded=true, show_progress=false)
+    data_N = compute_spectrum(solver, billiard, 3, 8; multithreaded=true, show_progress=false)
     @test length(ref) == 5
     for data in (data_k, data_N)
         ks = sort(real.(data.k))
@@ -112,8 +112,8 @@ end
     k1, k2 = k_range_for_states(billiard, 3, 8; fundamental=false)
     ref = _drv_rectangle_levels(k1, k2)
     # ten_tol=nothing: the default EBIM filter (5e-4) would drop genuine levels (tension up to 0.04); confidence is judged by TENSION_TOL_EBIM below
-    data_k = compute_spectrum(solver, billiard, k1, k2; ten_tol=nothing, multithreaded=false, show_progress=false)
-    data_N = compute_spectrum(solver, billiard, 3, 8; ten_tol=nothing, multithreaded=false, show_progress=false)
+    data_k = compute_spectrum(solver, billiard, k1, k2; ten_tol=nothing, multithreaded=true, show_progress=false)
+    data_N = compute_spectrum(solver, billiard, 3, 8; ten_tol=nothing, multithreaded=true, show_progress=false)
     @test length(ref) == 5
     for data in (data_k, data_N)
         ks = real.(data.k)
@@ -141,7 +141,7 @@ end
     @test windows[1][1] == k1 && windows[end][2] == k2
     @test all(i -> windows[i][2] == windows[i+1][1], 1:length(windows)-1)
     @test all(counts .<= solver.m + 1e-9)
-    data = compute_spectrum(solver, billiard, k1, k2; multithreaded=false, show_progress=false)
+    data = compute_spectrum(solver, billiard, k1, k2; multithreaded=true, show_progress=false)
     ref = rectangle_spectrum(2.0, 1.4, k1, k2)
     ks = sort(real.(data.k))
     @test length(ks) == length(ref)
@@ -164,10 +164,10 @@ end
     billiard = StadiumBilliard(0.5)
     kernel = CombinedFieldIntegralEquationSolver(8.0, billiard; grading=GlobalCornerGrading(kressq=2))
     solver = BeynSolver(kernel; m=6, nq=16, r=16, Rmax=0.5, svd_tol=1e-10, res_tol=2e-5,
-        taylor_degree=10, use_chebyshev=false, imag_k_check=false, eigenvectors=false)
+        taylor_degree=6, use_chebyshev=false, imag_k_check=false, eigenvectors=false)
     k1, k2 = 3.0, 9.0
     # ten_tol=nothing: res_tol=2e-5 admits tensions above the Beyn default filter (1e-8); TENSION_TOL_BIM is asserted below
-    data = compute_spectrum(solver, billiard, k1, k2; ten_tol=nothing, multithreaded=false, show_progress=false)
+    data = compute_spectrum(solver, billiard, k1, k2; ten_tol=nothing, multithreaded=true, show_progress=false)
     A = BilliardGeometry.area(billiard)
     L = sum(crv.length for crv in full_boundary(billiard))
     n_weyl = QuantumBilliards.weyl_law(k2, A, L) - QuantumBilliards.weyl_law(k1, A, L)

@@ -417,3 +417,33 @@ end
     @test @inferred(flatten_boundary_ds([bp1, bp2])) isa Vector{Float64}
     @test isempty(flatten_boundary_ds(BoundaryPoints{Float64}[]))
 end
+
+# Minimal billiard with a MultiplyConnectedDomain and an explicit symmetry registry: the quarter square [0,1]^2 of
+# RectangleBilliard(1.0, 1.0) as outer region with one asymmetric circular hole of radius 0.2 about (0.3, 0.4).
+struct bp_HoleBilliard <: AbsBilliard
+    fundamental_domain::MultiplyConnectedDomain{Float64}
+    symmetries::SymmetryRegistry
+end
+
+function bp_hole_billiard(symmetries)
+    hole_curve = CircleSegment(0.2, 2π, 0.0, [0.3, 0.4]; domain_id=5, segment_id=1)
+    hole = DomainHole(SimpleDomain{Float64}(AbsCurve[hole_curve], SVector{2,Float64}[SVector(0.5, 0.4)], 5))
+    return bp_HoleBilliard(MultiplyConnectedDomain(RectangleBilliard(1.0, 1.0).fundamental_domain, [hole], 1), symmetries)
+end
+
+@testset "_require_fundamental_frame_support" begin
+    @test QuantumBilliards._require_fundamental_frame_support(RectangleBilliard(1.0, 0.6)) === nothing    # symmetric, no holes
+    @test QuantumBilliards._require_fundamental_frame_support(AnnularBilliard(0.3, 0.1)) === nothing      # holes, empty registry
+    @test QuantumBilliards._require_fundamental_frame_support(SinaiBilliard(1.0, 0.25)) === nothing
+    @test QuantumBilliards._require_fundamental_frame_support(bp_hole_billiard(register_symmetries())) === nothing
+    @test_throws ArgumentError QuantumBilliards._require_fundamental_frame_support(bp_hole_billiard(D2_symmetry()))
+end
+
+@testset "_require_no_holes" begin
+    dlp = DoubleLayerPotentialSolver(5.0, CircleBilliard(1.0); min_pts=16)
+    @test QuantumBilliards._require_no_holes(dlp, CircleBilliard(1.0)) === nothing
+    @test QuantumBilliards._require_no_holes(dlp, RectangleBilliard(1.0, 0.6)) === nothing
+    @test_throws ArgumentError QuantumBilliards._require_no_holes(dlp, AnnularBilliard(0.3, 0.1))
+    @test_throws ArgumentError QuantumBilliards._require_no_holes(dlp, SinaiBilliard(1.0, 0.25))
+    @test_throws ArgumentError QuantumBilliards._require_no_holes(dlp, SquareWithinSquareBilliard(1.0))
+end

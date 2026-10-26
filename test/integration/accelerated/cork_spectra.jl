@@ -19,7 +19,7 @@
     kernel = CombinedFieldIntegralEquationSolver(20.0, billiard; grading=SmoothPeriodicGrading(), min_pts=800)
     solver = CORKSolver(kernel; nlevels=40)
     k1, k2 = 3.0, 8.0
-    data = compute_spectrum(solver, billiard, k1, k2; multithreaded=false, show_progress=false)
+    data = compute_spectrum(solver, billiard, k1, k2; multithreaded=true, show_progress=false)
     ks_ref = circle_spectrum(1.0, k1, k2)
     ks = sort(real.(data.k))
     @test length(ks) == length(ks_ref)
@@ -45,7 +45,7 @@ end
     kernel = CombinedFieldIntegralEquationSolver(20.0, billiard; grading=GlobalCornerGrading(), min_pts=800)
     solver = CORKSolver(kernel; nlevels=40)
     k1, k2 = 3.0, 10.0
-    data = compute_spectrum(solver, billiard, k1, k2; multithreaded=false, show_progress=false)
+    data = compute_spectrum(solver, billiard, k1, k2; multithreaded=true, show_progress=false)
     ks_ref = rectangle_spectrum(2.0, 1.4, k1, k2)
     ks = sort(real.(data.k))
     @test length(ks) == length(ks_ref)
@@ -66,7 +66,7 @@ end
     billiard = RectangleBilliard(1.0, 0.7)
     kernel = CombinedFieldIntegralEquationSolver(20.0, billiard; grading=GlobalCornerGrading(), min_pts=800)
     solver = CORKSolver(kernel; nlevels=20)
-    ks, _ = @test_logs (:warn, r"Weyl law predicts") solve_spectrum(solver, billiard, 6.5, 7.0; multithreaded=false)
+    ks, _ = @test_logs (:warn, r"Weyl law predicts") solve_spectrum(solver, billiard, 6.5, 7.0; multithreaded=true)
     ks_ref = rectangle_spectrum(2.0, 1.4, 3.0, 10.0)
     @test length(ks_ref) == 16
     @test length(ks) < length(ks_ref)
@@ -83,7 +83,7 @@ end
     billiard = RectangleBilliard(1.0, 0.7)
     kernel = CombinedFieldIntegralEquationSolver(20.0, billiard; grading=GlobalCornerGrading(), min_pts=800)
     solver = CORKSolver(kernel; nlevels=20)
-    ks, _ = @test_logs solve_spectrum(solver, billiard, 6.0, 1.2; multithreaded=false)
+    ks, _ = @test_logs solve_spectrum(solver, billiard, 6.0, 1.2; multithreaded=true)
     ks_ref = rectangle_spectrum(2.0, 1.4, 5.4, 6.6)
     ks = sort(real.(ks))
     @test !isempty(ks_ref)

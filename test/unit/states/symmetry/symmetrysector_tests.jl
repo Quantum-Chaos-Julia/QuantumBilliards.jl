@@ -3,7 +3,7 @@
 #                                            _sector_character, _check_sector_billiard, _resolve_bim_symmetry,
 #                                            _match_rotation_sector, and the reflection / rotation resolution helpers)
 # The symmetry generators, the registry and the orbit maps belong to BilliardGeometry; here they are only used as
-# inputs (RectangleBilliard: D2 reflections, StarBilliard: cyclic rotations, SquareWithinSquareBilliard: a single
+# inputs (RectangleBilliard: D2 reflections, StarBilliard: cyclic rotations, a circular PolarBilliard: a single
 # diagonal reflection, TriangleBilliard: no symmetry) and the characters recovered from them are compared with the
 # closed forms chi(g) = +-1 and chi_s(g^m) = exp(2 pi i s m / N).
 # No eigen solves, no matrix assembly. The only cross-package check is the final testset, which compares the orbit
@@ -18,6 +18,14 @@ ss_gens(ps...) = Pair{BilliardGeometry.AbsSymmetry,ComplexF64}[ps...]
 
 # Map from reflection generator type to its character for a resolved `(CompositeReflection, characters)` pair.
 ss_char_by_type(gen::CompositeReflection, chars) = Dict(typeof(r) => c for (r, c) in zip(gen.reflections, chars))
+
+# Unit circle whose registry holds the diagonal reflection alone (no shipped billiard registers it); only the registry is
+# inspected by the sector resolution, the shape is irrelevant.
+function ss_diagonal_circle()
+    seg = FourierCoeffPolarSegment(Float64[]; shift_angle = pi / 4)
+    dom = BilliardGeometry.PolarDomain{Float64}([seg], [curve(seg, 0.0)], 1)
+    return PolarBilliard{Float64}(dom, register_symmetries(DiagonalReflection()))
+end
 
 # Whether the cyclic sector `s` of `billiard` resolves without error to exactly the sector index `s`.
 function ss_resolves_to_sector(billiard, s)
@@ -236,7 +244,7 @@ end
 end
 
 @testset "symmetry_sector pairs - single diagonal reflection" begin
-    sq = SquareWithinSquareBilliard(1.0)
+    sq = ss_diagonal_circle()
     sec = symmetry_sector(sq, DiagonalReflection => -1)
     @test sec.characters == Dict{Int,ComplexF64}(1 => -1)
     @test_throws ArgumentError symmetry_sector(sq, XAxisReflection => 1)
@@ -385,8 +393,8 @@ end
     end
 end
 
-@testset "_resolve_bim_symmetry - diagonal reflection (SquareWithinSquare)" begin
-    sq = SquareWithinSquareBilliard(1.0)
+@testset "_resolve_bim_symmetry - diagonal reflection" begin
+    sq = ss_diagonal_circle()
     gen, chars = _resolve_bim_symmetry(sq, symmetry_sector(sq, DiagonalReflection => -1))
     @test gen isa CompositeReflection
     @test length(gen.reflections) == 1

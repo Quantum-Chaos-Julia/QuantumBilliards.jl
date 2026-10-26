@@ -60,11 +60,10 @@ cross-component kernel, whereas a source component using CFIE contributes the
 combined `D(k)+ikS(k)` kernel.
 
 Hole components are identified from the domain structure: the hole loops of a
-[`MultiplyConnectedDomain`](@ref) follow the outer boundary, one component per
-hole object (each hole must be a single closed loop). Billiards without a
-`MultiplyConnectedDomain` (e.g. [`SinaiBilliard`](@ref)) keep the legacy
-grouping of the full boundary by curve `domain_id`, with holes flagged by
-the `orientation=-1` convention of their concave pieces.
+[`MultiplyConnectedDomain`](@ref) (e.g. [`AnnularBilliard`](@ref),
+[`SinaiBilliard`](@ref)) follow the outer boundary, one component per hole
+object (each hole must be a single closed loop). A billiard without a
+`MultiplyConnectedDomain` has a single outer component.
 Holes are discretized in the canonical boundary ordering and their tangent
 orientation is subsequently flipped, without changing node ordering, so that
 the resulting normals follow the physical outward-normal convention.
@@ -117,32 +116,10 @@ _bim_numeric_type(solver::CompositeBIMSolver{T}) where {T} = T
 # for grid size, mostly legacy now
 _bim_grid_scale(solver::CompositeBIMSolver) = solver.component_solvers[1].pts_scaling_factor[1]
 
-# Group a flat boundary curve list into connected components according
-# to each curve's `domain_id`. The first occurrence of each domain identifier
-# determines component order, while the original curve order is preserved
-# inside each component. This delegates to BilliardGeometry's own grouping
-# convention so that the composite solver uses the same component decomposition
-# as the underlying domain representation.
-_group_boundary_by_domain_id(comp::Vector) = BilliardGeometry._group_curves_by_domain_id(comp)
-
-# Determine whether a legacy (non-MultiplyConnectedDomain) connected boundary
-# component represents a hole from the orientation carried by its curves, as
-# used by the concave pieces of SinaiBilliard and SquareWithinSquareBilliard.
-# Orientation +1 denotes an ordinary outer boundary and orientation -1 denotes
-# a hole. Every curve belonging to one connected component must have the same
-# orientation; mixed orientations are rejected.
-function _legacy_group_is_hole(group::Vector)
-    o = group[1].orientation
-    all(c.orientation == o for c in group) || throw(ArgumentError("Curves within one connected boundary component must share the same `orientation` field (found a mix); mixed-orientation components are not supported"))
-    o == 1 && return false
-    o == -1 && return true
-    throw(ArgumentError("Curve `orientation` must be ±1; found $o"))
-end
-
 # Closed boundary loops of the complete billiard boundary in solver order,
 # together with their hole flags. For a MultiplyConnectedDomain the loops come
 # from the domain structure (outer boundary first, then one loop per hole);
-# other billiards are grouped by curve `domain_id`.
+# any other billiard has a single outer loop.
 _composite_components(billiard::AbsBilliard) = _composite_components(billiard.fundamental_domain, billiard)
 
 function _composite_components(domain::AbsMultiplyConnectedDomain, billiard::AbsBilliard)
@@ -155,17 +132,9 @@ function _composite_components(domain::AbsMultiplyConnectedDomain, billiard::Abs
 end
 
 function _composite_components(::AbsDomain, billiard::AbsBilliard)
-    base = get_boundary_curves(billiard); comp = full_boundary(billiard)
+    comp = full_boundary(billiard)
     isempty(comp) && error("Boundary cannot be empty.")
-    groups = _group_boundary_by_domain_id(comp)
-    base_by_id = Dict(first(g).domain_id=>g for g in _group_boundary_by_domain_id(base))
-    is_hole = Bool[]
-    for g in groups
-        id = first(g).domain_id
-        haskey(base_by_id,id) || throw(ArgumentError("Composite boundary contains domain_id=$id which is absent from the fundamental boundary"))
-        push!(is_hole, _legacy_group_is_hole(base_by_id[id]))
-    end
-    return groups, is_hole
+    return [comp], [false]
 end
 
 # Dispatch boundary sampling of one connected component to its assigned DLP or

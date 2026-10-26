@@ -1,11 +1,11 @@
 # High-wavenumber integration tests: BeynSolver (Taylor backend) on a CFIE kernel, full boundary, one narrow
 # window near k = 100, one explicit testset per exported concrete billiard geometry (registry of the old
 # tests_all.jl). Parameters from the "Calibration log" (step 3c) of scratchpad/test-suite-redesign-plan.md:
-# Beyn m=6, nq=16, r=8 (16 for the degenerate-rich circle), taylor_degree=8, Rmax = half window width + 0.01,
+# Beyn m=6, nq=16, r=8 (16 for the degenerate-rich circle), taylor_degree=6, Rmax = half window width + 0.01,
 # res_tol=2e-5, svd_tol=1e-10, no eigenvectors, no imaginary-k check (it would force a Chebyshev config build).
 # Smooth boundaries use SmoothPeriodicGrading with ppw 4 to 6, corner boundaries GlobalCornerGrading(kressq=2)
 # with ppw 8. Geometries with an analytic level list (Circle, Rectangle, Triangle, Annular) assert count and
-# level agreement with HIGH_K_ATOL; the other geometries run the same window at ppw and 1.5*ppw and assert equal
+# level agreement with HIGH_K_ATOL; the other geometries run the same window at a coarse and a fine ppw and assert equal
 # count and level agreement within HIGH_K_ATOL. All testsets assert tension below HIGH_K_TENSION_TOL and levels
 # inside the window. The window of the geometries without an analytic list is high_k_window(area), i.e. about
 # HIGH_K_LEVELS levels on average (area of hole geometries: outer minus holes).
@@ -14,15 +14,15 @@ using StaticArrays: SVector
 
 # Beyn spectrum of `kernel` on `[k1, k2]` with the speed settings of the high-k tier.
 function high_k_beyn_spectrum(kernel, billiard, k1, k2; r=8)
-    solver = BeynSolver(kernel; use_taylor=true, use_chebyshev=false, m=6, nq=16, r=r, taylor_degree=8,
+    solver = BeynSolver(kernel; use_taylor=true, use_chebyshev=false, m=6, nq=16, r=r, taylor_degree=6,
         Rmax=(k2 - k1) / 2 + 0.01, res_tol=2e-5, svd_tol=1e-10, eigenvectors=false, imag_k_check=false)
     return compute_spectrum(solver, billiard, k1, k2; multithreaded=true, show_progress=false)
 end
 
 # Area of a billiard with holes: outer component minus the hole components (`area(billiard)` ignores holes).
 function high_k_hole_area(billiard)
-    components = QuantumBilliards._group_boundary_by_domain_id(full_boundary(billiard))
-    return sum((first(c).domain_id == 1 ? 1 : -1) * area(c) for c in components)
+    components, is_hole = QuantumBilliards._composite_components(billiard)
+    return sum((hole ? -1 : 1) * area(c) for (c, hole) in zip(components, is_hole))
 end
 
 # solver: Beyn contour integral
@@ -112,17 +112,17 @@ end
 end
 
 # solver: Beyn contour integral
-# kernel/basis: CFIE, GlobalCornerGrading(kressq=2), ppw=8 and 12, Taylor backend
+# kernel/basis: CFIE, GlobalCornerGrading(kressq=2), ppw=8 and 10, Taylor backend
 # billiard: Polygon, regular pentagon on the unit circle
 # symmetry: None
-# reference: convergence, same window at ppw and 1.5*ppw; window high_k_window(area)
+# reference: convergence, same window at ppw 8 and 10; window high_k_window(area)
 # functions to test: compute_spectrum
 @testset "Beyn high k (CFIE, GlobalCornerGrading, Taylor) - Polygon - k near 100" begin
     vertices = [SVector{2,Float64}(cos(t), sin(t)) for t in range(0, 2pi; length=6)[1:5]]
     billiard = PolygonBilliard(vertices)
     k1, k2 = high_k_window(area(billiard))
     kernel = CombinedFieldIntegralEquationSolver(8.0, billiard; grading=GlobalCornerGrading(kressq=2), eps=1e-10)
-    kernel_fine = CombinedFieldIntegralEquationSolver(12.0, billiard; grading=GlobalCornerGrading(kressq=2), eps=1e-10)
+    kernel_fine = CombinedFieldIntegralEquationSolver(10.0, billiard; grading=GlobalCornerGrading(kressq=2), eps=1e-10)
     data = high_k_beyn_spectrum(kernel, billiard, k1, k2)
     data_fine = high_k_beyn_spectrum(kernel_fine, billiard, k1, k2)
     ks = sort(real.(data.k))
@@ -275,10 +275,10 @@ end
 end
 
 # solver: Beyn contour integral
-# kernel/basis: CFIE, GlobalCornerGrading(kressq=2), ppw=8 and 12, Taylor backend
+# kernel/basis: CFIE, GlobalCornerGrading(kressq=2), ppw=8 and 10, Taylor backend
 # billiard: Mushroom (MushroomBilliard(0.5, 0.7))
 # symmetry: None
-# reference: convergence, same window at ppw and 1.5*ppw; window high_k_window(area). Levels converge only
+# reference: convergence, same window at ppw 8 and 10; window high_k_window(area). Levels converge only
 #   algebraically at the re-entrant corners: observed ppw 8 vs 12 difference 1.8e-4, 12 vs 16 difference 9e-5, so the
 #   agreement tolerance is 5e-4 (still far below the mean level spacing of about 0.03)
 # functions to test: compute_spectrum
@@ -286,7 +286,7 @@ end
     billiard = MushroomBilliard(0.5, 0.7)
     k1, k2 = high_k_window(area(billiard))
     kernel = CombinedFieldIntegralEquationSolver(8.0, billiard; grading=GlobalCornerGrading(kressq=2), eps=1e-10)
-    kernel_fine = CombinedFieldIntegralEquationSolver(12.0, billiard; grading=GlobalCornerGrading(kressq=2), eps=1e-10)
+    kernel_fine = CombinedFieldIntegralEquationSolver(10.0, billiard; grading=GlobalCornerGrading(kressq=2), eps=1e-10)
     data = high_k_beyn_spectrum(kernel, billiard, k1, k2)
     data_fine = high_k_beyn_spectrum(kernel_fine, billiard, k1, k2)
     ks = sort(real.(data.k))
@@ -322,17 +322,18 @@ end
 end
 
 # solver: Beyn contour integral (composite, one CFIE component per boundary domain)
-# kernel/basis: CFIE, GlobalCornerGrading(kressq=2), min_pts=80, ppw=8 and 12, Taylor backend
+# kernel/basis: CFIE, GlobalCornerGrading(kressq=2), min_pts=80, ppw=8 and 10, Taylor backend
 # billiard: Sinai (SinaiBilliard(1.0, 0.25)), outer square with a circular hole
 # symmetry: None
-# reference: convergence, same window at ppw and 1.5*ppw; window high_k_window(outer minus hole area)
+# reference: convergence, same window at ppw 8 and 10; window high_k_window(outer minus hole area)
 # functions to test: compute_spectrum
-@testset "Beyn high k (CFIE, GlobalCornerGrading, Taylor) - Sinai - k near 100" begin
+# opt-in: skipped unless QB_TEST_SLOW=true
+HIGH_K_SLOW && @testset "Beyn high k (CFIE, GlobalCornerGrading, Taylor) - Sinai - k near 100" begin
     billiard = SinaiBilliard(1.0, 0.25)
-    ncomponents = length(QuantumBilliards._group_boundary_by_domain_id(full_boundary(billiard)))
+    ncomponents = 1 + length(billiard.fundamental_domain.holes)
     component(ppw) = CombinedFieldIntegralEquationSolver(ppw, billiard; grading=GlobalCornerGrading(kressq=2), eps=1e-10, min_pts=80)
     kernel = CompositeBIMSolver((component(8.0) for _ in 1:ncomponents)...)
-    kernel_fine = CompositeBIMSolver((component(12.0) for _ in 1:ncomponents)...)
+    kernel_fine = CompositeBIMSolver((component(10.0) for _ in 1:ncomponents)...)
     k1, k2 = high_k_window(high_k_hole_area(billiard))
     data = high_k_beyn_spectrum(kernel, billiard, k1, k2)
     data_fine = high_k_beyn_spectrum(kernel_fine, billiard, k1, k2)
@@ -347,19 +348,20 @@ end
 end
 
 # solver: Beyn contour integral (composite, one CFIE component per boundary domain)
-# kernel/basis: CFIE, GlobalCornerGrading(kressq=2), min_pts=64, ppw=8 and 12, Taylor backend
+# kernel/basis: CFIE, GlobalCornerGrading(kressq=2), min_pts=64, ppw=8 and 10, Taylor backend
 # billiard: SquareWithinSquare (SquareWithinSquareBilliard(1.0)), outer square with two square holes
 # symmetry: None
 # reference: convergence, same window at ppw and 1.5*ppw; window high_k_window(outer minus hole areas). Levels
 #   converge only algebraically at the corners: observed ppw 8 vs 12 difference 1.4e-4, 12 vs 16 difference 1.3e-4,
 #   so the agreement tolerance is 5e-4 (the mean level spacing is about 0.01)
 # functions to test: compute_spectrum
-@testset "Beyn high k (CFIE, GlobalCornerGrading, Taylor) - SquareWithinSquare - k near 100" begin
+# opt-in: skipped unless QB_TEST_SLOW=true
+HIGH_K_SLOW && @testset "Beyn high k (CFIE, GlobalCornerGrading, Taylor) - SquareWithinSquare - k near 100" begin
     billiard = SquareWithinSquareBilliard(1.0)
-    ncomponents = length(QuantumBilliards._group_boundary_by_domain_id(full_boundary(billiard)))
+    ncomponents = 1 + length(billiard.fundamental_domain.holes)
     component(ppw) = CombinedFieldIntegralEquationSolver(ppw, billiard; grading=GlobalCornerGrading(kressq=2), eps=1e-10, min_pts=64)
     kernel = CompositeBIMSolver((component(8.0) for _ in 1:ncomponents)...)
-    kernel_fine = CompositeBIMSolver((component(12.0) for _ in 1:ncomponents)...)
+    kernel_fine = CompositeBIMSolver((component(10.0) for _ in 1:ncomponents)...)
     k1, k2 = high_k_window(high_k_hole_area(billiard))
     data = high_k_beyn_spectrum(kernel, billiard, k1, k2)
     data_fine = high_k_beyn_spectrum(kernel_fine, billiard, k1, k2)

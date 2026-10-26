@@ -15,8 +15,8 @@
     solver_taylor = BeynSolver(kernel; use_taylor=true, use_chebyshev=false)
     solver_direct = BeynSolver(kernel; use_taylor=false, use_chebyshev=false)
     k1, k2 = 2.0, 8.0
-    data_taylor = compute_spectrum(solver_taylor, billiard, k1, k2; multithreaded=false, show_progress=false)
-    data_direct = compute_spectrum(solver_direct, billiard, k1, k2; multithreaded=false, show_progress=false)
+    data_taylor = compute_spectrum(solver_taylor, billiard, k1, k2; multithreaded=true, show_progress=false)
+    data_direct = compute_spectrum(solver_direct, billiard, k1, k2; multithreaded=true, show_progress=false)
     ks_ref = circle_spectrum(1.0, k1, k2)
     ks_taylor = sort(real.(data_taylor.k))
     ks_direct = sort(real.(data_direct.k))

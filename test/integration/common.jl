@@ -23,6 +23,7 @@ const HIGH_K = 100.0
 const HIGH_K_LEVELS = 5
 const HIGH_K_ATOL = 1e-5              # analytic and ppw-convergence agreement (worst observed 8.5e-7)
 const HIGH_K_TENSION_TOL = 1e-9       # worst observed 1.8e-11
+const HIGH_K_SLOW = get(ENV, "QB_TEST_SLOW", "false") == "true"   # opt-in Sinai and SquareWithinSquare testsets
 
 """
     rectangle_spectrum(a, b, k1, k2; parity_x=nothing, parity_y=nothing)

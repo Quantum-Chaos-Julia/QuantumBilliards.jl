@@ -15,7 +15,7 @@
     kernel = DoubleLayerPotentialSolver(5.0, billiard; grading=GlobalCornerGrading())
     solver = BeynSolver(kernel; use_chebyshev=false)
     k1, k2 = 5.5, 6.7
-    data = compute_spectrum(solver, billiard, k1, k2; multithreaded=false, show_progress=false)
+    data = compute_spectrum(solver, billiard, k1, k2; multithreaded=true, show_progress=false)
     k_ref = 6.065090986269762
     @test length(data.k) == 1
     @test isapprox(real(data.k[1]), k_ref; atol=SPECTRUM_ATOL_BIM)
@@ -34,7 +34,7 @@ end
     kernel = CombinedFieldIntegralEquationSolver(10.0, billiard; grading=SmoothPeriodicGrading())
     solver = BeynSolver(kernel; use_chebyshev=false, eigenvectors=true)
     @test isempty(circle_spectrum(1.0, 3.0, 3.5))
-    data = compute_spectrum(solver, billiard, 3.0, 3.5; multithreaded=false, show_progress=false)
+    data = compute_spectrum(solver, billiard, 3.0, 3.5; multithreaded=true, show_progress=false)
     @test length(data) == 0
     @test isempty(data.k) && isempty(data.ten) && isempty(data.k_im) && isempty(data.control)
 end
@@ -51,7 +51,7 @@ end
     kernel = CombinedFieldIntegralEquationSolver(10.0, billiard; grading=SmoothPeriodicGrading())
     solver = BeynSolver(kernel; use_chebyshev=false)
     k1, k2 = 2.0, 8.0
-    data = compute_spectrum(solver, billiard, k1, k2; multithreaded=false, show_progress=false)
+    data = compute_spectrum(solver, billiard, k1, k2; multithreaded=true, show_progress=false)
     ks_ref = circle_spectrum(1.0, k1, k2)
     ks = sort(real.(data.k))
     @test length(ks) == length(ks_ref)
@@ -81,7 +81,7 @@ end
     kernel = CombinedFieldIntegralEquationSolver(10.0, billiard; grading=GlobalCornerGrading())
     solver = BeynSolver(kernel; use_chebyshev=false)
     k1, k2 = 3.0, 10.0
-    data = compute_spectrum(solver, billiard, k1, k2; multithreaded=false, show_progress=false)
+    data = compute_spectrum(solver, billiard, k1, k2; multithreaded=true, show_progress=false)
     ks_ref = rectangle_spectrum(2.0, 1.4, k1, k2)
     ks = sort(real.(data.k))
     @test length(ks) == length(ks_ref)
@@ -103,7 +103,7 @@ end
     kernel = CompositeBIMSolver(component(), component())
     solver = BeynSolver(kernel; use_chebyshev=false)
     k1, k2 = 3.0, 8.0
-    data = compute_spectrum(solver, billiard, k1, k2; multithreaded=false, show_progress=false)
+    data = compute_spectrum(solver, billiard, k1, k2; multithreaded=true, show_progress=false)
     ks_ref = annulus_spectrum(0.3, 1.0, k1, k2)
     ks = sort(real.(data.k))
     @test length(ks) == length(ks_ref)
