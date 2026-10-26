@@ -419,3 +419,5 @@ copilot-instructions.md
 
 # Julia test environment
 /test/Manifest.toml
+# scratchpad
+scratchpad/
