@@ -265,18 +265,25 @@ where `Aₚ` is the degree-`p` Taylor approximation about `k0`.
 ## Keyword Arguments
 - `nsample::Int=5`: Number of validation points on the contour.
 - `multithreaded::Bool=true`: Whether matrix construction uses threading.
+- `reference=nothing`: Directly constructed matrices at the `nsample` contour points (see `_beyn_taylor_reference`), reused to avoid rebuilding them for every degree.
 
 ## Returns
 - `Float64`: Worst relative error over the sampled contour points.
 """
-function validate_beyn_taylor(solver::SweepBIMSolver, pts::BoundaryPoints{Float64}, k0::Float64, R::Float64, p::Int; nsample::Int=5, multithreaded::Bool=true)::Float64
+function validate_beyn_taylor(solver::SweepBIMSolver, pts::BoundaryPoints{Float64}, k0::Float64, R::Float64, p::Int; nsample::Int=5, multithreaded::Bool=true, reference=nothing)::Float64
     Ap = _construct_matrices_multi_k_taylor(solver, pts, k0, R, nsample, p; multithreaded)
-    θ = 2π .* (0:nsample-1) ./ nsample; worst = 0.0
+    ref = reference === nothing ? _beyn_taylor_reference(solver, pts, k0, R, nsample; multithreaded) : reference
+    worst = 0.0
     for q in 1:nsample
-        z = k0+R*cis(θ[q]); Ad = construct_matrices(solver, pts, z; multithreaded)
+        Ad = ref[q]
         worst = max(worst, norm(Ap[q]-Ad)/norm(Ad))
     end
     return worst
+end
+
+function _beyn_taylor_reference(solver::SweepBIMSolver, pts::BoundaryPoints{Float64}, k0::Float64, R::Float64, nsample::Int; multithreaded::Bool=true)
+    θ = 2π .* (0:nsample-1) ./ nsample
+    return [construct_matrices(solver, pts, k0+R*cis(θ[q]); multithreaded) for q in 1:nsample]
 end
 
 """
@@ -302,16 +309,17 @@ satisfying `solver.taylor_tol` is found. The resulting degree is stored in
 - `Int`: Validated Taylor degree.
 """
 function _tune_beyn_taylor_degree!(solver::BeynSolver, pts, k0, R; multithreaded::Bool=true)::Int
-    Rcal, ical = findmax(R); kcal = real(k0[ical]); p0 = solver.taylor_degree; p = p0
-    err = validate_beyn_taylor(solver.kernel, pts[ical], Float64(kcal), Float64(Rcal), p; multithreaded)
+    Rcal, ical = findmax(R); kcal = Float64(real(k0[ical])); p0 = solver.taylor_degree; p = p0
+    reference = _beyn_taylor_reference(solver.kernel, pts[ical], kcal, Float64(Rcal), 5; multithreaded)
+    err = validate_beyn_taylor(solver.kernel, pts[ical], kcal, Float64(Rcal), p; multithreaded, reference)
     if err>solver.taylor_tol
         while err>solver.taylor_tol
             p += 1
-            err = validate_beyn_taylor(solver.kernel, pts[ical], Float64(kcal), Float64(Rcal), p; multithreaded)
+            err = validate_beyn_taylor(solver.kernel, pts[ical], kcal, Float64(Rcal), p; multithreaded, reference)
         end
     else
         while p>2
-            err1 = validate_beyn_taylor(solver.kernel, pts[ical], Float64(kcal), Float64(Rcal), p-1; multithreaded)
+            err1 = validate_beyn_taylor(solver.kernel, pts[ical], kcal, Float64(Rcal), p-1; multithreaded, reference)
             err1>solver.taylor_tol && break
             p -= 1; err = err1
         end

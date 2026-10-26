@@ -14,8 +14,8 @@ function _veech_beyn_levels(k0, dk)
         billiard = QuantumBilliards.make_veech_right_triangle(5)
         kernel = CombinedFieldIntegralEquationSolver(10.0, billiard; grading=GlobalCornerGrading(kressq=2))
         beyn = BeynSolver(kernel; m=6, nq=16, r=16, Rmax=dk + 0.05, svd_tol=1e-10, res_tol=2e-5,
-            taylor_degree=10, use_chebyshev=false, imag_k_check=false, eigenvectors=false)
-        data = compute_spectrum(beyn, billiard, k0 - dk, k0 + dk + 0.05; multithreaded=false, show_progress=false)
+            taylor_degree=6, use_chebyshev=false, imag_k_check=false, eigenvectors=false)
+        data = compute_spectrum(beyn, billiard, k0 - dk, k0 + dk + 0.05; multithreaded=true, show_progress=false)
         ks = sort(data.k[(data.k .>= k0 - dk) .& (data.k .<= k0 + dk)])
         (ks, data)
     end
@@ -33,8 +33,8 @@ end
     k0, dk = 110.0, 0.1
     ks_ref, ref = _veech_beyn_levels(k0, dk)
     @test all(ref.ten .< HIGH_K_TENSION_TOL)
-    k, t = solve_wavenumber(solver, basis, billiard, k0, dk; multithreaded=false)
-    ks, tens = solve_spectrum(solver, basis, billiard, k0, dk; multithreaded=false)
+    k, t = solve_wavenumber(solver, basis, billiard, k0, dk; multithreaded=true)
+    ks, tens = solve_spectrum(solver, basis, billiard, k0, dk; multithreaded=true)
     @test isapprox(k, ks_ref[1]; atol=SPECTRUM_ATOL_VS)
     @test t < TENSION_TOL_VS
     @test length(ks) == length(ks_ref)
@@ -54,8 +54,8 @@ end
     solver = VerginiSaracenoSolver(2.0, 5.0)
     k0, dk = 2010.0, 0.05
     ks_ref = [2009.976791687898, 2010.0440083055544]
-    k, t = solve_wavenumber(solver, basis, billiard, k0, dk; multithreaded=false)
-    ks, tens = solve_spectrum(solver, basis, billiard, k0, dk; multithreaded=false)
+    k, t = solve_wavenumber(solver, basis, billiard, k0, dk; multithreaded=true)
+    ks, tens = solve_spectrum(solver, basis, billiard, k0, dk; multithreaded=true)
     @test any(isapprox.(k, ks_ref; atol=SPECTRUM_ATOL_VS))
     @test t < TENSION_TOL_VS
     @test length(ks) == length(ks_ref)
@@ -71,8 +71,8 @@ end
 function _stadium_oddodd_beyn_compute(billiard, k0, dk)
     kernel = CombinedFieldIntegralEquationSolver(8.0, billiard; grading=GlobalCornerGrading(kressq=2), sym_characters=(-1, -1))
     beyn = BeynSolver(kernel; m=6, nq=16, r=16, Rmax=dk + 0.05, svd_tol=1e-10, res_tol=2e-5,
-        taylor_degree=10, use_chebyshev=false, imag_k_check=false, eigenvectors=false)
-    data = compute_spectrum(beyn, billiard, k0 - dk, k0 + dk + 0.05; multithreaded=false, show_progress=false)
+        taylor_degree=6, use_chebyshev=false, imag_k_check=false, eigenvectors=false)
+    data = compute_spectrum(beyn, billiard, k0 - dk, k0 + dk + 0.05; multithreaded=true, show_progress=false)
     ks = sort(data.k[(data.k .>= k0 - dk) .& (data.k .<= k0 + dk)])
     return ks, data
 end
@@ -90,8 +90,8 @@ end
     k0, dk = 110.0, 0.05
     ks_ref, ref = _stadium_oddodd_beyn_levels(billiard, k0, dk)
     @test all(ref.ten .< HIGH_K_TENSION_TOL)
-    k, t = solve_wavenumber(solver, basis, billiard, k0, dk; multithreaded=false)
-    ks, tens = solve_spectrum(solver, basis, billiard, k0, dk; multithreaded=false)
+    k, t = solve_wavenumber(solver, basis, billiard, k0, dk; multithreaded=true)
+    ks, tens = solve_spectrum(solver, basis, billiard, k0, dk; multithreaded=true)
     @test length(ks) == length(ks_ref)
     @test all(isapprox.(sort(ks), ks_ref; atol=SPECTRUM_ATOL_VS))
     @test minimum(abs.(ks_ref .- k)) < SPECTRUM_ATOL_VS
@@ -112,8 +112,8 @@ end
     k0, dk = 110.0, 0.05
     ks_ref, ref = _stadium_oddodd_beyn_levels(billiard, k0, dk)
     @test all(ref.ten .< HIGH_K_TENSION_TOL)
-    k, t = solve_wavenumber(solver, basis, billiard, k0, dk; multithreaded=false)
-    ks, tens = solve_spectrum(solver, basis, billiard, k0, dk; multithreaded=false)
+    k, t = solve_wavenumber(solver, basis, billiard, k0, dk; multithreaded=true)
+    ks, tens = solve_spectrum(solver, basis, billiard, k0, dk; multithreaded=true)
     @test length(ks) == length(ks_ref)
     @test all(isapprox.(sort(ks), ks_ref; atol=SPECTRUM_ATOL_VS))
     @test minimum(abs.(ks_ref .- k)) < SPECTRUM_ATOL_VS

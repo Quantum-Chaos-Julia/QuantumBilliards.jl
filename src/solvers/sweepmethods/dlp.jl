@@ -428,6 +428,7 @@ symmetry orbits during matrix assembly.
 * `pts::BoundaryPoints`: Boundary discretization containing the geometry and quadrature data required by the Kress quadrature scheme.
 """
 function evaluate_points(solver::DoubleLayerPotentialSolver, billiard::Bi, k) where {Bi<:AbsBilliard}
+    _require_no_holes(solver, billiard)
     T = _bim_numeric_type(solver)
     comp = full_boundary(billiard)
     isempty(comp) && error("Boundary cannot be empty.")

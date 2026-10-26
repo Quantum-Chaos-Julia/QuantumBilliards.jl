@@ -1,15 +1,17 @@
 # Unit tests for
-#   src/solvers/sweepmethods/compositebim.jl   (CompositeBIMSolver: the composite helpers _group_boundary_by_domain_id,
-#                                               _group_is_hole, _merge_composite_points (through evaluate_points),
+#   src/solvers/sweepmethods/compositebim.jl   (CompositeBIMSolver: the composite helpers _composite_components,
+#                                               _merge_composite_points (through evaluate_points),
 #                                               _composite_offsets, _composite_component_slice, _composite_global_to_local,
 #                                               _flip_component_orientation, _combine_composite_orbits,
 #                                               _composite_symmetry_orbits, and evaluate_points, boundary_matrix_size,
 #                                               construct_matrices with _composite_fredholm_full! / _composite_fredholm_reduced!)
 #   src/solvers/taylor/bim_kernels_recurrence.jl   (_construct_matrices_multi_k_taylor for composite solvers)
 # Matrix level only: no eigen solve, no tension, no search for wavenumbers. Billiards: AnnularBilliard(0.3, 0.1) (unit circle
-# with an eccentric circular hole of radius 0.3 around (0.1, 0), no symmetry) and SinaiBilliard(1.0, 0.25) (square with a
-# central circular hole, D2 symmetry). The checks are
-#   * the grouping of curves by domain_id (first occurrence order, order inside a group) and the hole detection;
+# with an eccentric circular hole of radius 0.3 around (0.1, 0), no symmetry), SinaiBilliard(1.0, 0.25) (square with a
+# central circular hole, no symmetry registry), SquareWithinSquareBilliard(1.0) (two square holes) and the hole free
+# RectangleBilliard(1.0, 0.6) (D2 symmetry, a single component) for the symmetry reduced paths. The checks are
+#   * the decomposition of the full boundary into loops with hole flags (_composite_components), also for billiards without holes
+#     and for a hole made of two loops;
 #   * evaluate_points: component sizes from the component solvers, contiguous blocks, per-point component labels, nodes and
 #     weights of every block equal to the standalone solver on the same circle, outward normals of the domain (the hole normals
 #     point into the hole), per-component grading;
@@ -24,7 +26,7 @@
 using LinearAlgebra: norm, diag
 using SpecialFunctions: besselh
 using StaticArrays: SVector
-using QuantumBilliards: _group_boundary_by_domain_id, _group_is_hole, _composite_offsets, _composite_component_slice,
+using QuantumBilliards: _composite_components, _composite_offsets, _composite_component_slice,
                         _composite_global_to_local, _flip_component_orientation, _combine_composite_orbits,
                         _composite_symmetry_orbits, _construct_matrices_multi_k_taylor, _is_nontrivial_dlp_grading
 
@@ -74,61 +76,57 @@ function cb_cross_slp(pts, k, i, j)
     return pts.ws[j] * im / 2 * besselh(0, 1, k * r) * norm(pts.tangent[j])
 end
 
-@testset "_group_boundary_by_domain_id" begin
-    annulus = AnnularBilliard(0.3, 0.1)
-    sinai = SinaiBilliard(1.0, 0.25)
-
-    @testset "annulus: outer circle and hole" begin
-        comp = full_boundary(annulus)
-        groups = _group_boundary_by_domain_id(comp)
-        @test length(groups) == 2
-        @test length.(groups) == [1, 1]
-        @test [g[1].domain_id for g in groups] == [1, 2]
-        @test groups[1][1] === comp[1] && groups[2][1] === comp[2]
-    end
-
-    @testset "Sinai: the curves of a component keep their order" begin
-        comp = full_boundary(sinai)
-        groups = _group_boundary_by_domain_id(comp)
-        @test length.(groups) == [8, 4]
-        @test groups[1] == [c for c in comp if c.domain_id == 1]
-        @test groups[2] == [c for c in comp if c.domain_id == 2]
-        @test sum(c.length for c in groups[2]) ≈ 2π * 0.25              # the hole is a full circle of radius 0.25
-        @test sum(c.length for c in groups[1]) ≈ 8.0                    # the outer boundary is the square of side 2
-    end
-
-    @testset "fundamental domain of the Sinai billiard" begin
-        groups = _group_boundary_by_domain_id(get_boundary_curves(sinai))
-        @test length.(groups) == [2, 1]
-    end
-
-    @testset "components are ordered by first occurrence" begin
-        groups = _group_boundary_by_domain_id(reverse(full_boundary(annulus)))
-        @test [g[1].domain_id for g in groups] == [2, 1]
-    end
+# Minimal billiard holding a MultiplyConnectedDomain: an outer square with one hole made of two disjoint square loops.
+struct cb_TwoLoopHoleBilliard <: AbsBilliard
+    fundamental_domain::MultiplyConnectedDomain{Float64}
+    symmetries::SymmetryRegistry
 end
 
-@testset "_group_is_hole" begin
-    annulus = AnnularBilliard(0.3, 0.1)
-    sinai = SinaiBilliard(1.0, 0.25)
+function cb_rect_domain(x0, y0, x1, y1, id)
+    p = (SVector(x0, y0), SVector(x1, y0), SVector(x1, y1), SVector(x0, y1))
+    curves = AbsCurve[LineSegment(p[k], p[mod1(k + 1, 4)]; domain_id=id, segment_id=k) for k in 1:4]
+    return SimpleDomain{Float64}(curves, collect(p), id)
+end
 
-    @testset "orientation +1 is an outer boundary, -1 a hole" begin
-        groups = _group_boundary_by_domain_id(get_boundary_curves(annulus))
-        @test _group_is_hole(groups[1]) == false
-        @test _group_is_hole(groups[2]) == true
+function cb_two_loop_hole_billiard()
+    outer = cb_rect_domain(-1.0, -1.0, 4.0, 2.0, 1)
+    hole = DomainHole(CompositeDomain(AbsSimpleDomain[cb_rect_domain(0.0, 0.0, 1.0, 1.0, 2), cb_rect_domain(2.0, 0.0, 3.0, 1.0, 3)]))
+    return cb_TwoLoopHoleBilliard(MultiplyConnectedDomain(outer, [hole], 1), register_symmetries())
+end
+
+@testset "_composite_components" begin
+    @testset "annulus: outer circle and hole" begin
+        annulus = AnnularBilliard(0.3, 0.1)
+        comps, is_hole = _composite_components(annulus)
+        @test length(comps) == 2 && is_hole == [false, true]
+        @test length.(comps) == [1, 1]
+        @test sum(c.length for c in comps[1]) ≈ 2π
+        @test sum(c.length for c in comps[2]) ≈ 2π * 0.3
     end
 
-    @testset "Sinai fundamental boundary" begin
-        groups = _group_boundary_by_domain_id(get_boundary_curves(sinai))
-        @test _group_is_hole(groups[1]) == false
-        @test _group_is_hole(groups[2]) == true
+    @testset "Sinai: square outer component and one circular hole component" begin
+        comps, is_hole = _composite_components(SinaiBilliard(1.0, 0.25))
+        @test length(comps) == 2 && is_hole == [false, true]
+        @test sum(c.length for c in comps[1]) ≈ 8.0                     # the outer boundary is the square of side 2
+        @test sum(c.length for c in comps[2]) ≈ 2π * 0.25               # the hole is a full circle of radius 0.25
     end
 
-    @testset "invalid groups are rejected" begin
-        outer, hole = get_boundary_curves(annulus)
-        @test_throws ArgumentError _group_is_hole(AbsCurve[outer, hole])                 # mixed orientations in one component
-        bad = CircleSegment(1.0, 2π, 0.0, (0.0, 0.0); orientation=2)
-        @test_throws ArgumentError _group_is_hole(AbsCurve[bad])                         # orientation must be +-1
+    @testset "SquareWithinSquare: one component per hole" begin
+        comps, is_hole = _composite_components(SquareWithinSquareBilliard(1.0))
+        @test length(comps) == 3 && is_hole == [false, true, true]
+        @test sum(c.length for c in comps[1]) ≈ 8.0
+        @test all(sum(c.length for c in comps[a]) ≈ 4 * 0.25 for a in 2:3)
+    end
+
+    @testset "billiard without holes: the full boundary is a single outer component" begin
+        rect = RectangleBilliard(1.0, 0.6)
+        comps, is_hole = _composite_components(rect)
+        @test length(comps) == 1 && is_hole == [false]
+        @test comps[1] == full_boundary(rect)
+    end
+
+    @testset "a hole must be a single loop" begin
+        @test_throws ArgumentError _composite_components(cb_two_loop_hole_billiard())
     end
 end
 
@@ -224,7 +222,8 @@ end
         bad.w_dm[5] = 2.0
         bad.w_dm[6] = 1.0
         @test_throws ErrorException _composite_offsets(bad, 2)           # labels are not contiguous
-        raw = evaluate_points(DoubleLayerPotentialSolver(5.0, annulus; min_pts=32), annulus, 3.0)
+        circle = CircleBilliard(1.0)
+        raw = evaluate_points(DoubleLayerPotentialSolver(5.0, circle; min_pts=32), circle, 3.0)
         @test_throws ErrorException _composite_offsets(raw, 2)           # no component bookkeeping at all
     end
 
@@ -316,23 +315,21 @@ end
     @test all(isapprox(A[i, j], -(cb_cross_dlp(pts, k, i, j) + im * k * cb_cross_slp(pts, k, i, j)); atol=1e-13) for i in rng2, j in rng1)
 end
 
-@testset "reduced matrix equals orbit-summed full matrix: Sinai billiard, XY reflection" begin
-    sinai = SinaiBilliard(1.0, 0.25)
+@testset "reduced matrix equals orbit-summed full matrix: rectangle, XY reflection" begin
+    rect = RectangleBilliard(1.0, 0.6)
     k = 3.0
-    full = CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, sinai; min_pts=32), CombinedFieldIntegralEquationSolver(5.0, sinai; min_pts=24))
-    red = CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, sinai; min_pts=32, symmetry=XYAxisReflection(), sym_characters=(-1, 1)),
-                             CombinedFieldIntegralEquationSolver(5.0, sinai; min_pts=24, symmetry=XYAxisReflection(), sym_characters=(-1, 1)))
-    pts = evaluate_points(red, sinai, k)
-    offs = _composite_offsets(pts, 2)
-    locals = [symmetry_index_orbits(Float64, sinai, offs[a+1] - offs[a], XYAxisReflection(), -1.0 + 0im, 1.0 + 0im) for a in 1:2]
+    full = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, rect; min_pts=32))
+    red = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, rect; min_pts=32, symmetry=XYAxisReflection(), sym_characters=(-1, 1)))
+    pts = evaluate_points(red, rect, k)
+    offs = _composite_offsets(pts, 1)
+    locals = [symmetry_index_orbits(Float64, rect, offs[2] - offs[1], XYAxisReflection(), -1.0 + 0im, 1.0 + 0im)]
     A_red = construct_matrices(red, pts, k)
     maps = (x -> x, x -> SVector(x[1], -x[2]), x -> SVector(-x[1], x[2]), x -> -x)
 
-    @test evaluate_points(full, sinai, k).xy == pts.xy                  # the reduced solver samples the whole boundary
+    @test evaluate_points(full, rect, k).xy == pts.xy                   # the reduced solver samples the whole boundary
     @test boundary_matrix_size(red, pts) == sum(fundamental_size, locals) == length(pts) ÷ 4
     @test size(A_red) == (length(pts) ÷ 4, length(pts) ÷ 4)
     @test cb_orbit_matches(pts.xy[offs[1]:offs[2]-1], locals[1], maps)
-    @test cb_orbit_matches(pts.xy[offs[2]:offs[3]-1], locals[2], maps)
     @test isapprox(A_red, cb_orbit_sum(construct_matrices(full, pts, k), offs, locals); atol=1e-12, rtol=0)
 
     @testset "_composite_symmetry_orbits and _combine_composite_orbits" begin
@@ -343,23 +340,27 @@ end
         @test orbits.orbit_of == combined.orbit_of
         @test orbits.phase == combined.phase
         @test orbits.fund_to_full == combined.fund_to_full && orbits.fund_to_scale == combined.fund_to_scale
-        @test orbits.orbit_of[offs[2]:end] == locals[2].orbit_of .+ fundamental_size(locals[1])      # blocks are shifted, not mixed
-        @test orbits.fundamental_indices[fundamental_size(locals[1])+1:end] == locals[2].fundamental_indices .+ (offs[2] - 1)
+    end
+
+    @testset "_combine_composite_orbits shifts the blocks of several components" begin
+        o = locals[1]
+        combined = _combine_composite_orbits(Float64, [o, o])
+        @test full_size(combined) == 2 * full_size(o) && fundamental_size(combined) == 2 * fundamental_size(o)
+        @test combined.orbit_of[full_size(o)+1:end] == o.orbit_of .+ fundamental_size(o)            # blocks are shifted, not mixed
+        @test combined.fundamental_indices[fundamental_size(o)+1:end] == o.fundamental_indices .+ full_size(o)
     end
 end
 
-@testset "reduced matrix equals orbit-summed full matrix: Sinai billiard, shared CompositeReflection, corner graded outer component" begin
-    sinai = SinaiBilliard(1.0, 0.25)
+@testset "reduced matrix equals orbit-summed full matrix: rectangle, inferred CompositeReflection, corner graded component" begin
+    rect = RectangleBilliard(1.0, 0.6)
     k = 3.0
-    inferred = DoubleLayerPotentialSolver(5.0, sinai; sym_characters=(1, -1))      # only used to obtain the inferred (Y, X) symmetry
+    inferred = DoubleLayerPotentialSolver(5.0, rect; sym_characters=(1, -1))       # only used to obtain the inferred (Y, X) symmetry
     sym, chars = inferred.symmetry, inferred.sym_characters
-    full = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, sinai; min_pts=64, grading=GlobalCornerGrading()),
-                              CombinedFieldIntegralEquationSolver(5.0, sinai; min_pts=24))
-    red = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, sinai; min_pts=64, grading=GlobalCornerGrading(), symmetry=sym, sym_characters=chars),
-                             CombinedFieldIntegralEquationSolver(5.0, sinai; min_pts=24, symmetry=sym, sym_characters=chars))
-    pts = evaluate_points(red, sinai, k)
-    offs = _composite_offsets(pts, 2)
-    locals = [symmetry_index_orbits(Float64, sinai, offs[a+1] - offs[a], CompositeReflection([YAxisReflection(), XAxisReflection()]), ComplexF64[1, -1]) for a in 1:2]
+    full = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, rect; min_pts=64, grading=GlobalCornerGrading()))
+    red = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, rect; min_pts=64, grading=GlobalCornerGrading(), symmetry=sym, sym_characters=chars))
+    pts = evaluate_points(red, rect, k)
+    offs = _composite_offsets(pts, 1)
+    locals = [symmetry_index_orbits(Float64, rect, offs[2] - offs[1], CompositeReflection([YAxisReflection(), XAxisReflection()]), ComplexF64[1, -1])]
 
     @test red.symmetry isa CompositeReflection && red.symmetry === sym
     @test _is_nontrivial_dlp_grading(_composite_component_slice(pts, offs[1]:offs[2]-1, 1))
@@ -370,9 +371,9 @@ end
 # Component solvers that each infer a multi-generator reflection symmetry from `sym_characters` hold two distinct but equal
 # CompositeReflection objects; BilliardGeometry defines `==` for CompositeReflection, so CompositeBIMSolver accepts them.
 @testset "CompositeBIMSolver accepts separately inferred, equal CompositeReflection symmetries" begin
-    sinai = SinaiBilliard(1.0, 0.25)
-    a = DoubleLayerPotentialSolver(5.0, sinai; sym_characters=(1, -1))
-    b = DoubleLayerPotentialSolver(5.0, sinai; sym_characters=(1, -1))
+    rect = RectangleBilliard(1.0, 0.6)
+    a = DoubleLayerPotentialSolver(5.0, rect; sym_characters=(1, -1))
+    b = DoubleLayerPotentialSolver(5.0, rect; sym_characters=(1, -1))
     @test a.sym_characters == b.sym_characters
     @test a.symmetry.reflections == b.symmetry.reflections
     @test a.symmetry == b.symmetry
@@ -399,11 +400,10 @@ end
         @test norm(T0[1] - construct_matrices(solver, pts, ks[1])) > 1e-4           # the truncation is visible
     end
 
-    @testset "Sinai billiard, XY reflection reduced" begin
-        sinai = SinaiBilliard(1.0, 0.25)
-        solver = CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, sinai; min_pts=32, symmetry=XYAxisReflection(), sym_characters=(-1, 1)),
-                                    CombinedFieldIntegralEquationSolver(5.0, sinai; min_pts=24, symmetry=XYAxisReflection(), sym_characters=(-1, 1)))
-        pts = evaluate_points(solver, sinai, k0)
+    @testset "rectangle, XY reflection reduced" begin
+        rect = RectangleBilliard(1.0, 0.6)
+        solver = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, rect; min_pts=32, symmetry=XYAxisReflection(), sym_characters=(-1, 1)))
+        pts = evaluate_points(solver, rect, k0)
         m = boundary_matrix_size(solver, pts)
         T = _construct_matrices_multi_k_taylor(solver, pts, k0, ks, 10)
         @test all(M -> size(M) == (m, m), T)
@@ -413,7 +413,7 @@ end
 end
 
 @testset "boundary_matrix_size" begin
-    sinai = SinaiBilliard(1.0, 0.25)
+    rect = RectangleBilliard(1.0, 0.6)
     annulus = AnnularBilliard(0.3, 0.1)
     k = 3.0
 
@@ -424,11 +424,9 @@ end
     end
 
     @testset "XY reflection: a quarter of every component" begin
-        solver = CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, sinai; min_pts=32, symmetry=XYAxisReflection(), sym_characters=(1, 1)),
-                                    DoubleLayerPotentialSolver(5.0, sinai; min_pts=24, symmetry=XYAxisReflection(), sym_characters=(1, 1)))
-        pts = evaluate_points(solver, sinai, k)
-        offs = _composite_offsets(pts, 2)
-        @test boundary_matrix_size(solver, pts) == (offs[2] - 1) ÷ 4 + (offs[3] - offs[2]) ÷ 4
+        solver = CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, rect; min_pts=32, symmetry=XYAxisReflection(), sym_characters=(1, 1)))
+        pts = evaluate_points(solver, rect, k)
+        @test boundary_matrix_size(solver, pts) == length(pts) ÷ 4
         @test size(construct_matrices(solver, pts, k)) == (boundary_matrix_size(solver, pts), boundary_matrix_size(solver, pts))
     end
 end
@@ -444,11 +442,10 @@ end
         @test construct_matrices(solver, pts, k; multithreaded=true) == construct_matrices(solver, pts, k; multithreaded=false)
     end
 
-    @testset "Sinai billiard, XY reflection reduced matrix" begin
-        sinai = SinaiBilliard(1.0, 0.25)
-        solver = CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, sinai; min_pts=64, symmetry=XYAxisReflection(), sym_characters=(-1, 1)),
-                                    CombinedFieldIntegralEquationSolver(5.0, sinai; min_pts=64, symmetry=XYAxisReflection(), sym_characters=(-1, 1)))
-        pts = evaluate_points(solver, sinai, k)
+    @testset "rectangle, XY reflection reduced matrix" begin
+        rect = RectangleBilliard(1.0, 0.6)
+        solver = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, rect; min_pts=128, symmetry=XYAxisReflection(), sym_characters=(-1, 1)))
+        pts = evaluate_points(solver, rect, k)
         @test boundary_matrix_size(solver, pts) >= 32                   # large enough for the threaded loop to be used
         @test construct_matrices(solver, pts, k; multithreaded=true) == construct_matrices(solver, pts, k; multithreaded=false)
     end
@@ -471,7 +468,7 @@ end
 
     @testset "construct_matrices requires the points of evaluate_points(::CompositeBIMSolver, ...)" begin
         solver = CompositeBIMSolver(dlp, cfie)
-        @test_throws ErrorException construct_matrices(solver, evaluate_points(dlp, annulus, k), k)
+        @test_throws ErrorException construct_matrices(solver, evaluate_points(dlp, CircleBilliard(1.0), k), k)
         @test_throws ErrorException construct_matrices(CompositeBIMSolver(dlp, cfie, cfie), evaluate_points(solver, annulus, k), k)
     end
 
@@ -480,8 +477,9 @@ end
         pts = evaluate_points(solver, annulus, k)
         @test_throws ArgumentError _composite_symmetry_orbits(Float64, solver, pts)              # no symmetry active
         @test_throws ArgumentError _combine_composite_orbits(Float64, SymmetryOrbitMap{Float64}[])
-        o2 = symmetry_index_orbits(Float64, sinai, 8, YAxisReflection(), 1.0 + 0im)
-        o4 = symmetry_index_orbits(Float64, sinai, 8, XYAxisReflection(), 1.0 + 0im, 1.0 + 0im)
+        rect = RectangleBilliard(1.0, 0.6)
+        o2 = symmetry_index_orbits(Float64, rect, 8, YAxisReflection(), 1.0 + 0im)
+        o4 = symmetry_index_orbits(Float64, rect, 8, XYAxisReflection(), 1.0 + 0im, 1.0 + 0im)
         @test_throws ArgumentError _combine_composite_orbits(Float64, [o2, o4])                  # different orbit sizes
         @test fundamental_size(_combine_composite_orbits(Float64, [o2, o2])) == 8
     end

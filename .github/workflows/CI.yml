@@ -35,5 +35,8 @@ jobs:
           import Pkg
           Pkg.develop(url="https://github.com/Quantum-Chaos-Julia/BilliardGeometry.jl.git")
         shell: julia --color=yes --project=. {0}
+      - name: Point test environment at the BilliardGeometry.jl git repository
+        run: |
+          sed -i 's|^BilliardGeometry = {path = .*}|BilliardGeometry = {url = "https://github.com/Quantum-Chaos-Julia/BilliardGeometry.jl.git"}|' test/Project.toml
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1

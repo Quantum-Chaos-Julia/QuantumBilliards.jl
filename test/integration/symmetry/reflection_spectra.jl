@@ -1,5 +1,5 @@
 # Integration tests for reflection-symmetry sectors (src/states/symmetry/symmetrysector.jl, the `sym_characters` keyword of
-# the BIM kernels in src/solvers/sweepmethods/{cfie,compositebim}.jl) through Beyn `compute_spectrum` and `solve_wavenumber`.
+# the BIM kernels in src/solvers/sweepmethods/cfie.jl) through Beyn `compute_spectrum` and `solve_wavenumber`.
 #
 # `sym_characters` selects the irrep per generator of `BilliardGeometry.get_symmetries(billiard)`, in that order. All D2
 # billiards used here have the generators `(YAxisReflection, XAxisReflection)`, so `sym_characters = (chi_x, chi_y)` with
@@ -9,14 +9,14 @@
 # The unreduced and the sector spectra are computed once and cached in the dictionary below.
 #
 # Level tolerances: Rectangle and Circle against analytic levels use SPECTRUM_ATOL_BIM. Reduced and unreduced discretizations
-# of a graded kernel carry different quadrature errors, observed up to 1.1e-10 (Stadium) and 1.7e-6 (Sinai, composite,
-# GlobalCornerGrading(kressq=2)), so the union checks of Stadium and Sinai use SPECTRUM_ATOL_BASIS.
+# of a graded kernel carry different quadrature errors, observed up to 1.1e-10 (Stadium), so the union check of the Stadium
+# uses SPECTRUM_ATOL_BASIS.
 
 const REFLECTION_SPECTRA_CACHE = Dict{Tuple,Any}()
 
 # Beyn solver with the cheap settings of verginisaraceno_spectra.jl (calibrated: tensions below 1e-9 for CFIE kernels at these ppw).
 _refl_beyn_light(kernel) = BeynSolver(kernel; m=6, nq=16, r=16, Rmax=0.5, svd_tol=1e-10, res_tol=2e-5,
-    taylor_degree=10, use_chebyshev=false, imag_k_check=false, eigenvectors=false)
+    taylor_degree=6, use_chebyshev=false, imag_k_check=false, eigenvectors=false)
 
 # Rectangle (RectangleBilliard(1.0, 0.7), the full 2.0 x 1.4 rectangle) Beyn CFIE spectrum in [3, 10], default settings of
 # beyn_spectra.jl. `chars = ()` is the unreduced spectrum.
@@ -25,7 +25,7 @@ function _refl_rectangle_spectrum(chars::Tuple)
         billiard = RectangleBilliard(1.0, 0.7)
         kernel = CombinedFieldIntegralEquationSolver(10.0, billiard; grading=GlobalCornerGrading(), sym_characters=chars)
         solver = BeynSolver(kernel; use_chebyshev=false, eigenvectors=false)
-        compute_spectrum(solver, billiard, 3.0, 10.0; multithreaded=false, show_progress=false)
+        compute_spectrum(solver, billiard, 3.0, 10.0; multithreaded=true, show_progress=false)
     end
 end
 
@@ -34,17 +34,7 @@ function _refl_stadium_spectrum(chars::Tuple)
     return get!(REFLECTION_SPECTRA_CACHE, (:stadium, chars)) do
         billiard = StadiumBilliard(0.5)
         kernel = CombinedFieldIntegralEquationSolver(8.0, billiard; grading=GlobalCornerGrading(kressq=2), sym_characters=chars)
-        compute_spectrum(_refl_beyn_light(kernel), billiard, 3.0, 7.0; ten_tol=nothing, multithreaded=false, show_progress=false)
-    end
-end
-
-# Sinai(1.0, 0.25) composite Beyn CFIE spectrum in [3, 8] (one CFIE component per boundary domain, same sector on each).
-function _refl_sinai_spectrum(chars::Tuple)
-    return get!(REFLECTION_SPECTRA_CACHE, (:sinai, chars)) do
-        billiard = SinaiBilliard(1.0, 0.25)
-        ncomponents = length(QuantumBilliards._group_boundary_by_domain_id(full_boundary(billiard)))
-        kernel = CompositeBIMSolver((CombinedFieldIntegralEquationSolver(10.0, billiard; grading=GlobalCornerGrading(kressq=2), min_pts=64, sym_characters=chars) for _ in 1:ncomponents)...)
-        compute_spectrum(_refl_beyn_light(kernel), billiard, 3.0, 8.0; ten_tol=nothing, multithreaded=false, show_progress=false)
+        compute_spectrum(_refl_beyn_light(kernel), billiard, 3.0, 7.0; ten_tol=nothing, multithreaded=true, show_progress=false)
     end
 end
 
@@ -131,7 +121,7 @@ end
     billiard = CircleBilliard(1.0)
     solver = CombinedFieldIntegralEquationSolver(10.0, billiard; grading=SmoothPeriodicGrading(), sym_characters=(1, 1))
     k_ref = circle_spectrum(1.0, 2.0, 3.0)[1]
-    k, t = solve_wavenumber(solver, billiard, 2.4, 0.2; multithreaded=false)
+    k, t = solve_wavenumber(solver, billiard, 2.4, 0.2; multithreaded=true)
     @test isapprox(k, k_ref; atol=SPECTRUM_ATOL_BIM)
     @test t < TENSION_TOL_BIM
 end
@@ -147,31 +137,7 @@ end
     billiard = CircleBilliard(1.0)
     solver = CombinedFieldIntegralEquationSolver(10.0, billiard; grading=SmoothPeriodicGrading(), sym_characters=(-1, -1))
     k_ref = circle_spectrum(1.0, 5.0, 5.3)[1]
-    k, t = solve_wavenumber(solver, billiard, 5.13, 0.2; multithreaded=false)
+    k, t = solve_wavenumber(solver, billiard, 5.13, 0.2; multithreaded=true)
     @test isapprox(k, k_ref; atol=SPECTRUM_ATOL_BIM)
     @test t < TENSION_TOL_BIM
-end
-
-# solver: Beyn contour integral (composite, one CFIE component per boundary domain)
-# kernel/basis: CFIE, GlobalCornerGrading(kressq=2), min_pts=64, ppw=10, cheap Beyn settings
-# billiard: Sinai (SinaiBilliard(1.0, 0.25)), square with a circular hole; the Annular billiard registers no reflection symmetry
-# symmetry: D2 sectors against None
-# reference: cross-method, unreduced composite Beyn spectrum of the same kernel; window [3, 8] holds 13 levels
-# functions to test: compute_spectrum
-@testset "Beyn (composite CFIE) - Sinai - reflection sectors vs unreduced spectrum" begin
-    full_data = _refl_sinai_spectrum(())
-    even_even = _refl_sinai_spectrum((1, 1))
-    sectors = (even_even, _refl_sinai_spectrum((-1, -1)), _refl_sinai_spectrum((1, -1)), _refl_sinai_spectrum((-1, 1)))
-    full = sort(real.(full_data.k))
-    union_ks = sort(vcat((real.(d.k) for d in sectors)...))
-    @test length(union_ks) == length(full)
-    @test all(isapprox.(union_ks, full; atol=SPECTRUM_ATOL_BASIS))
-    # the square symmetry (C4v) pairs the even-odd and odd-even levels into degenerate doublets
-    @test length(sectors[3].k) == length(sectors[4].k)
-    @test all(isapprox.(sort(real.(sectors[3].k)), sort(real.(sectors[4].k)); atol=SPECTRUM_ATOL_BASIS))
-    # the even-even sector alone: a subset of the unreduced levels
-    @test all(k -> minimum(abs.(full .- k)) < SPECTRUM_ATOL_BASIS, real.(even_even.k))
-    @test length(even_even.k) < length(full)
-    @test all(full_data.ten .< HIGH_K_TENSION_TOL)
-    @test all(d -> all(d.ten .< HIGH_K_TENSION_TOL), sectors)
 end

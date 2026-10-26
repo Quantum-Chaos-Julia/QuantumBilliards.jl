@@ -53,6 +53,10 @@ end
 
 
 @inline function _is_inside_full(billiard::Bi, pt::SVector{2,T}) where {T<:Real,Bi<:AbsBilliard}
+    return _is_inside_full(billiard.fundamental_domain, billiard, pt)
+end
+
+@inline function _is_inside_full(::AbsDomain, billiard::AbsBilliard, pt::SVector{2,T}) where {T<:Real}
     BilliardGeometry.is_inside(billiard, pt) && return true
     @inbounds for sym in billiard.symmetries
         BilliardGeometry.is_inside(billiard, BilliardGeometry.apply_symmetry(sym, pt)) && return true
@@ -60,9 +64,21 @@ end
     return false
 end
 
+# Holes are specified in the full physical frame, so they are tested at `pt`
+# itself while the outer region is tested on `pt` and its symmetry images.
+function _is_inside_full(domain::AbsMultiplyConnectedDomain, billiard::AbsBilliard, pt::SVector{2,T}) where {T<:Real}
+    any(BilliardGeometry.is_inside(h, pt) for h in domain.holes) && return false
+    in_outer(p) = any(all(BilliardGeometry.is_inside(sd, p)) for sd in domain.subdomains)
+    in_outer(pt) && return true
+    @inbounds for sym in billiard.symmetries
+        in_outer(BilliardGeometry.apply_symmetry(sym, pt)) && return true
+    end
+    return false
+end
+
 
 function _wavefunction_grid(k::T, billiard::Bi, b::T; inside_only::Bool = true, fundamental_domain::Bool = true) where {T<:Real,Bi<:AbsBilliard}
-    curves = fundamental_domain ? get_boundary_curves(billiard) : full_boundary(billiard)
+    curves = fundamental_domain ? get_outer_boundary_curves(billiard) : full_boundary(billiard)
     xlim, ylim = boundary_limits(curves); dx = T(2pi) / (b * k)
     nx = max(512, ceil(Int, (xlim[2] - xlim[1]) / dx) + 1); ny = max(512, ceil(Int, (ylim[2] - ylim[1]) / dx) + 1)
     xgrid = collect(range(T(xlim[1]), T(xlim[2]), length = nx)); ygrid = collect(range(T(ylim[1]), T(ylim[2]), length = ny))

@@ -12,7 +12,7 @@
     billiard = RectangleBilliard(1.0, 0.7)
     solver = DoubleLayerPotentialSolver(10.0, billiard; grading=GlobalCornerGrading())
     k_ref = rectangle_spectrum(2.0, 1.4, 0.0, 4.0)[1]
-    k, t = solve_wavenumber(solver, billiard, k_ref + 0.03, 0.1; multithreaded=false)
+    k, t = solve_wavenumber(solver, billiard, k_ref + 0.03, 0.1; multithreaded=true)
     @test isapprox(k, k_ref; atol=SPECTRUM_ATOL_BIM)
     @test t < TENSION_TOL_BIM
 end
@@ -27,7 +27,7 @@ end
     billiard = CircleBilliard(1.0)
     solver = DoubleLayerPotentialSolver(10.0, billiard; grading=SmoothPeriodicGrading())
     k_ref = circle_spectrum(1.0, 5.4, 5.6)[1]
-    k, t = solve_wavenumber(solver, billiard, 5.52, 0.2; multithreaded=false)
+    k, t = solve_wavenumber(solver, billiard, 5.52, 0.2; multithreaded=true)
     @test isapprox(k, k_ref; atol=SPECTRUM_ATOL_BIM)
     @test t < TENSION_TOL_BIM
 end
@@ -43,7 +43,7 @@ end
     billiard = QuantumBilliards.make_veech_right_triangle(5)
     solver = DoubleLayerPotentialSolver(5.0, billiard; grading=GlobalCornerGrading())
     k_ref = 6.065090986269762
-    k, t = solve_wavenumber(solver, billiard, 6.1, 0.1; multithreaded=false)
+    k, t = solve_wavenumber(solver, billiard, 6.1, 0.1; multithreaded=true)
     @test isapprox(k, k_ref; atol=SPECTRUM_ATOL_BIM)
     @test t < TENSION_TOL_BIM
 end

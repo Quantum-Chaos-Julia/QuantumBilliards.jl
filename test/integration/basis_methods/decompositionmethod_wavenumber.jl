@@ -14,7 +14,7 @@
     basis = RealPlaneWaves(20; sym_x=1, sym_y=1)
     solver = DecompositionMethodSolver(2.0, 20.0; min_dim=20, min_pts=100)
     k_ref = rectangle_spectrum(2.0, 1.4, 0.0, 4.0)[1]
-    k, t = solve_wavenumber(solver, basis, billiard, k_ref + 0.05, 0.1; multithreaded=false)
+    k, t = solve_wavenumber(solver, basis, billiard, k_ref + 0.05, 0.1; multithreaded=true)
     @test isapprox(k, k_ref; atol=SPECTRUM_ATOL_BASIS)
     @test t < TENSION_TOL_BASIS
 end
@@ -29,7 +29,7 @@ end
     billiard, basis = QuantumBilliards.make_triangle_and_basis(pi / 2, 1.0)
     solver = DecompositionMethodSolver(2.0, 20.0; min_dim=12, min_pts=64)
     k_ref = pi * sqrt(5)
-    k, t = solve_wavenumber(solver, basis, billiard, k_ref, 0.04; multithreaded=false)
+    k, t = solve_wavenumber(solver, basis, billiard, k_ref, 0.04; multithreaded=true)
     @test isapprox(k, k_ref; atol=SPECTRUM_ATOL_BASIS)
     @test t < TENSION_TOL_BASIS
 end
@@ -45,7 +45,7 @@ end
     basis = FourierBessel(20; sym_x=1, sym_y=1)
     solver = DecompositionMethodSolver(2.0, 20.0; min_dim=20, min_pts=100)
     k_ref = circle_spectrum(1.0, 2.0, 3.0)[1]
-    k, t = solve_wavenumber(solver, basis, billiard, 2.45, 0.1; multithreaded=false)
+    k, t = solve_wavenumber(solver, basis, billiard, 2.45, 0.1; multithreaded=true)
     @test isapprox(k, k_ref; atol=SPECTRUM_ATOL_BASIS)
     @test t < TENSION_TOL_BASIS
 end

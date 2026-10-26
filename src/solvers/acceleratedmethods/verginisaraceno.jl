@@ -154,6 +154,7 @@ that the curve parameter is proportional to arclength.
 * `pts::BoundaryPoints`: Boundary points with `xy` and `w_vs` populated.
 """
 function evaluate_points(solver::VerginiSaracenoSolver, billiard::Bi, k) where {Bi<:AbsBilliard}
+    _require_no_holes(solver, billiard)
     bs, samplers = adjust_scaling_and_samplers(solver, billiard)
     curves = get_boundary_curves(billiard)
     T = eltype(solver.pts_scaling_factor)
