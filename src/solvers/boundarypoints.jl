@@ -305,6 +305,7 @@ function boundary_coords(billiard::Bi, samplers::Vector{AbsSampler}, Ns::Vector{
         crv = curves[i]; t, dt = sample_points(samplers[i], Ns[i])
         xy = curve(crv, t); ds = norm.(tangent(crv, t)) .* dt
         normal = domain_gradient_vector(crv, xy); normal .= normal ./ norm.(normal)
+        is_hole_curve(billiard, crv) && (normal .*= -1)
         xy_all[i] = xy; normal_all[i] = normal; s_all[i] = arc_length(crv, t) .+ L0; ds_all[i] = ds
         L0 += crv.length
     end
@@ -337,6 +338,7 @@ function boundary_coords(billiard::Bi, fourier_sampler::FourierNodes, M) where {
         crv = curves[i]; L = crv.length; t = ts[i]; dt = dts[i]
         xy = curve(crv, t); ds = norm.(tangent(crv, t)) .* dt
         normal = domain_gradient_vector(crv, xy); normal .= normal ./ norm.(normal)
+        is_hole_curve(billiard, crv) && (normal .*= -1)
         xy_all[i] = xy; normal_all[i] = normal; s_all[i] = arc_length(crv, t) .+ L0; ds_all[i] = ds
         L0 += L
     end
@@ -377,19 +379,26 @@ end
 """
     get_boundary_curves_with_ignored(domain::D) where D<:AbsMultiplyConnectedDomain → boundary::Vector{AbsCurve}
 
-Returns the connected boundary curves of a multiply connected domain (e.g.
+Returns the boundary curves of a multiply connected domain (e.g.
 [`AnnularBilliard`](@ref)'s fundamental domain), including both
-`SpecularReflection` and `QuantumSolverIgnore` curves. See
+`SpecularReflection` and `QuantumSolverIgnore` curves: the connected outer
+curves in the fundamental frame, followed by the connected curves of every
+hole domain in the full physical frame. See
 [`get_boundary_curves_with_ignored`](@ref) for details.
 
 ## Arguments
 * `domain`: A multiply connected domain whose boundary curves are collected.
 
 ## Returns
-* `boundary`: The connected vector of boundary curves.
+* `boundary`: Outer curves followed by hole curves.
 """
 function get_boundary_curves_with_ignored(domain::D) where D<:AbsMultiplyConnectedDomain
-    return _connected_physical_or_ignored_curves(domain.boundary)
+    outer = AbsCurve[crv for sd in domain.subdomains for crv in sd.boundary]
+    boundary = _connected_physical_or_ignored_curves(outer)
+    for h in domain.holes, hd in get_all_domains(h)
+        append!(boundary, _connected_physical_or_ignored_curves(hd.boundary))
+    end
+    return boundary
 end
 
 
@@ -429,7 +438,34 @@ including both `SpecularReflection` and `QuantumSolverIgnore` curves. See
 * `boundary`: The connected vector of boundary curves.
 """
 function get_boundary_curves_with_ignored(billiard::B) where B<:AbsBilliard
+    _require_fundamental_frame_support(billiard)
     return get_boundary_curves_with_ignored(billiard.fundamental_domain)
+end
+
+"""
+    _require_fundamental_frame_support(billiard::AbsBilliard) → nothing
+
+Throws an `ArgumentError` for a billiard with holes and a nonempty symmetry
+registry. Holes are specified in the full physical frame and are not clipped
+to the fundamental domain, so fundamental-domain solvers and symmetry-reduced
+boundary-integral solvers cannot represent such a billiard.
+"""
+function _require_fundamental_frame_support(billiard::AbsBilliard)
+    (isempty(billiard.symmetries) || genus(billiard) == 0) && return nothing
+    throw(ArgumentError("billiard has holes and a nonempty symmetry registry: holes live in the full physical frame and are not clipped to the fundamental domain, so only unreduced (full-boundary) solvers are supported"))
+end
+
+"""
+    _require_no_holes(solver::AbsSolver, billiard::AbsBilliard) → nothing
+
+Throws an `ArgumentError` when `billiard` has holes. Only
+[`CompositeBIMSolver`](@ref) (and the accelerated solvers wrapping it as their
+kernel) treats every closed boundary loop as its own component; every other
+solver discretizes the boundary as one closed curve and cannot represent holes.
+"""
+function _require_no_holes(solver::AbsSolver, billiard::AbsBilliard)
+    genus(billiard) == 0 && return nothing
+    throw(ArgumentError("$(nameof(typeof(solver))) does not support billiards with holes; use a CompositeBIMSolver (one component solver per boundary loop)"))
 end
 
 """

@@ -59,10 +59,17 @@ quadrature. A source component using DLP contributes a double-layer
 cross-component kernel, whereas a source component using CFIE contributes the
 combined `D(k)+ikS(k)` kernel.
 
-Hole components are identified from the orientation of their fundamental-boundary curves. 
-They are discretized in the canonical boundary ordering and their tangent orientation is 
-subsequently flipped, without changing node ordering, so that the resulting normals 
-follow the physical outward-normal convention.
+Hole components are identified from the domain structure: the hole loops of a
+[`MultiplyConnectedDomain`](@ref) follow the outer boundary, one component per
+hole object (each hole must be a single closed loop). Billiards without a
+`MultiplyConnectedDomain` (e.g. [`SinaiBilliard`](@ref)) keep the legacy
+grouping of the full boundary by curve `domain_id`, with holes flagged by
+the `orientation=-1` convention of their concave pieces.
+Holes are discretized in the canonical boundary ordering and their tangent
+orientation is subsequently flipped, without changing node ordering, so that
+the resulting normals follow the physical outward-normal convention.
+Symmetry-reduced solvers are not supported for billiards with holes and a
+nonempty symmetry registry.
 
 ## Attributes
 * `component_solvers::CS`: Tuple containing one DLP or CFIE solver for each connected physical boundary component.
@@ -118,17 +125,47 @@ _bim_grid_scale(solver::CompositeBIMSolver) = solver.component_solvers[1].pts_sc
 # as the underlying domain representation.
 _group_boundary_by_domain_id(comp::Vector) = BilliardGeometry._group_curves_by_domain_id(comp)
 
-# Determine whether a connected boundary component represents a hole from the
-# orientation carried by its curves. Orientation +1 denotes an ordinary outer
-# boundary and orientation -1 denotes a hole. Every curve belonging to one
-# connected component must have the same orientation; mixed orientations are
-# rejected.
-function _group_is_hole(group::Vector)
+# Determine whether a legacy (non-MultiplyConnectedDomain) connected boundary
+# component represents a hole from the orientation carried by its curves, as
+# used by the concave pieces of SinaiBilliard and SquareWithinSquareBilliard.
+# Orientation +1 denotes an ordinary outer boundary and orientation -1 denotes
+# a hole. Every curve belonging to one connected component must have the same
+# orientation; mixed orientations are rejected.
+function _legacy_group_is_hole(group::Vector)
     o = group[1].orientation
     all(c.orientation == o for c in group) || throw(ArgumentError("Curves within one connected boundary component must share the same `orientation` field (found a mix); mixed-orientation components are not supported"))
     o == 1 && return false
     o == -1 && return true
     throw(ArgumentError("Curve `orientation` must be ±1; found $o"))
+end
+
+# Closed boundary loops of the complete billiard boundary in solver order,
+# together with their hole flags. For a MultiplyConnectedDomain the loops come
+# from the domain structure (outer boundary first, then one loop per hole);
+# other billiards are grouped by curve `domain_id`.
+_composite_components(billiard::AbsBilliard) = _composite_components(billiard.fundamental_domain, billiard)
+
+function _composite_components(domain::AbsMultiplyConnectedDomain, billiard::AbsBilliard)
+    map = full_boundary_components(billiard)
+    for i in eachindex(domain.holes)
+        nloops = count(==(i), map.group)
+        nloops == 1 || throw(ArgumentError("hole $i consists of $nloops boundary loops; CompositeBIMSolver supports exactly one loop per hole"))
+    end
+    return map.curves, map.is_hole
+end
+
+function _composite_components(::AbsDomain, billiard::AbsBilliard)
+    base = get_boundary_curves(billiard); comp = full_boundary(billiard)
+    isempty(comp) && error("Boundary cannot be empty.")
+    groups = _group_boundary_by_domain_id(comp)
+    base_by_id = Dict(first(g).domain_id=>g for g in _group_boundary_by_domain_id(base))
+    is_hole = Bool[]
+    for g in groups
+        id = first(g).domain_id
+        haskey(base_by_id,id) || throw(ArgumentError("Composite boundary contains domain_id=$id which is absent from the fundamental boundary"))
+        push!(is_hole, _legacy_group_is_hole(base_by_id[id]))
+    end
+    return groups, is_hole
 end
 
 # Dispatch boundary sampling of one connected component to its assigned DLP or
@@ -317,6 +354,7 @@ No geometric point matching or floating-point tolerances are used.
 """
 function _composite_symmetry_orbits(::Type{T}, solver::CompositeBIMSolver, pts::BoundaryPoints{T}) where {T<:Real}
     solver.symmetry === nothing && throw(ArgumentError("_composite_symmetry_orbits requires a nontrivial symmetry"))
+    _require_fundamental_frame_support(solver.component_solvers[1].billiard)
     nc = length(solver.component_solvers)
     offs = _composite_offsets(pts, nc)
     local_orbits = Vector{SymmetryOrbitMap{T}}(undef, nc)
@@ -529,14 +567,14 @@ end
 
 Construct the complete composite boundary discretization of `billiard`.
 
-The physical boundary is separated into connected components and each
-component is sampled with its assigned DLP or CFIE component solver. Components
-with orientation `-1` are interpreted as holes and their orientation is flipped
-after sampling without changing the boundary-node ordering. This preserves the
+The physical boundary is separated into closed components (the outer
+boundary, then one component per hole) and each component is sampled with its
+assigned DLP or CFIE component solver. Hole components are flipped after
+sampling without changing the boundary-node ordering. This preserves the
 canonical indexing required by exact symmetry index maps while giving hole
 boundaries the opposite normal orientation required by the boundary-integral
-formulation. For multiply connected fundamental domains, the number of component 
-solvers must equal the number of connected boundary components. 
+formulation. The number of component solvers must equal the number of
+connected boundary components.
 
 ## Arguments
 * `solver::CompositeBIMSolver`: Composite solver containing one DLP or CFIE solver per connected boundary component.
@@ -548,18 +586,13 @@ solvers must equal the number of connected boundary components.
 """
 function evaluate_points(solver::CompositeBIMSolver, billiard::Bi, k) where {Bi<:AbsBilliard}
     T = _bim_numeric_type(solver); kT = T(k)
-    base = get_boundary_curves(billiard); comp = full_boundary(billiard)
-    isempty(comp) && error("Boundary cannot be empty.")
-    groups = _group_boundary_by_domain_id(comp); base_groups = _group_boundary_by_domain_id(base)
+    groups, is_hole = _composite_components(billiard)
     nc = length(solver.component_solvers)
     length(groups)==nc || throw(ArgumentError("Billiard boundary has $(length(groups)) component group(s) but CompositeBIMSolver has $nc component solver(s)"))
-    base_by_id = Dict(first(g).domain_id=>g for g in base_groups)
     comp_pts = Vector{BoundaryPoints{T}}(undef,nc)
     @inbounds for a in 1:nc
-        grp = groups[a]; id = first(grp).domain_id
-        haskey(base_by_id,id) || throw(ArgumentError("Composite boundary contains domain_id=$id which is absent from the fundamental boundary"))
-        p = _composite_component_points(solver.component_solvers[a],grp,kT)
-        comp_pts[a] = _group_is_hole(base_by_id[id]) ? _flip_component_orientation(p) : p
+        p = _composite_component_points(solver.component_solvers[a],groups[a],kT)
+        comp_pts[a] = is_hole[a] ? _flip_component_orientation(p) : p
     end
     return _merge_composite_points(comp_pts)
 end

@@ -350,6 +350,18 @@ end
 # EIGENSTATE API
 ################################################################################
 
+# Boundary arclength data `(s, ds, u, L)` on which the Husimi function is built.
+# Billiards without holes use the complete boundary. For a billiard with holes
+# the outer boundary component is the first block of the composite
+# discretization (component index 1 in `pts.w_dm`), with the outer perimeter as `L`.
+function _husimi_boundary_data(pts::BoundaryPoints{T}, u::AbstractVector, billiard::AbsBilliard) where {T<:Real}
+    genus(billiard) == 0 && return pts.s, pts.ds, u, T(sum(crv.length for crv in full_boundary(billiard)))
+    length(pts.w_dm) == length(pts.xy) || throw(ArgumentError("Husimi function of a billiard with holes requires boundary points from a CompositeBIMSolver (missing component bookkeeping)"))
+    rng = 1:count(==(one(T)), pts.w_dm)
+    L = T(sum(crv.length for crv in first(full_boundary_components(billiard).curves)))
+    return pts.s[rng], pts.ds[rng], u[rng], L
+end
+
 """
     husimi_function(state::BIMEigenstate, billiard::AbsBilliard, solver::AbsBIMSolver; c::Real=10.0, w::Real=7.0, full_p::Bool=false)
 
@@ -359,6 +371,10 @@ If the physical boundary normal derivative `state.u` is available, it is used
 directly. Otherwise it is reconstructed at `state.k` with [`solve_state`](@ref)
 using the boundary discretization stored in `state.pts`, dispatching on
 [`_bim_kernel`](@ref)`(solver)`.
+
+For a billiard with holes the Husimi function lives on the outer boundary
+component only: `qs` runs over the outer boundary arclength `[0,L_outer)` and
+the hole loops are excluded.
 
 ## Arguments
 * `state::BIMEigenstate`: BIM eigenstate.
@@ -381,8 +397,8 @@ function husimi_function(state::BIMEigenstate{K,T}, billiard::AbsBilliard, solve
     if u===nothing
         _,_,u,_=solve_state(_bim_kernel(solver),state.pts,k,billiard)
     end
-    L=T(sum(crv.length for crv in full_boundary(billiard)))
-    return husimi_function(k,state.pts.s,state.pts.ds,u,L;c=c,w=w,full_p=full_p)
+    s,ds,uq,L=_husimi_boundary_data(state.pts,u,billiard)
+    return husimi_function(k,s,ds,uq,L;c=c,w=w,full_p=full_p)
 end
 
 """

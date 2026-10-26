@@ -163,6 +163,7 @@ fundamental boundary.
 * `pts::BoundaryPoints`: Boundary points with `xy`, `normal`, `s`, `ds` and `xy_int` populated.
 """
 function evaluate_points(solver::ParticularSolutionsMethodSolver, billiard::Bi, k) where {Bi<:AbsBilliard}
+    _require_no_holes(solver, billiard)
     bs, samplers = adjust_scaling_and_samplers(solver, billiard); curves = get_boundary_curves(billiard); T = eltype(solver.pts_scaling_factor)
     Ns = _determine_bp_sizes(curves, bs, k); M = length(Ns)
     xy_all = Vector{Vector{SVector{2,T}}}(undef, M); normal_all = Vector{Vector{SVector{2,T}}}(undef, M)
