@@ -265,6 +265,97 @@ end
     end
 end
 
+# Billiards with a hole. The annulus has the unit circle as outer boundary and an eccentric circular hole of radius 0.3
+# about (0.1, 0), no symmetries. wf_HoleBilliard is the quarter square [0,1]^2 of RectangleBilliard(1.0, 1.0) (D2 symmetry,
+# full region [-1,1]^2) with one asymmetric circular hole of radius 0.2 about (0.3, 0.4) given in the FULL frame, so only
+# the outer region is mapped by the symmetry images.
+const WF_ANNULUS = AnnularBilliard(0.3, 0.1)
+const WF_HOLE_CENTER = SVector(0.1, 0.0)
+
+struct wf_HoleBilliard <: AbsBilliard
+    fundamental_domain::MultiplyConnectedDomain{Float64}
+    symmetries::SymmetryRegistry
+end
+
+function wf_hole_billiard()
+    hole_curve = CircleSegment(0.2, 2π, 0.0, [0.3, 0.4]; domain_id=5, segment_id=1)
+    hole = DomainHole(SimpleDomain{Float64}(AbsCurve[hole_curve], SVector{2,Float64}[SVector(0.5, 0.4)], 5))
+    return wf_HoleBilliard(MultiplyConnectedDomain(RectangleBilliard(1.0, 1.0).fundamental_domain, [hole], 1), D2_symmetry())
+end
+
+@testset "_is_inside_full with holes" begin
+    @testset "annulus: hole, ring and exterior" begin
+        @test !_is_inside_full(WF_ANNULUS, SVector(0.1, 0.0))        # centre of the hole
+        @test !_is_inside_full(WF_ANNULUS, SVector(0.2, 0.2))        # inside the hole (distance 0.22 < 0.3 from its centre)
+        @test _is_inside_full(WF_ANNULUS, SVector(0.1, 0.45))        # ring (distance 0.45 > 0.3, radius 0.46 < 1)
+        @test _is_inside_full(WF_ANNULUS, SVector(-0.6, 0.0))
+        @test !_is_inside_full(WF_ANNULUS, SVector(1.2, 0.0))        # outside the outer circle
+        @test _is_inside_full(WF_ANNULUS, SVector(-0.9, 0.0))
+    end
+
+    @testset "annulus agrees with the fundamental-domain test (empty registry)" begin
+        for pt in (SVector(0.1, 0.0), SVector(0.1, 0.45), SVector(-0.6, 0.2), SVector(1.2, 0.0), SVector(0.35, 0.05))
+            @test _is_inside_full(WF_ANNULUS, pt) == BilliardGeometry.is_inside(WF_ANNULUS, pt)
+        end
+    end
+
+    @testset "D2 billiard: the hole is tested at the point, the outer region on the point and its images" begin
+        b = wf_hole_billiard()
+        @test !_is_inside_full(b, SVector(0.3, 0.4))                 # hole centre
+        @test !_is_inside_full(b, SVector(0.3, 0.5))                 # inside the hole
+        @test _is_inside_full(b, SVector(0.6, 0.4))                  # first quadrant, outside the hole
+        # the hole is not replicated: the symmetry images of the hole centre lie in the region
+        @test _is_inside_full(b, SVector(-0.3, 0.4))
+        @test _is_inside_full(b, SVector(0.3, -0.4))
+        @test _is_inside_full(b, SVector(-0.3, -0.4))
+        @test _is_inside_full(b, SVector(-0.6, -0.4))                # third quadrant via the symmetry image
+        @test !_is_inside_full(b, SVector(1.2, 0.0))
+        @test !_is_inside_full(b, SVector(-0.3, 1.2))
+    end
+end
+
+@testset "_wavefunction_grid with holes" begin
+    b = 5.0
+    in_hole(p) = hypot(p[1] - WF_HOLE_CENTER[1], p[2] - WF_HOLE_CENTER[2]) < 0.3
+    ring_area = π * (1.0 - 0.3^2)
+
+    @testset "fundamental frame: the extent is the outer boundary, hole points are masked" begin
+        xg, yg, pts, idx, nx, ny = _wavefunction_grid(1.0, WF_ANNULUS, b)
+        @test collect(extrema(xg)) ≈ [-1.01, 1.01] atol = 1e-3       # extent sampled from the outer circle only
+        @test collect(extrema(yg)) ≈ [-1.01, 1.01] atol = 1e-3
+        @test !any(in_hole(pts[i]) for i in idx)
+        @test all(hypot(pts[i][1], pts[i][2]) < 1.0 for i in idx)
+        dA = (xg[2] - xg[1]) * (yg[2] - yg[1])
+        @test length(idx) * dA ≈ ring_area rtol = 0.02              # the hole area is removed
+        hole_pts = findall(in_hole, pts)
+        @test !isempty(hole_pts) && isdisjoint(hole_pts, idx)
+    end
+
+    @testset "full frame gives the same region" begin
+        xg, yg, pts, idx, _, _ = _wavefunction_grid(1.0, WF_ANNULUS, b; fundamental_domain=false)
+        @test !any(in_hole(pts[i]) for i in idx)
+        @test length(idx) * (xg[2] - xg[1]) * (yg[2] - yg[1]) ≈ ring_area rtol = 0.02
+    end
+
+    @testset "inside_only = false keeps hole points" begin
+        _, _, pts, idx, nx, ny = _wavefunction_grid(1.0, WF_ANNULUS, b; inside_only=false)
+        @test idx == 1:(nx * ny)
+    end
+
+    @testset "D2 billiard with an asymmetric hole, unfolded region" begin
+        hb = wf_hole_billiard()
+        xg, yg, pts, idx, _, _ = _wavefunction_grid(1.0, hb, b; fundamental_domain=false)
+        in_asym_hole(p) = hypot(p[1] - 0.3, p[2] - 0.4) < 0.2
+        @test !any(in_asym_hole(pts[i]) for i in idx)
+        @test any(p -> in_asym_hole(p) && abs(p[1]) < 1 && abs(p[2]) < 1, pts)       # the hole lies in the grid box
+        inside_mask = falses(length(pts)); inside_mask[idx] .= true
+        mirrored = [i for i in eachindex(pts) if hypot(pts[i][1] + 0.3, pts[i][2] + 0.4) < 0.15]
+        @test all(inside_mask[mirrored])                                             # the image of the hole is not a hole
+        dA = (xg[2] - xg[1]) * (yg[2] - yg[1])
+        @test length(idx) * dA ≈ 4.0 - π * 0.2^2 rtol = 0.02
+    end
+end
+
 @testset "layer potentials phi_slp, phi_dlp, phi_cfie on the circle" begin
     k = WF_J01
     u = fill(-k * besselj(1, k), WF_NODES)

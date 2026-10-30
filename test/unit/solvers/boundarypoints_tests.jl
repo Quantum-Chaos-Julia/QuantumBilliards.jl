@@ -447,3 +447,113 @@ end
     @test_throws ArgumentError QuantumBilliards._require_no_holes(dlp, SinaiBilliard(1.0, 0.25))
     @test_throws ArgumentError QuantumBilliards._require_no_holes(dlp, SquareWithinSquareBilliard(1.0))
 end
+
+# The five evaluate_points methods that discretize the boundary as one closed curve call the guard first. Sinai and
+# SquareWithinSquare are multiply connected domains too (genus 1 and 2), so they are guarded like the annulus; only a
+# billiard without holes passes.
+@testset "_require_no_holes: guarded evaluate_points methods" begin
+    annulus = AnnularBilliard(0.3, 0.1)
+    circle = CircleBilliard(1.0)
+    rect = RectangleBilliard(1.0, 0.6)
+    k = 5.0
+
+    @testset "ParticularSolutionsMethodSolver" begin
+        solver = ParticularSolutionsMethodSolver(2.0, 3.0, 4.0)
+        @test_throws ArgumentError evaluate_points(solver, annulus, k)
+        @test_throws "ParticularSolutionsMethodSolver" evaluate_points(solver, annulus, k)
+        @test evaluate_points(solver, rect, k) isa Any
+    end
+
+    @testset "DecompositionMethodSolver" begin
+        solver = DecompositionMethodSolver(2.0, 3.0)
+        @test_throws ArgumentError evaluate_points(solver, annulus, k)
+        @test_throws ArgumentError evaluate_points(solver, SinaiBilliard(1.0, 0.25), k)
+        @test evaluate_points(solver, rect, k) isa BoundaryPoints
+    end
+
+    @testset "VerginiSaracenoSolver" begin
+        solver = VerginiSaracenoSolver(2.0, 5.0)
+        @test_throws ArgumentError evaluate_points(solver, annulus, k)
+        @test evaluate_points(solver, rect, k) isa Any
+    end
+
+    @testset "DoubleLayerPotentialSolver" begin
+        @test_throws ArgumentError evaluate_points(DoubleLayerPotentialSolver(5.0, annulus; min_pts=16), annulus, k)
+        @test evaluate_points(DoubleLayerPotentialSolver(5.0, circle; min_pts=16), circle, k) isa BoundaryPoints
+    end
+
+    @testset "CombinedFieldIntegralEquationSolver" begin
+        @test_throws ArgumentError evaluate_points(CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=16), annulus, k)
+        @test evaluate_points(CombinedFieldIntegralEquationSolver(5.0, circle; min_pts=16), circle, k) isa BoundaryPoints
+    end
+
+    @testset "CompositeBIMSolver is not guarded" begin
+        solver = CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, annulus; min_pts=16), DoubleLayerPotentialSolver(5.0, annulus; min_pts=16))
+        @test evaluate_points(solver, annulus, k) isa BoundaryPoints
+    end
+end
+
+@testset "get_boundary_curves_with_ignored(::AbsMultiplyConnectedDomain)" begin
+    @testset "annulus: outer curve first, then the hole loop" begin
+        annulus = AnnularBilliard(0.3, 0.1)
+        curves = get_boundary_curves_with_ignored(annulus.fundamental_domain)
+        @test length(curves) == 2
+        @test [c.length for c in curves] ≈ [2π, 2π * 0.3]
+        @test curves[2].center ≈ SVector(0.1, 0.0)
+        @test !is_hole_curve(annulus, curves[1]) && is_hole_curve(annulus, curves[2])
+        # without symmetries the billiard-level method forwards to the domain
+        @test [c.length for c in get_boundary_curves_with_ignored(annulus)] ≈ [c.length for c in curves]
+    end
+
+    @testset "D2 outer region with an asymmetric hole: holes stay in the full frame" begin
+        b = bp_hole_billiard(D2_symmetry())
+        curves = get_boundary_curves_with_ignored(b.fundamental_domain)
+        outer = get_outer_boundary_curves(b)
+        @test length(curves) == length(outer) + 1
+        @test curves[end].length ≈ 2π * 0.2
+        @test curves[end].center ≈ SVector(0.3, 0.4)                   # not clipped or reflected into the fundamental domain
+        @test sum(c.length for c in curves[1:end-1]) ≈ sum(c.length for c in outer)
+        @test_throws ArgumentError get_boundary_curves_with_ignored(b)   # the billiard-level method refuses (guard)
+    end
+end
+
+@testset "boundary_coords: hole normals point into the hole" begin
+    annulus = AnnularBilliard(0.3, 0.1)
+    c, ρ = SVector(0.1, 0.0), 0.3
+    # outer points have |x| = 1, hole points |x - c| = rho (the hole lies well inside the outer circle)
+    is_outer(x) = isapprox(norm(x), 1.0; atol=1e-10)
+
+    function check_normals(bp, n_outer)
+        @test length(bp.normal) == length(bp) > n_outer > 0
+        for (x, n) in zip(bp.xy, bp.normal)
+            @test norm(n) ≈ 1.0
+            if is_outer(x)
+                @test dot(n, x) > 0                                          # outward from the unit circle: n.r > 0
+                @test n ≈ x atol = 1e-10
+            else
+                @test norm(x - c) ≈ ρ atol = 1e-10
+                @test dot(n, c - x) > 0                                      # pointing to the hole centre
+                @test n ≈ -(x - c) / ρ atol = 1e-10
+            end
+        end
+        @test count(is_outer, bp.xy) == n_outer
+    end
+
+    @testset "explicit samplers" begin
+        bp = boundary_coords(annulus, AbsSampler[GaussLegendreNodes(), GaussLegendreNodes()], [16, 12])
+        check_normals(bp, 16)
+        @test sum(bp.ds[1:16]) ≈ 2π && sum(bp.ds[17:28]) ≈ 2π * ρ
+        # arc length is continuous over the two loops: the hole block continues after the outer perimeter
+        @test issorted(bp.s) && bp.s[17] > 2π && bp.s[end] < 2π + 2π * ρ
+    end
+
+    @testset "FourierNodes" begin
+        fs = FourierNodes([c.length for c in get_boundary_curves_with_ignored(annulus)])
+        bp = boundary_coords(annulus, fs, 60)
+        n_outer = count(is_outer, bp.xy)
+        check_normals(bp, n_outer)
+        @test issorted(bp.s)
+        @test bp.s[n_outer + 1] > 2π - 1e-12                          # the hole block continues after the outer perimeter
+        @test bp.s[end] <= 2π + 2π * ρ + 1e-12                        # a lattice node may sit on the end of the last loop
+    end
+end

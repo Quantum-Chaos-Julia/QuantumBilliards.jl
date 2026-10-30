@@ -15,6 +15,7 @@ end
     include("bim_sweep/dlp_wavenumber.jl")
     include("bim_sweep/cfie_wavenumber.jl")
     include("bim_sweep/compositebim_wavenumber.jl")
+    include("bim_sweep/compositebim_holes.jl")
 end
 
 @group "accelerated" begin

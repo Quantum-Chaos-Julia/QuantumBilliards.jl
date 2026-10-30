@@ -398,6 +398,46 @@ end
     end
 end
 
+@testset "boundary_function(::BIMEigenstate) with holes" begin
+    # Composite discretization of the annulus (unit circle with an eccentric hole of radius 0.3): 32 outer nodes, then 24 hole
+    # nodes. u is hand-built; only the stored fields are read.
+    annulus = AnnularBilliard(0.3, 0.1)
+    solver = CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, annulus; min_pts=32), DoubleLayerPotentialSolver(5.0, annulus; min_pts=24))
+    pts = evaluate_points(solver, annulus, 3.0)
+    N = length(pts)
+    u = collect(range(-1.0, -2.0, N))
+    st = bf_bim_state(3.0, u, pts)
+
+    @testset "u covers every node and s is continuous over the loops" begin
+        ub, sb, nb = boundary_function(st)
+        @test N == 56
+        @test ub === u && length(ub) == N                                   # one value per node of all loops
+        @test sb === pts.s && length(sb) == N
+        @test issorted(sb)
+        @test sb[33] > sb[32]
+        @test sb[33] > 2π - 2π / 32                                         # the hole block continues the outer perimeter
+        @test sum(pts.ds[1:32]) ≈ 2π && sum(pts.ds[33:56]) ≈ 2π * 0.3
+        @test sb[end] < 2π + 2π * 0.3
+        @test nb == 1.25
+    end
+
+    @testset "loop blocks are identified by w_dm" begin
+        @test count(==(1.0), pts.w_dm) == 32 && count(==(2.0), pts.w_dm) == 24
+    end
+
+    @testset "with a billiard and a solver" begin
+        @test boundary_function(st, annulus) == (u, pts.s, 1.25)
+        @test boundary_function(st, annulus, solver) == (u, pts.s, 1.25)
+    end
+
+    @testset "a missing u is recomputed with one value per node of all loops" begin
+        st_missing = BIMEigenstate{Float64,Float64}(3.0, 0.0, nothing, 1e-9, pts, nothing, nothing)
+        u3, s3, n3 = boundary_function(st_missing, annulus, bf_SweepStub())
+        @test length(u3) == N && u3 == fill(BF_STUB_U, N)
+        @test s3 === pts.s && n3 == BF_STUB_NORM
+    end
+end
+
 @testset "momentum_function(u, s) - analytic spectra" begin
     L = 7.0
     N = 64

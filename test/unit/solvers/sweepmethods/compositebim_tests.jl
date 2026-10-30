@@ -128,6 +128,16 @@ end
     @testset "a hole must be a single loop" begin
         @test_throws ArgumentError _composite_components(cb_two_loop_hole_billiard())
     end
+
+    @testset "outer first, then one component per hole object in holes order" begin
+        outer = cb_rect_domain(-1.0, -1.0, 4.0, 2.0, 1)
+        holes = [DomainHole(cb_rect_domain(0.0, 0.0, 1.0, 1.0, 2)), DomainHole(cb_rect_domain(2.0, 0.0, 2.5, 0.5, 3))]
+        billiard = cb_TwoLoopHoleBilliard(MultiplyConnectedDomain(outer, holes, 1), register_symmetries())
+        comps, is_hole = _composite_components(billiard)
+        @test is_hole == [false, true, true]
+        @test sum(c.length for c in comps[1]) ≈ 16.0
+        @test [sum(c.length for c in comps[a]) for a in 2:3] ≈ [4.0, 2.0]
+    end
 end
 
 @testset "_composite_global_to_local" begin

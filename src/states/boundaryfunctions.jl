@@ -183,6 +183,9 @@ time, not resampled or re-solved per call.
 *  `norm` : The Rellich-identity value of the raw (pre-rescaling) density used to normalize `u` (`state.bnd_norm`); kept for interface parity with the basis-solver method, not itself expected to be close to `1`.
 
 Throws an `ArgumentError` when `state.u === nothing` (states produced by accelerated BIM solvers such as [`BeynSolver`](@ref) keep only the layer density); use [`boundary_function(state, billiard, solver)`](@ref) or the [`SpectralData`](@ref) methods, which recompute `u`.
+
+## Billiards with holes
+For a [`CompositeBIMSolver`](@ref) state of a billiard with holes, `u` and `s` cover every boundary loop (outer first, then the hole loops) and `s` is continuous over the concatenation. `u` is the derivative along the outward normal of the billiard region (pointing into a hole on hole loops), so the Rellich identity holds unchanged. The per-loop blocks are identified by `state.pts.w_dm`. [`momentum_function`](@ref) assumes a single closed curve and is not meaningful on the concatenated loops.
 """
 function boundary_function(state::BIMEigenstate; b=5.0, multithreaded=true)
     return _stored_boundary_u(state), state.pts.s, state.bnd_norm

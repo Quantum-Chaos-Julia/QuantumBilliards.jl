@@ -59,19 +59,25 @@ quadrature. A source component using DLP contributes a double-layer
 cross-component kernel, whereas a source component using CFIE contributes the
 combined `D(k)+ikS(k)` kernel.
 
-Hole components are identified from the domain structure: the hole loops of a
-[`MultiplyConnectedDomain`](@ref) (e.g. [`AnnularBilliard`](@ref),
-[`SinaiBilliard`](@ref)) follow the outer boundary, one component per hole
-object (each hole must be a single closed loop). A billiard without a
-`MultiplyConnectedDomain` has a single outer component.
+Hole components are identified from the domain structure, not from curve
+orientation: the hole loops of a [`MultiplyConnectedDomain`](@ref) (e.g.
+[`AnnularBilliard`](@ref), [`SinaiBilliard`](@ref)) follow the outer boundary,
+one component per hole object (each hole must be a single closed loop). A
+billiard with `h` holes therefore needs `1 + h` component solvers, ordered as
+the outer boundary followed by the holes in the order of the `holes` of the
+domain; a billiard without a `MultiplyConnectedDomain` has a single outer
+component and needs one solver. A mismatch of the solver count raises an
+`ArgumentError` when the boundary is discretized.
 Holes are discretized in the canonical boundary ordering and their tangent
 orientation is subsequently flipped, without changing node ordering, so that
-the resulting normals follow the physical outward-normal convention.
-Symmetry-reduced solvers are not supported for billiards with holes and a
-nonempty symmetry registry.
+the resulting normals follow the physical outward-normal convention of the
+billiard region (pointing into the hole).
+Holes live in the full physical frame, so symmetry-reduced solvers are not
+supported for billiards with holes and a nonempty symmetry registry
+(`ArgumentError` from `_require_fundamental_frame_support`).
 
 ## Attributes
-* `component_solvers::CS`: Tuple containing one DLP or CFIE solver for each connected physical boundary component.
+* `component_solvers::CS`: Tuple with one DLP or CFIE solver per boundary component: the outer boundary first, then one per hole (`1 + genus` for holes consisting of one loop each).
 * `symmetry::Sy`: Optional discrete symmetry shared by all component solvers.
 * `sym_characters::Ch`: Character tuple selecting the common representation of `symmetry`.
 
@@ -98,7 +104,7 @@ however, use the same discrete symmetry and character because symmetry
 reduction is applied to the globally coupled full-boundary operator.
 
 ## Arguments
-* `component_solvers::SweepBIMSolver...`: Component solvers assigned in the same order as the connected boundary components returned during boundary decomposition.
+* `component_solvers::SweepBIMSolver...`: Component solvers assigned in the same order as the connected boundary components returned during boundary decomposition: the outer boundary first, then one per hole object (`1 + number of holes` solvers for a [`MultiplyConnectedDomain`](@ref) billiard).
 
 ## Returns
 * `solver::CompositeBIMSolver`: Configured composite boundary-integral solver.
