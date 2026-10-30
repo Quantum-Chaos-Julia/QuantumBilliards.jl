@@ -27,6 +27,37 @@ end
 # Weyl-law function below.
 _boundary_length(curves) = sum(crv.length for crv in curves)
 
+# A billiard with holes and a nonempty outer registry has no fundamental-frame boundary; its reduced Weyl
+# inputs come from the complete boundary divided by the order of its symmetry group G'.
+_has_reduced_holes(billiard::AbsBilliard) = genus(billiard) > 0 && !isempty(billiard.symmetries)
+
+# Area `A` and boundary length `L` of the Weyl law.
+function _weyl_area_length(billiard::AbsBilliard, fundamental::Bool)
+    A = fundamental ? fundamental_area(billiard) : area(billiard)
+    if fundamental && _has_reduced_holes(billiard)
+        L = _boundary_length(full_boundary(billiard)) / (length(get_symmetry_group(billiard)) + 1)
+    else
+        L = _boundary_length(fundamental ? get_boundary_curves(billiard) : full_boundary(billiard))
+    end
+    return A, L::typeof(A)
+end
+
+# One corner per orbit of G' (corners lie in free orbits; corners where a symmetry wall meets the boundary
+# are omitted, an O(1) constant of N(k)): the sorted corner angles of the complete boundary, every |G'|-th.
+function _weyl_angles(billiard::AbsBilliard, fundamental::Bool)
+    if fundamental && _has_reduced_holes(billiard)
+        angles = sort(corner_angles(billiard; fundamental=false))
+        return angles[1:(length(get_symmetry_group(billiard)) + 1):end]
+    end
+    return corner_angles(billiard; fundamental)
+end
+
+# Area, boundary length and corner angles of the Weyl law of `billiard`.
+function _weyl_inputs(billiard::AbsBilliard, fundamental::Bool)
+    A, L = _weyl_area_length(billiard, fundamental)
+    return A, L, _weyl_angles(billiard, fundamental)
+end
+
 """
     k_at_state(state, billiard::AbsBilliard; fundamental::Bool=true) → k::Real
 
@@ -40,10 +71,7 @@ corner correction) reaches `state`.
   when `false`, uses the complete physical boundary (`full_boundary`).
 """
 function k_at_state(state, billiard::AbsBilliard; fundamental::Bool=true)
-    curves = fundamental ? get_boundary_curves(billiard) : full_boundary(billiard)
-    A = fundamental ? fundamental_area(billiard) : area(billiard)
-    L = _boundary_length(curves)::typeof(A)
-    angles = corner_angles(billiard; fundamental)
+    A, L, angles = _weyl_inputs(billiard, fundamental)
     return isempty(angles) ? k_at_state(state, A, L) : k_at_state(state, A, L, angles)
 end
 
@@ -63,10 +91,7 @@ state_at_k(k, A, L) = weyl_law(k, A, L)
 state_at_k(k, A, L, corner_angles) = weyl_law(k, A, L, corner_angles)
 
 function state_at_k(k, billiard::AbsBilliard; fundamental::Bool=true)
-    curves = fundamental ? get_boundary_curves(billiard) : full_boundary(billiard)
-    A = fundamental ? fundamental_area(billiard) : area(billiard)
-    L = _boundary_length(curves)
-    angles = corner_angles(billiard; fundamental)
+    A, L, angles = _weyl_inputs(billiard, fundamental)
     return isempty(angles) ? state_at_k(k, A, L) : state_at_k(k, A, L, angles)
 end
 
@@ -84,9 +109,7 @@ used to size adaptive wavenumber steps in [`compute_spectrum`](@ref).
 spectral_density(k, A, L) = (A*k - L/2)/(2*pi)
 
 function spectral_density(k, billiard::AbsBilliard; fundamental::Bool=true)
-    curves = fundamental ? get_boundary_curves(billiard) : full_boundary(billiard)
-    A = fundamental ? fundamental_area(billiard) : area(billiard)
-    L = _boundary_length(curves)
+    A, L = _weyl_area_length(billiard, fundamental)
     return spectral_density(k, A, L)
 end
 
