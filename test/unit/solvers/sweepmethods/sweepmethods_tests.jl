@@ -74,7 +74,7 @@ end
         @test sw_same_orbits(orbits, BilliardGeometry.symmetry_index_orbits(Float64, c3, N, rot, 1))
         @test orbits.fundamental_size == N ÷ 3
         @test size(orbits.fund_to_full) == (3, N ÷ 3)
-        @test sort(unique(round.(orbits.phase; digits=12)), by=real) ≈ sort([1.0, cis(2π / 3), cis(-2π / 3)], by=real)
+        @test sort(unique(round.(orbits.phase; digits=12)), by=z -> (real(z), imag(z))) ≈ sort([1.0, cis(2π / 3), cis(-2π / 3)], by=z -> (real(z), imag(z)))
 
         @test sw_same_orbits(_fold_boundary(Float64, c3, N, rot, ()),                       # empty character is the trivial sector
                              BilliardGeometry.symmetry_index_orbits(Float64, c3, N, rot))

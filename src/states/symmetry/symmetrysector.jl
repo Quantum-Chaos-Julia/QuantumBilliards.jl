@@ -227,6 +227,14 @@ end
 # sector index. All elements must have the same group order; the sector is the
 # intersection of the sectors compatible with each element's character, which
 # must be a single index to define one consistent one-dimensional representation.
+#
+# The sector `s` is defined on the m = 1 generator, χ_s(g^m) = exp(2πi s m/N), whereas
+# `BilliardGeometry.symmetry_index_orbits(T, billiard, N, g, s')` assigns the phase
+# exp(2πi s' l/d) to the l-th power of the element `g` passed to it, with d the order
+# of g. The returned generator is the registered element of smallest m that generates the
+# whole group (independent of the iteration order of `gens`), and the sector is
+# converted to its own convention, s' = s m/gcd(N, m) mod d, so the folded phases
+# stay χ_s(g^m).
 function _resolve_bim_rotation_sector(gens::Vector{Pair{BilliardGeometry.AbsSymmetry,ComplexF64}})
     order = gens[1].first.order
     all(g -> g.first.order == order, gens) || throw(ArgumentError("Mismatched NFoldRotation orders within one SymmetrySector"))
@@ -235,5 +243,7 @@ function _resolve_bim_rotation_sector(gens::Vector{Pair{BilliardGeometry.AbsSymm
     sectors = reduce(intersect, candidates)
     isempty(sectors) && throw(ArgumentError("Inconsistent rotation sector recovered across sym_ids: $candidates"))
     length(sectors) == 1 || throw(ArgumentError("Ambiguous rotation sector: the registered elements are compatible with sectors $sectors"))
-    return gens[1].first, (only(sectors),)
+    gen = first(sort!(BilliardGeometry.AbsSymmetry[g.first for g in gens]; by = g -> (gcd(order, g.m) != 1, g.m)))
+    d = order ÷ gcd(order, gen.m)
+    return gen, (mod(only(sectors) * (gen.m ÷ gcd(order, gen.m)), d),)
 end

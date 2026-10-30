@@ -458,6 +458,21 @@ end
         @test chars == (1,)
     end
 
+    @testset "rotation generator is the m = 1 element whatever the order of the pairs" begin
+        gens = ss_gens(NFoldRotation(3, 2, 2) => cis(4pi / 3), NFoldRotation(3, 1, 1) => cis(2pi / 3))
+        gen, chars = _resolve_bim_symmetry(gens)
+        @test gen === gens[2].first
+        @test chars == (1,)
+    end
+
+    @testset "sector is converted to the convention of a generator with m > 1" begin
+        # sector 1 means chi(g^2) = exp(4 pi i / 3); relative to g^2 itself that is the sector 2 (chi = exp(2 pi i 2 / 3))
+        gens = ss_gens(NFoldRotation(3, 2, 2) => cis(4pi / 3))
+        gen, chars = _resolve_bim_symmetry(gens)
+        @test gen === gens[1].first
+        @test chars == (2,)
+    end
+
     @testset "mixed reflection and rotation is rejected" begin
         gens = ss_gens(XAxisReflection(1) => 1, NFoldRotation(3, 1, 2) => 1)
         @test_throws ArgumentError _resolve_bim_symmetry(gens)
