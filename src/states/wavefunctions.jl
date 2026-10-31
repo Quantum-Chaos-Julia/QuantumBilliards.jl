@@ -77,8 +77,20 @@ function _is_inside_full(domain::AbsMultiplyConnectedDomain, billiard::AbsBillia
 end
 
 
+# Extent of the fundamental frame. For a multiply connected domain the physical outer curves alone can miss the symmetry walls
+# (e.g. only the edge x = 1 of the triangle 0 <= y <= x <= 1), so the subdomain boundaries are used in full.
+_fundamental_extent_curves(billiard::AbsBilliard) = _fundamental_extent_curves(billiard.fundamental_domain, billiard)
+_fundamental_extent_curves(::AbsDomain, billiard::AbsBilliard) = get_outer_boundary_curves(billiard)
+function _fundamental_extent_curves(domain::AbsMultiplyConnectedDomain, ::AbsBilliard)
+    curves = AbsCurve[]
+    for sd in domain.subdomains
+        append!(curves, sd.boundary)
+    end
+    return curves
+end
+
 function _wavefunction_grid(k::T, billiard::Bi, b::T; inside_only::Bool = true, fundamental_domain::Bool = true) where {T<:Real,Bi<:AbsBilliard}
-    curves = fundamental_domain ? get_outer_boundary_curves(billiard) : full_boundary(billiard)
+    curves = fundamental_domain ? _fundamental_extent_curves(billiard) : full_boundary(billiard)
     xlim, ylim = boundary_limits(curves); dx = T(2pi) / (b * k)
     nx = max(512, ceil(Int, (xlim[2] - xlim[1]) / dx) + 1); ny = max(512, ceil(Int, (ylim[2] - ylim[1]) / dx) + 1)
     xgrid = collect(range(T(xlim[1]), T(xlim[2]), length = nx)); ygrid = collect(range(T(ylim[1]), T(ylim[2]), length = ny))

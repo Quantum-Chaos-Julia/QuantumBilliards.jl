@@ -18,6 +18,8 @@ const TENSION_TOL_ACCEL = 1e-10       # Beyn, CORK (worst observed 1.3e-12)
 const TENSION_TOL_EBIM = 0.5          # EBIM genuine levels <= 0.04, spurious >= 2
 const IMAG_TOL = 1e-7                 # |Im k| of Beyn levels (worst observed 7e-10)
 const SECTOR_UNION_ATOL = 1e-10       # eigenvalues of reduced vs unreduced composite matrices, symmetric holes (worst observed 1.1e-14)
+const SPECTRUM_ATOL_SECTOR = 1e-5     # Beyn levels, symmetry sector spectra vs unreduced or Phase 1 reference, billiards with holes (worst observed 3.1e-7)
+const IMAG_TOL_HOLES = 1e-5           # |Im k| of Beyn levels, composite CFIE on billiards with holes (worst observed 2.1e-7)
 
 # High-wavenumber tier.
 const HIGH_K = 100.0
