@@ -498,8 +498,19 @@ end
         @test solver.component_solvers === (outer, inner)                   # stored in the given order, DLP and CFIE may be mixed
         @test solver.symmetry === nothing
         @test solver.sym_characters == ()
-        @test fieldnames(CompositeBIMSolver) == (:component_solvers, :symmetry, :sym_characters)
+        @test fieldnames(CompositeBIMSolver) == (:component_solvers, :symmetry, :sym_characters, :loop_solver)
+        @test solver.loop_solver isa Vector{Int}
+        @test solver.loop_solver == [1, 2]                                  # annulus: outer loop, one hole loop
         @test _bim_numeric_type(solver) === Float64
+    end
+
+    @testset "loop_solver: solver index of every boundary loop" begin
+        @test CompositeBIMSolver(DoubleLayerPotentialSolver(10.0, rect)).loop_solver == [1]         # no hole: the single outer loop
+        @test CompositeBIMSolver(DoubleLayerPotentialSolver(10.0, annulus)).loop_solver == [1, 2]   # annulus: outer loop and hole loop
+        sinai = SinaiBilliard(1.0, 0.25)
+        @test CompositeBIMSolver(DoubleLayerPotentialSolver(10.0, sinai), DoubleLayerPotentialSolver(10.0, sinai)).loop_solver == [1, 2]
+        sws = SquareWithinSquareBilliard(1.0)
+        @test CompositeBIMSolver(DoubleLayerPotentialSolver(10.0, sws)).loop_solver == [1, 2, 3]    # two hole objects
     end
 
     @testset "single component and common symmetry" begin

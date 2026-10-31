@@ -301,13 +301,14 @@ end
 
 # solver: Beyn contour integral (composite, one CFIE component per boundary domain)
 # kernel/basis: CFIE, SmoothPeriodicGrading, min_pts=64, ppw=5, Taylor backend
-# billiard: Annular (AnnularBilliard(0.3, 0.0)), concentric, inner radius 0.3, outer radius 1
+# billiard: Annular (AnnularBilliard(0.3, 0.0; center=[0.2, 0.1])), concentric, inner radius 0.3, outer radius 1; the nonzero center keeps the
+#   unreduced construction (the origin-centered annulus is symmetric since B7)
 # symmetry: None
 # reference: analytic roots of the annulus Bessel determinant (multiplicity 2 for m > 0); window
 #   high_k_window(pi*(1 - 0.3^2)) = (100, 100.1099) holds the pair at 100.0935, edges at least 0.0149 from other levels
 # functions to test: compute_spectrum
 @testset "Beyn high k (CFIE, SmoothPeriodicGrading, Taylor) - Annular - k near 100" begin
-    billiard = AnnularBilliard(0.3, 0.0)
+    billiard = AnnularBilliard(0.3, 0.0; center=[0.2, 0.1])
     component() = CombinedFieldIntegralEquationSolver(5.0, billiard; grading=SmoothPeriodicGrading(), eps=1e-10, min_pts=64)
     kernel = CompositeBIMSolver(component(), component())
     k1, k2 = high_k_window(pi * (1 - 0.3^2))
@@ -323,13 +324,14 @@ end
 
 # solver: Beyn contour integral (composite, one CFIE component per boundary domain)
 # kernel/basis: CFIE, GlobalCornerGrading(kressq=2), min_pts=80, ppw=8 and 10, Taylor backend
-# billiard: Sinai (SinaiBilliard(1.0, 0.25)), outer square with a circular hole
+# billiard: Sinai (SinaiBilliard(1.0, 0.25; center=[0.2, 0.1])), outer square with a circular hole; the nonzero center keeps the unreduced
+#   construction (the origin-centered Sinai billiard is D4 symmetric since B7)
 # symmetry: None
 # reference: convergence, same window at ppw 8 and 10; window high_k_window(outer minus hole area)
 # functions to test: compute_spectrum
 # opt-in: skipped unless QB_TEST_SLOW=true
 HIGH_K_SLOW && @testset "Beyn high k (CFIE, GlobalCornerGrading, Taylor) - Sinai - k near 100" begin
-    billiard = SinaiBilliard(1.0, 0.25)
+    billiard = SinaiBilliard(1.0, 0.25; center=[0.2, 0.1])
     ncomponents = 1 + length(billiard.fundamental_domain.holes)
     component(ppw) = CombinedFieldIntegralEquationSolver(ppw, billiard; grading=GlobalCornerGrading(kressq=2), eps=1e-10, min_pts=80)
     kernel = CompositeBIMSolver((component(8.0) for _ in 1:ncomponents)...)

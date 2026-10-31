@@ -12,12 +12,13 @@ end
 
 # solver: Beyn contour integral on a Composite BIM kernel (CFIE outer component and CFIE hole component)
 # kernel/basis: CFIE, SmoothPeriodicGrading, ppw=10 (Taylor backend)
-# billiard: AnnularBilliard(0.3, 0.0), concentric, R_i = 0.3, R_o = 1
+# billiard: AnnularBilliard(0.3, 0.0; center=[0.2, 0.1]), concentric, R_i = 0.3, R_o = 1; the nonzero center keeps the unreduced construction
+#   (the origin-centered annulus is symmetric since B7); the spectrum is translation invariant
 # symmetry: None
 # reference: analytic, roots of J_m(k Ro) Y_m(k Ri) - Y_m(k Ro) J_m(k Ri), multiplicity 1 for m = 0 and 2 for m >= 1
 # functions to test: compute_spectrum, area, full_boundary_components
 @testset "Composite CFIE Beyn - Annular - Spectrum vs Bessel roots, Weyl count" begin
-    billiard = AnnularBilliard(0.3, 0.0)
+    billiard = AnnularBilliard(0.3, 0.0; center=[0.2, 0.1])
     ncomp = 1 + length(billiard.fundamental_domain.holes)
     @test ncomp == 2
     kernel = CompositeBIMSolver((CombinedFieldIntegralEquationSolver(10.0, billiard; grading=SmoothPeriodicGrading()) for _ in 1:ncomp)...)

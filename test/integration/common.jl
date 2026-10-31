@@ -17,6 +17,7 @@ const TENSION_TOL_BIM = 1e-5          # DLP, CFIE, Composite sweeps (worst obser
 const TENSION_TOL_ACCEL = 1e-10       # Beyn, CORK (worst observed 1.3e-12)
 const TENSION_TOL_EBIM = 0.5          # EBIM genuine levels <= 0.04, spurious >= 2
 const IMAG_TOL = 1e-7                 # |Im k| of Beyn levels (worst observed 7e-10)
+const SECTOR_UNION_ATOL = 1e-10       # eigenvalues of reduced vs unreduced composite matrices, symmetric holes (worst observed 1.1e-14)
 
 # High-wavenumber tier.
 const HIGH_K = 100.0

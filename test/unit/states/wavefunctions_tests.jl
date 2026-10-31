@@ -320,14 +320,31 @@ end
     ring_area = π * (1.0 - 0.3^2)
 
     @testset "fundamental frame: the extent is the outer boundary, hole points are masked" begin
+        # origin-centered annulus is symmetric since B7: the fundamental domain is the upper half (y >= 0), half the ring
         xg, yg, pts, idx, nx, ny = _wavefunction_grid(1.0, WF_ANNULUS, b)
-        @test collect(extrema(xg)) ≈ [-1.01, 1.01] atol = 1e-3       # extent sampled from the outer circle only
-        @test collect(extrema(yg)) ≈ [-1.01, 1.01] atol = 1e-3
+        @test collect(extrema(xg)) ≈ [-1.01, 1.01] atol = 1e-3       # extent sampled from the outer half circle only
+        @test collect(extrema(yg)) ≈ [-0.01, 1.01] atol = 1e-3
         @test !any(in_hole(pts[i]) for i in idx)
         @test all(hypot(pts[i][1], pts[i][2]) < 1.0 for i in idx)
+        @test all(pts[i][2] > 0 for i in idx)
         dA = (xg[2] - xg[1]) * (yg[2] - yg[1])
-        @test length(idx) * dA ≈ ring_area rtol = 0.02              # the hole area is removed
+        @test length(idx) * dA ≈ ring_area / 2 rtol = 0.02          # the hole area is removed, half ring in the fundamental domain
         hole_pts = findall(in_hole, pts)
+        @test !isempty(hole_pts) && isdisjoint(hole_pts, idx)
+    end
+
+    @testset "fundamental frame, nonzero center (unreduced): full ring, hole points are masked" begin
+        shifted = AnnularBilliard(0.3, 0.1; center=[0.2, 0.1])
+        c_outer, c_hole = SVector(0.2, 0.1), SVector(0.3, 0.1)
+        in_shifted_hole(p) = hypot(p[1] - c_hole[1], p[2] - c_hole[2]) < 0.3
+        xg, yg, pts, idx, nx, ny = _wavefunction_grid(1.0, shifted, b)
+        @test collect(extrema(xg)) ≈ [c_outer[1] - 1.01, c_outer[1] + 1.01] atol = 1e-3
+        @test collect(extrema(yg)) ≈ [c_outer[2] - 1.01, c_outer[2] + 1.01] atol = 1e-3
+        @test !any(in_shifted_hole(pts[i]) for i in idx)
+        @test all(hypot(pts[i][1] - c_outer[1], pts[i][2] - c_outer[2]) < 1.0 for i in idx)
+        dA = (xg[2] - xg[1]) * (yg[2] - yg[1])
+        @test length(idx) * dA ≈ ring_area rtol = 0.02
+        hole_pts = findall(in_shifted_hole, pts)
         @test !isempty(hole_pts) && isdisjoint(hole_pts, idx)
     end
 

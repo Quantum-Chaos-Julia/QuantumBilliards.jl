@@ -196,13 +196,12 @@ function _dlp_composite_arclength(comp::Vector, t::T) where {T<:Real}
 # symmetry reduction is requested.
 # This is the discretization selected by SmoothPeriodicGrading and is also the
 # fallback for GlobalCornerGrading when the boundary contains no true corners (stadium).
-function _dlp_evaluate_points(solver::DoubleLayerPotentialSolver, ::SmoothPeriodicGrading, comp::Vector, k::T) where {T<:Real}
+function _dlp_evaluate_points(solver::DoubleLayerPotentialSolver, ::SmoothPeriodicGrading, comp::Vector, k::T; multiple::Int=1, N_override::Union{Nothing,Int}=nothing) where {T<:Real}
     twopi = 2*T(pi)
     _, _, Ltot = component_lengths(comp)
     scale = solver.pts_scaling_factor[1]
     N = max(solver.min_pts, round(Int, k*Ltot*scale/twopi))
-    needed = solver.symmetry === nothing ? 2 : lcm(2, symmetry_node_multiple(solver.symmetry))
-    N = cld(N, needed)*needed
+    N = _bim_round_nodes(N, lcm(2, _bim_node_multiple(solver.symmetry), multiple), N_override)
     h = twopi/T(N)
     ts = T[s_mid(j, N) for j in 1:N]
     tphys = copy(ts)
@@ -248,13 +247,12 @@ end
 #
 # with h=2π/N. `ws` stores the uniform σ-space quadrature weights and `ws_der`
 # stores dt/dσ.
-function _dlp_evaluate_points_graded(solver::DoubleLayerPotentialSolver, grading::GlobalCornerGrading, comp::Vector, k::T, corners::Vector{T}) where {T<:Real}
+function _dlp_evaluate_points_graded(solver::DoubleLayerPotentialSolver, grading::GlobalCornerGrading, comp::Vector, k::T, corners::Vector{T}; multiple::Int=1, N_override::Union{Nothing,Int}=nothing) where {T<:Real}
     twopi = 2*T(pi)
     _, _, Ltot = component_lengths(comp)
     scale = solver.pts_scaling_factor[1]
     N = max(solver.min_pts, round(Int, k*Ltot*scale/twopi))
-    needed = solver.symmetry === nothing ? 2 : symmetry_node_multiple(solver.symmetry)
-    N = cld(N, needed)*needed
+    N = _bim_round_nodes(N, lcm(solver.symmetry === nothing ? 2 : _bim_node_multiple(solver.symmetry), multiple), N_override)
     σ, tmap, jac, jac2, _ = multi_kress_graded_nodes_data(T, N, corners; q=grading.kressq, minsep_tol=T(grading.min_t_spacing))
     tphys = tmap
     xy = Vector{SVector{2,T}}(undef, N)
@@ -285,10 +283,10 @@ end
 # ungraded periodic discretization. Both branches subsequently use the same
 # Kress quadrature scheme for the DLP kernel—the only
 # distinction is whether the periodic boundary parametrization is graded.
-function _dlp_evaluate_points(solver::DoubleLayerPotentialSolver, grading::GlobalCornerGrading, comp::Vector, k::T) where {T<:Real}
+function _dlp_evaluate_points(solver::DoubleLayerPotentialSolver, grading::GlobalCornerGrading, comp::Vector, k::T; multiple::Int=1, N_override::Union{Nothing,Int}=nothing) where {T<:Real}
     corners = BilliardGeometry._component_corner_locations(T, comp)
-    isempty(corners) && return _dlp_evaluate_points(solver, SmoothPeriodicGrading(), comp, k)
-    return _dlp_evaluate_points_graded(solver, grading, comp, k, corners)
+    isempty(corners) && return _dlp_evaluate_points(solver, SmoothPeriodicGrading(), comp, k; multiple, N_override)
+    return _dlp_evaluate_points_graded(solver, grading, comp, k, corners; multiple, N_override)
 end
 
 # Determine whether the boundary discretization carries a nontrivial global

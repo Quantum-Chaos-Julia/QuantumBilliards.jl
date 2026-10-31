@@ -172,13 +172,12 @@ _bim_numeric_type(::CombinedFieldIntegralEquationSolver{T}) where {T} = T
 # no true geometric corners are detected. The absence of grading does not
 # disable Kress quadrature: the resulting points are used by the same Kress
 # quadrature scheme during CFIE Fredholm matrix assembly.
-function _cfie_evaluate_points(solver::CombinedFieldIntegralEquationSolver, ::SmoothPeriodicGrading, comp::Vector, k::T) where {T<:Real}
+function _cfie_evaluate_points(solver::CombinedFieldIntegralEquationSolver, ::SmoothPeriodicGrading, comp::Vector, k::T; multiple::Int=1, N_override::Union{Nothing,Int}=nothing) where {T<:Real}
     twopi = 2*T(pi)
     _, _, Ltot = component_lengths(comp)
     scale = solver.pts_scaling_factor[1]
     N = max(solver.min_pts, round(Int, k*Ltot*scale/twopi))
-    needed = solver.symmetry === nothing ? 2 : lcm(2, symmetry_node_multiple(solver.symmetry))
-    N = cld(N, needed)*needed
+    N = _bim_round_nodes(N, lcm(2, _bim_node_multiple(solver.symmetry), multiple), N_override)
     h = twopi/T(N)
     ts = T[s_mid(j, N) for j in 1:N]
     tphys = copy(ts)
@@ -223,15 +222,14 @@ end
 # and diagonal limits must be expressed in the active quadrature parameter.
 # Physical arclength weights are then ds_j=|dγ/dσ|h with h=2π/N, while `ws`
 # stores the uniform σ-space weights and `jac` stores the grading Jacobian.
-function _cfie_evaluate_points(solver::CombinedFieldIntegralEquationSolver, grading::CornerGrading, comp::Vector, k::T) where {T<:Real}
+function _cfie_evaluate_points(solver::CombinedFieldIntegralEquationSolver, grading::CornerGrading, comp::Vector, k::T; multiple::Int=1, N_override::Union{Nothing,Int}=nothing) where {T<:Real}
     length(comp) == 1 || error("CornerGrading requires the boundary to be represented by a single closed curve with its own parametric corner; use GlobalCornerGrading for composite/piecewise-smooth boundaries.")
     crv = comp[1]
     twopi = 2*T(pi)
     L = T(crv.length)
     scale = solver.pts_scaling_factor[1]
     N = max(solver.min_pts, round(Int, k*L*scale/twopi))
-    needed = solver.symmetry === nothing ? 2 : lcm(2, symmetry_node_multiple(solver.symmetry))
-    N = cld(N, needed)*needed
+    N = _bim_round_nodes(N, lcm(2, _bim_node_multiple(solver.symmetry), multiple), N_override)
     σ, tmap, jac, jac2, _ = kress_graded_nodes_data(T, N; q=grading.kressq, minsep_tol=T(grading.min_t_spacing))
     tphys = tmap./twopi
     xy = curve(crv, tphys)
@@ -279,13 +277,12 @@ end
 # stores dt/dσ. The grading changes only the periodic parametrization; both
 # the double- and single-layer contributions are subsequently discretized with
 # the same Kress quadrature scheme as in the smooth case.
-function _cfie_evaluate_points_graded(solver::CombinedFieldIntegralEquationSolver, grading::GlobalCornerGrading, comp::Vector, k::T, corners::Vector{T}) where {T<:Real}
+function _cfie_evaluate_points_graded(solver::CombinedFieldIntegralEquationSolver, grading::GlobalCornerGrading, comp::Vector, k::T, corners::Vector{T}; multiple::Int=1, N_override::Union{Nothing,Int}=nothing) where {T<:Real}
     twopi = 2*T(pi)
     _, _, Ltot = component_lengths(comp)
     scale = solver.pts_scaling_factor[1]
     N = max(solver.min_pts, round(Int, k*Ltot*scale/twopi))
-    needed = solver.symmetry === nothing ? 2 : symmetry_node_multiple(solver.symmetry)
-    N = cld(N, needed)*needed
+    N = _bim_round_nodes(N, lcm(solver.symmetry === nothing ? 2 : _bim_node_multiple(solver.symmetry), multiple), N_override)
     σ, tmap, jac, jac2, _ = multi_kress_graded_nodes_data(T, N, corners; q=grading.kressq, minsep_tol=T(grading.min_t_spacing))
     tphys = tmap
     xy = Vector{SVector{2,T}}(undef, N)
@@ -310,10 +307,10 @@ function _cfie_evaluate_points_graded(solver::CombinedFieldIntegralEquationSolve
 end
 
 # top-level _evaluate_points function for CFIE, see comments above
-function _cfie_evaluate_points(solver::CombinedFieldIntegralEquationSolver, grading::GlobalCornerGrading, comp::Vector, k::T) where {T<:Real}
+function _cfie_evaluate_points(solver::CombinedFieldIntegralEquationSolver, grading::GlobalCornerGrading, comp::Vector, k::T; multiple::Int=1, N_override::Union{Nothing,Int}=nothing) where {T<:Real}
     corners = BilliardGeometry._component_corner_locations(T, comp)
-    isempty(corners) && return _cfie_evaluate_points(solver, SmoothPeriodicGrading(), comp, k)
-    return _cfie_evaluate_points_graded(solver, grading, comp, k, corners)
+    isempty(corners) && return _cfie_evaluate_points(solver, SmoothPeriodicGrading(), comp, k; multiple, N_override)
+    return _cfie_evaluate_points_graded(solver, grading, comp, k, corners; multiple, N_override)
 end
 
 ################################################################################

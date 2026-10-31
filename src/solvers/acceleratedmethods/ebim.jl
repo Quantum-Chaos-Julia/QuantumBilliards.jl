@@ -363,7 +363,7 @@ end
 function _composite_fredholm_full_with_derivatives!(A::AbstractMatrix{Complex{T}}, dA::AbstractMatrix{Complex{T}}, ddA::AbstractMatrix{Complex{T}}, solver::CompositeBIMSolver, comp_pts::Vector{BoundaryPoints{T}}, Gs::Vector{BoundaryGeomCache{T}}, Rmats::Vector{Matrix{T}}, offs::Vector{Int}, k::Union{T,Complex{T}}; multithreaded::Bool=true) where {T<:Real}
     nc = length(comp_pts)
     @inbounds for a in 1:nc
-        cs = solver.component_solvers[a]
+        cs = _loop_solver(solver, a)
         pa = comp_pts[a]
         Ga = Gs[a]
         Ra = Rmats[a]
@@ -382,7 +382,7 @@ function _composite_fredholm_full_with_derivatives!(A::AbstractMatrix{Complex{T}
         end
     end
     for b in 1:nc
-        csb = solver.component_solvers[b]
+        csb = _loop_solver(solver, b)
         pb = comp_pts[b]
         offb = offs[b]
         Nb = length(pb)
@@ -432,10 +432,10 @@ function _composite_fredholm_reduced_with_derivatives!(A::AbstractMatrix{Complex
                 jb = g2l[gj]
                 ph = phase[gj]
                 if ca==cb
-                    cs = solver.component_solvers[ca]
+                    cs = _loop_solver(solver, ca)
                     val, dval, ddval = _composite_component_kernel_entry_with_derivatives(cs, comp_pts[ca], Rmats[ca], Gs[ca], k, ia, jb)
                 else
-                    csb = solver.component_solvers[cb]
+                    csb = _loop_solver(solver, cb)
                     xi, yi = comp_pts[ca].xy[ia]
                     val, dval, ddval = _composite_cross_kernel_entry_with_derivatives(csb, comp_pts[cb], xi, yi, k, jb)
                 end
@@ -504,7 +504,7 @@ end
 
 function _ebim_construct_matrices(cs::CompositeBIMSolver{T}, pts::BoundaryPoints{T}, k; multithreaded::Bool=true) where {T<:Real}
     kT = _bim_widen_k(T, k)
-    nc = length(cs.component_solvers)
+    nc = length(cs.loop_solver)
     N = length(pts)
     offs = _composite_offsets(pts, nc)
     comp_pts = [_composite_component_slice(pts, offs[a]:offs[a+1]-1, a) for a in 1:nc]

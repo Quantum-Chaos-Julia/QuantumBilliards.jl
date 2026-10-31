@@ -62,14 +62,17 @@ end
 # Validates and converts a requested representation choice for `sym` into its
 # one-dimensional irrep character: `±1` for any reflection generator, or
 # `exp(2πi*sector*m/N)` for the `m`-th image of an `N`-fold rotation.
-function _sector_character(::BilliardGeometry.AbsReflection, val::Integer)
+function _sector_character(::BilliardGeometry.AbsReflection, val::Integer, d::Integer = 0)
     abs(val) == 1 || throw(ArgumentError("Reflection character must be ±1; received $val"))
     return ComplexF64(val)
 end
-function _sector_character(sym::BilliardGeometry.NFoldRotation, sector::Integer)
-    (0 <= sector < sym.order) || throw(ArgumentError("Rotation sector must be in 0:$(sym.order-1); received $sector"))
+function _sector_character(sym::BilliardGeometry.NFoldRotation, sector::Integer, d::Integer = sym.order)
+    (0 <= sector < d) || throw(ArgumentError("Rotation sector must be in 0:$(d-1); received $sector"))
     return cis(2*pi*sector*sym.m/sym.order)
 end
+
+# Order of the rotation subgroup of a symmetry group: the identity and every orientation-preserving element.
+_rotation_subgroup_order(group) = 1 + count(g -> !BilliardGeometry.orientation_reversing(g), group)
 
 """
     symmetry_sector(billiard::BilliardGeometry.AbsBilliard, choices::Pair...) → sector::SymmetrySector
@@ -77,15 +80,19 @@ end
 Construct a [`SymmetrySector`](@ref) for `billiard` from representation choices
 of the form `GeneratorType => value`.
 
-Every registered symmetry whose type matches `GeneratorType` is assigned the
+Every symmetry of the billiard's symmetry group `G'` (see
+[`get_symmetry_group`](@ref BilliardGeometry.get_symmetry_group); for a billiard
+with holes, the registered elements that leave every hole invariant) whose type
+matches `GeneratorType` is assigned the
 corresponding one-dimensional irreducible-representation character. Reflection
-values must be `±1`. For an `N`-fold rotation, an integer sector `s ∈ 0:N-1`
-assigns
+values must be `±1`. For an `N`-fold rotation, an integer sector `s` in
+`0:d-1`, with `d` the order of the rotation subgroup of `G'`, assigns
 
     χ_s(g^m) = exp(2πi s m/N)
 
-to each registered rotation element `g^m`. Requesting a generator type not
-registered by the billiard raises an `ArgumentError`.
+to each rotation element `g^m` of `G'`. Requesting a generator type that the
+billiard does not register raises an `ArgumentError`; requesting one that is
+registered but broken by a hole raises an `ArgumentError` naming `G'`.
 
 ## Arguments
 * `billiard::BilliardGeometry.AbsBilliard`: Billiard whose registered symmetries define the available generators.
@@ -96,16 +103,23 @@ registered by the billiard raises an `ArgumentError`.
 """
 function symmetry_sector(billiard::BilliardGeometry.AbsBilliard, choices::Pair...)
     allunique(first.(choices)) || throw(ArgumentError("symmetry_sector received duplicate generator types among choices; each GeneratorType may appear at most once"))
+    group = BilliardGeometry.get_symmetry_group(billiard)
+    d = _rotation_subgroup_order(group)
     characters = Dict{Int,ComplexF64}()
     for (GenType, val) in choices
-        matches = filter(s -> s isa GenType, billiard.symmetries)
-        isempty(matches) && throw(ArgumentError("Billiard has no registered $(GenType) symmetry generator"))
+        matches = filter(s -> s isa GenType, group)
+        if isempty(matches)
+            any(s -> s isa GenType, billiard.symmetries) && throw(ArgumentError("$(GenType) is registered by the billiard but not in its symmetry group G' = $(_group_description(group)); a hole breaks it"))
+            throw(ArgumentError("Billiard has no registered $(GenType) symmetry generator"))
+        end
         for sym in matches
-            characters[sym.sym_id] = _sector_character(sym, val)
+            characters[sym.sym_id] = _sector_character(sym, val, d)
         end
     end
     return SymmetrySector(billiard, characters)
 end
+
+_group_description(group) = isempty(group) ? "{e}" : "{e, " * join(string.(group), ", ") * "}"
 
 """
     symmetry_sector(billiard::BilliardGeometry.AbsBilliard, characters::Integer...) → sector::SymmetrySector
@@ -169,7 +183,7 @@ end
 function _resolve_bim_symmetry(billiard::BilliardGeometry.AbsBilliard, sector::SymmetrySector)
     _check_sector_billiard(billiard, sector)
     isempty(sector.characters) && return nothing, ()
-    gens = Pair{BilliardGeometry.AbsSymmetry,ComplexF64}[BilliardGeometry.symmetry_of(billiard.symmetries, id) => char for (id, char) in sector.characters]
+    gens = Pair{BilliardGeometry.AbsSymmetry,ComplexF64}[BilliardGeometry.symmetry_of(BilliardGeometry.get_symmetry_group(billiard), id) => char for (id, char) in sector.characters]
     return _resolve_bim_symmetry(gens)
 end
 
@@ -211,9 +225,9 @@ end
 # phase is defined modulo 2π; dividing the principal argument by `m` does not
 # in general invert the map s ↦ sm mod N. Several sectors match when m and N
 # share a factor.
-function _matching_rotation_sectors(gen::BilliardGeometry.NFoldRotation, char::ComplexF64)
+function _matching_rotation_sectors(gen::BilliardGeometry.NFoldRotation, char::ComplexF64, d::Int = gen.order)
     order = gen.order
-    return [s for s in 0:order-1 if isapprox(cis(2*pi*s*gen.m/order), char; atol=1e-9)]
+    return [s for s in 0:d-1 if isapprox(cis(2*pi*s*gen.m/order), char; atol=1e-9)]
 end
 
 # Smallest sector matching `char` on the element g^m.
@@ -238,7 +252,8 @@ end
 function _resolve_bim_rotation_sector(gens::Vector{Pair{BilliardGeometry.AbsSymmetry,ComplexF64}})
     order = gens[1].first.order
     all(g -> g.first.order == order, gens) || throw(ArgumentError("Mismatched NFoldRotation orders within one SymmetrySector"))
-    candidates = [_matching_rotation_sectors(gen, char) for (gen, char) in gens]
+    dgroup = order ÷ foldl(gcd, (g.first.m for g in gens); init = order)
+    candidates = [_matching_rotation_sectors(gen, char, dgroup) for (gen, char) in gens]
     any(isempty, candidates) && throw(ArgumentError("Character is not a valid NFoldRotation irrep value for the registered elements: candidate sectors $candidates"))
     sectors = reduce(intersect, candidates)
     isempty(sectors) && throw(ArgumentError("Inconsistent rotation sector recovered across sym_ids: $candidates"))

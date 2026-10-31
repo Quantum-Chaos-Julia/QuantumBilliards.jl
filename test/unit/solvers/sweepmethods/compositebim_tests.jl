@@ -6,9 +6,11 @@
 #                                               _composite_symmetry_orbits, and evaluate_points, boundary_matrix_size,
 #                                               construct_matrices with _composite_fredholm_full! / _composite_fredholm_reduced!)
 #   src/solvers/taylor/bim_kernels_recurrence.jl   (_construct_matrices_multi_k_taylor for composite solvers)
-# Matrix level only: no eigen solve, no tension, no search for wavenumbers. Billiards: AnnularBilliard(0.3, 0.1) (unit circle
-# with an eccentric circular hole of radius 0.3 around (0.1, 0), no symmetry), SinaiBilliard(1.0, 0.25) (square with a
-# central circular hole, no symmetry registry), SquareWithinSquareBilliard(1.0) (two square holes) and the hole free
+# Matrix level only: no eigen solve, no tension, no search for wavenumbers. Billiards: AnnularBilliard(0.3, 0.1) (since B7 symmetric:
+# unit circle with an eccentric circular hole of radius 0.3 around (0.1, 0), each loop two half circles, registry {XAxisReflection}),
+# its center-shifted variant AnnularBilliard(0.3, 0.1; center = [0.2, 0.1]) (unreduced Phase 1 construction, one full circle per loop,
+# empty registry), SinaiBilliard(1.0, 0.25) (square with a
+# central circular hole, D4 registry), SquareWithinSquareBilliard(1.0) (two square holes) and the hole free
 # RectangleBilliard(1.0, 0.6) (D2 symmetry, a single component) for the symmetry reduced paths. The checks are
 #   * the decomposition of the full boundary into loops with hole flags (_composite_components), also for billiards without holes
 #     and for a hole made of two loops;
@@ -20,7 +22,13 @@
 #     off-diagonal blocks equal the smooth Nystrom kernels written out from the merged nodes;
 #   * the symmetry reduced matrix against the orbit-summed columns of the full matrix, with the orbits assembled block by
 #     block from BilliardGeometry.symmetry_index_orbits;
-#   * the direct matrix against the analytic Taylor matrix, boundary_matrix_size, threaded = serial, argument validation.
+#   * the direct matrix against the analytic Taylor matrix, boundary_matrix_size, threaded = serial, argument validation;
+#   * symmetric holes (the fixtures of test/holes_fixtures.jl in the quarter-square billiard with the D2 registry): the loop to boundary-group
+#     map _composite_loop_groups and the solver field loop_solver behind _loop_solver, the ArgumentErrors of evaluate_points for a solver
+#     that does not match the billiard, the per-group orbit maps of _composite_symmetry_orbits (orbit size |G'|, fundamental size N / |G'|
+#     from the node counts), the G' error for a generator outside G' at boundary_matrix_size, identical node counts of congruent copies of
+#     a SymmetrizedHoles for a reduced solver, and the Phase 1 node counts of an unreduced solver. Node counts follow from the rounding
+#     rule N = cld(max(min_pts, ...), lcm(...)) * lcm(...) with forced counts; no matrix assembly beyond what is named.
 # Helper definitions use the prefix `cb_`.
 
 using LinearAlgebra: norm, diag
@@ -28,7 +36,8 @@ using SpecialFunctions: besselh
 using StaticArrays: SVector
 using QuantumBilliards: _composite_components, _composite_offsets, _composite_component_slice,
                         _composite_global_to_local, _flip_component_orientation, _combine_composite_orbits,
-                        _composite_symmetry_orbits, _construct_matrices_multi_k_taylor, _is_nontrivial_dlp_grading
+                        _composite_symmetry_orbits, _construct_matrices_multi_k_taylor, _is_nontrivial_dlp_grading,
+                        _composite_loop_groups, _loop_solver
 
 # Orbit sum of the columns of the full composite matrix. `locals[a]` is the orbit map of component a (built on the component's
 # own node count); the maps are shifted into the concatenated indexing by hand, E[r, c] = sum over the nodes j of the orbit c
@@ -96,10 +105,19 @@ end
 
 @testset "_composite_components" begin
     @testset "annulus: outer circle and hole" begin
-        annulus = AnnularBilliard(0.3, 0.1)
+        # nonzero center: unreduced construction, one full circle per loop
+        annulus = AnnularBilliard(0.3, 0.1; center=[0.2, 0.1])
         comps, is_hole = _composite_components(annulus)
         @test length(comps) == 2 && is_hole == [false, true]
         @test length.(comps) == [1, 1]
+        @test sum(c.length for c in comps[1]) ≈ 2π
+        @test sum(c.length for c in comps[2]) ≈ 2π * 0.3
+    end
+
+    @testset "origin-centered annulus: symmetric, each loop is two half circles" begin
+        comps, is_hole = _composite_components(AnnularBilliard(0.3, 0.1))
+        @test length(comps) == 2 && is_hole == [false, true]
+        @test length.(comps) == [2, 2]
         @test sum(c.length for c in comps[1]) ≈ 2π
         @test sum(c.length for c in comps[2]) ≈ 2π * 0.3
     end
@@ -125,8 +143,12 @@ end
         @test comps[1] == full_boundary(rect)
     end
 
-    @testset "a hole must be a single loop" begin
-        @test_throws ArgumentError _composite_components(cb_two_loop_hole_billiard())
+    @testset "a hole of several loops gives one component per loop" begin
+        comps, is_hole = _composite_components(cb_two_loop_hole_billiard())
+        @test length(comps) == 3 && is_hole == [false, true, true]            # outer loop plus the two loops of the one hole object
+        @test length.(comps) == [4, 4, 4]
+        @test [sum(c.length for c in comp) for comp in comps] ≈ [16.0, 4.0, 4.0]
+        @test [comp[1].domain_id for comp in comps] == [1, 2, 3]
     end
 
     @testset "outer first, then one component per hole object in holes order" begin
@@ -150,7 +172,9 @@ end
 end
 
 @testset "evaluate_points: annulus with a DLP outer and a CFIE hole component" begin
-    annulus = AnnularBilliard(0.3, 0.1)
+    # nonzero center keeps the unreduced construction (one full circle per loop): outer circle of radius 1 about o, hole of radius 0.3 about o + (0.1, 0)
+    o = SVector(0.2, 0.1)
+    annulus = AnnularBilliard(0.3, 0.1; center=[0.2, 0.1])
     k = 3.0
     outer_solver = DoubleLayerPotentialSolver(5.0, annulus; min_pts=32)
     hole_solver = CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=24)
@@ -166,13 +190,13 @@ end
         @test _composite_offsets(pts, 2) == [1, 33, 57]
         @test pts.w_dm == [fill(1.0, 32); fill(2.0, 24)]                # private per-point component label
         @test boundary_matrix_size(solver, pts) == 56 == boundary_matrix_size(pts)
-        @test hole.radius == 0.3 && hole.center == SVector(0.1, 0.0)
+        @test hole.radius == 0.3 && hole.center ≈ SVector(0.3, 0.1)
     end
 
     @testset "nodes and weights equal the standalone solvers on the same circles" begin
         circle = CircleBilliard(1.0)
         ref = evaluate_points(DoubleLayerPotentialSolver(5.0, circle; min_pts=32), circle, k)
-        @test pts.xy[rng1] ≈ ref.xy
+        @test pts.xy[rng1] ≈ ref.xy .+ [o]
         @test pts.ws[rng1] == ref.ws && pts.ds[rng1] ≈ ref.ds && pts.ts[rng1] == ref.ts
         θ = [(j - 1 / 2) * 2π / 24 for j in 1:24]
         @test pts.xy[rng2] ≈ [c + ρ * SVector(cos(t), sin(t)) for t in θ]    # the hole nodes run counterclockwise from angle 0
@@ -181,7 +205,7 @@ end
     end
 
     @testset "outward normals of the domain" begin
-        @test pts.normal[rng1] ≈ pts.xy[rng1]                           # outer circle: radial outward
+        @test pts.normal[rng1] ≈ [x - o for x in pts.xy[rng1]]       # outer circle: radial outward
         @test pts.normal[rng2] ≈ [-(x - c) / ρ for x in pts.xy[rng2]]   # hole: pointing into the hole
     end
 
@@ -492,5 +516,190 @@ end
         o4 = symmetry_index_orbits(Float64, rect, 8, XYAxisReflection(), 1.0 + 0im, 1.0 + 0im)
         @test_throws ArgumentError _combine_composite_orbits(Float64, [o2, o4])                  # different orbit sizes
         @test fundamental_size(_combine_composite_orbits(Float64, [o2, o2])) == 8
+    end
+end
+
+################################################################################
+############################## symmetric holes #################################
+################################################################################
+
+# Composite DLP solver with one outer solver and one solver for the single hole object of `b`; `kwargs` pass the reduction
+# (symmetry, sym_characters) to both. The scaling factor 0.01 keeps the node counts at min_pts unless a test raises it.
+function cb_hole_solver(b, outer_min, hole_min; scale=0.01, kwargs...)
+    return CompositeBIMSolver(DoubleLayerPotentialSolver(scale, b; min_pts=outer_min, kwargs...),
+                              DoubleLayerPotentialSolver(scale, b; min_pts=hole_min, kwargs...))
+end
+
+# The (Y, X) reduction of D2 with the characters (chi_Y, chi_X) = (1, -1).
+const cb_D2_REDUCTION = (symmetry=CompositeReflection(YAxisReflection(), XAxisReflection()), sym_characters=(1, -1))
+
+# Group (0 outer, 1 hole object) of a global node index given the first index of the hole group.
+cb_group_of(i, first_hole) = i < first_hole ? 0 : 1
+
+@testset "_composite_loop_groups" begin
+    # no holes: the single outer loop is group 0
+    @test _composite_loop_groups(RectangleBilliard(1.0, 0.6)) == [0]
+    @test _composite_loop_groups(CircleBilliard(1.0)) == [0]
+    @test _composite_loop_groups(RectangleBilliard(1.0, 0.6).fundamental_domain) == [0]
+    # one loop per hole object
+    @test _composite_loop_groups(AnnularBilliard(0.3, 0.1)) == [0, 1]
+    @test _composite_loop_groups(SinaiBilliard(1.0, 0.25)) == [0, 1]
+    @test _composite_loop_groups(SquareWithinSquareBilliard(1.0)) == [0, 1, 2]
+    @test _composite_loop_groups(hf_domain_hole_billiard()) == [0, 1]
+    @test _composite_loop_groups(hf_quarter_disc_billiard()) == [0, 1]
+    # several loops in one hole object share its group
+    @test _composite_loop_groups(cb_two_loop_hole_billiard()) == [0, 1, 1]
+    @test _composite_loop_groups(hf_symmetrized_disc_billiard()) == [0, 1, 1, 1, 1]
+    @test _composite_loop_groups(hf_symmetrized_disc_billiard().fundamental_domain) == [0, 1, 1, 1, 1]
+end
+
+@testset "_loop_solver and the loop_solver field" begin
+    b = hf_symmetrized_disc_billiard()
+    outer = DoubleLayerPotentialSolver(0.01, b; min_pts=32)
+    hole = CombinedFieldIntegralEquationSolver(0.01, b; min_pts=12)
+    solver = CompositeBIMSolver(outer, hole)
+    @test solver.loop_solver isa Vector{Int}
+    @test solver.loop_solver == [1, 2, 2, 2, 2]                          # group + 1 of every loop
+    @test _loop_solver(solver, 1) === outer
+    @test all(a -> _loop_solver(solver, a) === hole, 2:5)                # all copies use the solver of their hole object
+
+    annulus = AnnularBilliard(0.3, 0.1)
+    dlp = DoubleLayerPotentialSolver(5.0, annulus; min_pts=32)
+    cfie = CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=24)
+    two = CompositeBIMSolver(dlp, cfie)
+    @test two.loop_solver == [1, 2]
+    @test _loop_solver(two, 1) === dlp && _loop_solver(two, 2) === cfie
+
+    @test CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, RectangleBilliard(1.0, 0.6); min_pts=32)).loop_solver == [1]
+    cb2 = cb_two_loop_hole_billiard()
+    @test CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, cb2; min_pts=32), DoubleLayerPotentialSolver(5.0, cb2; min_pts=16)).loop_solver == [1, 2, 2]
+end
+
+@testset "evaluate_points: solver does not match the billiard" begin
+    k = 6.3
+    b = hf_symmetrized_disc_billiard()
+    annulus = AnnularBilliard(0.3, 0.1)
+    # wrong number of solvers for the groups of the billiard
+    one_solver = CompositeBIMSolver(DoubleLayerPotentialSolver(0.01, b; min_pts=32))
+    @test_throws ArgumentError evaluate_points(one_solver, b, k)
+    @test_throws "component group" evaluate_points(one_solver, b, k)
+    three = CompositeBIMSolver(DoubleLayerPotentialSolver(0.01, b; min_pts=32), DoubleLayerPotentialSolver(0.01, b; min_pts=12), DoubleLayerPotentialSolver(0.01, b; min_pts=12))
+    @test_throws ArgumentError evaluate_points(three, b, k)
+    # same number of groups, different loop structure: a solver built for an annulus used on four copies and the other way round
+    ann_solver = CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, annulus; min_pts=32), DoubleLayerPotentialSolver(5.0, annulus; min_pts=24))
+    @test_throws ArgumentError evaluate_points(ann_solver, b, k)
+    @test_throws "loop structure" evaluate_points(ann_solver, b, k)
+    hole_solver = cb_hole_solver(b, 32, 12)
+    @test_throws ArgumentError evaluate_points(hole_solver, annulus, k)
+    @test_throws "loop structure" evaluate_points(hole_solver, annulus, k)
+    @test_throws ArgumentError evaluate_points(hole_solver, cb_two_loop_hole_billiard(), k)
+    # the matching billiard works
+    @test length(evaluate_points(hole_solver, b, k)) == 32 + 4 * 12
+end
+
+@testset "_composite_symmetry_orbits: per-group orbit maps" begin
+    k = 6.3
+    maps = (x -> x, x -> SVector(-x[1], x[2]), x -> SVector(x[1], -x[2]), x -> -x)      # identity, Y, X, XY about the origin
+
+    @testset "SymmetrizedHoles(disc, D2): G' = D2, outer group and four copies" begin
+        b = hf_symmetrized_disc_billiard()
+        solver = cb_hole_solver(b, 32, 12; cb_D2_REDUCTION...)
+        pts = evaluate_points(solver, b, k)
+        offs = _composite_offsets(pts, 5)
+        @test diff(offs) == [32, 12, 12, 12, 12]
+        orbits = _composite_symmetry_orbits(Float64, solver, pts)
+        @test full_size(orbits) == 80
+        @test orbit_size(orbits) == 4                                   # |G'| = 4
+        @test fundamental_size(orbits) == 80 ÷ 4
+        @test boundary_matrix_size(solver, pts) == 20
+        # per group: the outer boundary gives 32 / 4 orbits, the four copies 48 / 4, and no orbit mixes the groups
+        first_hole = offs[2]
+        fund = orbits.fundamental_indices
+        @test count(<(first_hole), fund) == 32 ÷ 4
+        @test count(>=(first_hole), fund) == 48 ÷ 4
+        @test all(a -> allequal(cb_group_of(i, first_hole) for i in orbits.fund_to_full[:, a]), 1:fundamental_size(orbits))
+        # the images of every representative node are its images under the group of D2 (exactly, no tolerance matching in the source)
+        @test cb_orbit_matches(pts.xy, orbits, maps)
+        @test sort(unique(real.(orbits.phase))) == [-1.0, 1.0]          # character (1, -1) on (Y, X)
+    end
+
+    @testset "SymmetricHole quarter disc: G' = {X}" begin
+        b = hf_quarter_disc_billiard()
+        solver = cb_hole_solver(b, 32, 12; symmetry=XAxisReflection(), sym_characters=(1,))
+        pts = evaluate_points(solver, b, k)
+        offs = _composite_offsets(pts, 2)
+        @test diff(offs) == [32, 12]
+        orbits = _composite_symmetry_orbits(Float64, solver, pts)
+        @test full_size(orbits) == 44 && orbit_size(orbits) == 2 && fundamental_size(orbits) == 22
+        @test boundary_matrix_size(solver, pts) == 22
+        @test count(<(offs[2]), orbits.fundamental_indices) == 16 && count(>=(offs[2]), orbits.fundamental_indices) == 6
+        @test cb_orbit_matches(pts.xy, orbits, (x -> x, x -> SVector(x[1], -x[2])))
+        minus = cb_hole_solver(b, 32, 12; symmetry=XAxisReflection(), sym_characters=(-1,))
+        @test boundary_matrix_size(minus, evaluate_points(minus, b, k)) == 22
+    end
+
+    @testset "DomainHole: G' = {e}, a nontrivial reduction is rejected" begin
+        b = hf_domain_hole_billiard()
+        solver = cb_hole_solver(b, 32, 12; symmetry=XAxisReflection(), sym_characters=(1,))
+        pts = evaluate_points(solver, b, k)
+        @test_throws ArgumentError _composite_symmetry_orbits(Float64, solver, pts)
+        @test_throws "G'" _composite_symmetry_orbits(Float64, solver, pts)
+    end
+end
+
+@testset "boundary_matrix_size: a generator outside G' throws" begin
+    k = 6.3
+    b = hf_quarter_disc_billiard()                                      # G' = {X}
+    bad = cb_hole_solver(b, 32, 12; symmetry=YAxisReflection(), sym_characters=(1,))
+    pts = evaluate_points(bad, b, k)
+    @test_throws ArgumentError boundary_matrix_size(bad, pts)
+    @test_throws "G'" boundary_matrix_size(bad, pts)
+    @test_throws ArgumentError construct_matrices(bad, pts, k)
+    # the composite (Y, X) contains Y as well
+    bad2 = cb_hole_solver(b, 32, 12; cb_D2_REDUCTION...)
+    @test_throws "G'" boundary_matrix_size(bad2, evaluate_points(bad2, b, k))
+    # a member of G' is accepted
+    good = cb_hole_solver(b, 32, 12; symmetry=XAxisReflection(), sym_characters=(1,))
+    @test boundary_matrix_size(good, evaluate_points(good, b, k)) == 22
+end
+
+@testset "evaluate_points: node counts of reduced and unreduced solvers with holes" begin
+    k = 6.3
+    b = hf_symmetrized_disc_billiard()
+
+    @testset "copies of a SymmetrizedHoles get identical node counts when the solver is reduced" begin
+        kk = 9.77                                                       # k-driven counts: round(k 0.1 scale) = 49 per copy
+        solver = cb_hole_solver(b, 8, 8; scale=50.0, cb_D2_REDUCTION...)
+        pts = evaluate_points(solver, b, kk)
+        counts = diff(_composite_offsets(pts, 5))
+        @test allequal(counts[2:5])
+        @test counts[2] == 52                                           # cld(49, lcm(2, 4)) * 4
+        @test counts[1] == cld(round(Int, kk * 8 * 50.0 / 2π), 4) * 4   # outer boundary: perimeter 8, multiple of 4
+        @test all(c -> c % 4 == 0, counts)
+        @test boundary_matrix_size(solver, pts) == sum(counts) ÷ 4
+    end
+
+    @testset "reduced: the outer node count is a multiple of the block count, a hole group of copies shares its count" begin
+        solver = cb_hole_solver(b, 30, 14; cb_D2_REDUCTION...)
+        @test diff(_composite_offsets(evaluate_points(solver, b, k), 5)) == [32, 16, 16, 16, 16]
+    end
+
+    @testset "unreduced solver keeps the Phase 1 node counts" begin
+        solver = cb_hole_solver(b, 30, 14)                              # only even counts are required
+        pts = evaluate_points(solver, b, k)
+        @test diff(_composite_offsets(pts, 5)) == [30, 14, 14, 14, 14]  # 30 is not a multiple of |G| = 4
+        @test boundary_matrix_size(solver, pts) == length(pts) == 86
+        # a hole billiard without symmetry registry is unaffected as well
+        annulus = AnnularBilliard(0.3, 0.1)
+        s = CompositeBIMSolver(DoubleLayerPotentialSolver(0.01, annulus; min_pts=30), DoubleLayerPotentialSolver(0.01, annulus; min_pts=14))
+        @test diff(_composite_offsets(evaluate_points(s, annulus, k), 2)) == [30, 14]
+    end
+
+    @testset "single-loop hole group: the node count is a multiple of its block count" begin
+        q = hf_quarter_disc_billiard()                                  # hole group D2 has 4 blocks, G' = {X}
+        reduced = cb_hole_solver(q, 30, 10; symmetry=XAxisReflection(), sym_characters=(1,))
+        @test diff(_composite_offsets(evaluate_points(reduced, q, k), 2)) == [32, 12]
+        unreduced = cb_hole_solver(q, 30, 10)
+        @test diff(_composite_offsets(evaluate_points(unreduced, q, k), 2)) == [30, 10]
     end
 end

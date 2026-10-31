@@ -433,10 +433,14 @@ end
 
 @testset "_require_fundamental_frame_support" begin
     @test QuantumBilliards._require_fundamental_frame_support(RectangleBilliard(1.0, 0.6)) === nothing    # symmetric, no holes
-    @test QuantumBilliards._require_fundamental_frame_support(AnnularBilliard(0.3, 0.1)) === nothing      # holes, empty registry
-    @test QuantumBilliards._require_fundamental_frame_support(SinaiBilliard(1.0, 0.25)) === nothing
+    @test QuantumBilliards._require_fundamental_frame_support(AnnularBilliard(0.3, 0.1; center=[0.2, 0.1])) === nothing   # holes, empty registry (nonzero center)
+    @test QuantumBilliards._require_fundamental_frame_support(SinaiBilliard(1.0, 0.25; center=[0.2, 0.1])) === nothing
     @test QuantumBilliards._require_fundamental_frame_support(bp_hole_billiard(register_symmetries())) === nothing
     @test_throws ArgumentError QuantumBilliards._require_fundamental_frame_support(bp_hole_billiard(D2_symmetry()))
+    # origin-centered Sinai, annulus and concentric square-within-square are symmetric (nonempty registry) with holes: refused
+    @test_throws ArgumentError QuantumBilliards._require_fundamental_frame_support(AnnularBilliard(0.3, 0.1))
+    @test_throws ArgumentError QuantumBilliards._require_fundamental_frame_support(SinaiBilliard(1.0, 0.25))
+    @test_throws ArgumentError QuantumBilliards._require_fundamental_frame_support(SquareWithinSquareBilliard(1.0; positions=[0.0], sizes=[0.5]))
 end
 
 @testset "_require_no_holes" begin
@@ -495,14 +499,25 @@ end
 
 @testset "get_boundary_curves_with_ignored(::AbsMultiplyConnectedDomain)" begin
     @testset "annulus: outer curve first, then the hole loop" begin
-        annulus = AnnularBilliard(0.3, 0.1)
+        # nonzero center keeps the unreduced construction: full outer circle, then the full hole circle
+        annulus = AnnularBilliard(0.3, 0.1; center=[0.2, 0.1])
         curves = get_boundary_curves_with_ignored(annulus.fundamental_domain)
         @test length(curves) == 2
         @test [c.length for c in curves] ≈ [2π, 2π * 0.3]
-        @test curves[2].center ≈ SVector(0.1, 0.0)
+        @test curves[2].center ≈ SVector(0.3, 0.1)
         @test !is_hole_curve(annulus, curves[1]) && is_hole_curve(annulus, curves[2])
         # without symmetries the billiard-level method forwards to the domain
         @test [c.length for c in get_boundary_curves_with_ignored(annulus)] ≈ [c.length for c in curves]
+    end
+
+    @testset "origin-centered annulus: symmetric, the billiard-level method refuses" begin
+        annulus = AnnularBilliard(0.3, 0.1)
+        @test_throws ArgumentError get_boundary_curves_with_ignored(annulus)
+        @test_throws ArgumentError get_boundary_curves(annulus)
+        # the domain-level method still lists the reduced outer curves and the hole pieces, the outer curve first
+        curves = get_boundary_curves_with_ignored(annulus.fundamental_domain)
+        @test length(curves) ≥ 2
+        @test !is_hole_curve(annulus, curves[1]) && is_hole_curve(annulus, curves[end])
     end
 
     @testset "D2 outer region with an asymmetric hole: holes stay in the full frame" begin
@@ -518,18 +533,20 @@ end
 end
 
 @testset "boundary_coords: hole normals point into the hole" begin
-    annulus = AnnularBilliard(0.3, 0.1)
-    c, ρ = SVector(0.1, 0.0), 0.3
-    # outer points have |x| = 1, hole points |x - c| = rho (the hole lies well inside the outer circle)
-    is_outer(x) = isapprox(norm(x), 1.0; atol=1e-10)
+    # nonzero center: unreduced annulus, outer circle of radius 1 about o, hole circle of radius 0.3 about c = o + (0.1, 0)
+    o = SVector(0.2, 0.1)
+    annulus = AnnularBilliard(0.3, 0.1; center=[0.2, 0.1])
+    c, ρ = o + SVector(0.1, 0.0), 0.3
+    # outer points have |x - o| = 1, hole points |x - c| = rho (the hole lies well inside the outer circle)
+    is_outer(x) = isapprox(norm(x - o), 1.0; atol=1e-10)
 
     function check_normals(bp, n_outer)
         @test length(bp.normal) == length(bp) > n_outer > 0
         for (x, n) in zip(bp.xy, bp.normal)
             @test norm(n) ≈ 1.0
             if is_outer(x)
-                @test dot(n, x) > 0                                          # outward from the unit circle: n.r > 0
-                @test n ≈ x atol = 1e-10
+                @test dot(n, x - o) > 0                                      # outward from the outer circle: n.(x - o) > 0
+                @test n ≈ x - o atol = 1e-10
             else
                 @test norm(x - c) ≈ ρ atol = 1e-10
                 @test dot(n, c - x) > 0                                      # pointing to the hole centre
@@ -555,5 +572,10 @@ end
         @test issorted(bp.s)
         @test bp.s[n_outer + 1] > 2π - 1e-12                          # the hole block continues after the outer perimeter
         @test bp.s[end] <= 2π + 2π * ρ + 1e-12                        # a lattice node may sit on the end of the last loop
+    end
+
+    @testset "origin-centered annulus (symmetric) is refused" begin
+        sym = AnnularBilliard(0.3, 0.1)
+        @test_throws ArgumentError boundary_coords(sym, AbsSampler[GaussLegendreNodes(), GaussLegendreNodes()], [16, 12])
     end
 end

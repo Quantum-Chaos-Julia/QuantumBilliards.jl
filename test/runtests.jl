@@ -28,6 +28,8 @@ macro group(name, body)
     end)
 end
 
+include("holes_fixtures.jl")   # shared hole fixtures (definitions only)
+
 if QB_TEST_GROUP in ("unit", "all")
     include("unit/unittests.jl")
 end

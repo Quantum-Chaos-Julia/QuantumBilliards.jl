@@ -149,18 +149,37 @@ receive character entries as separate scalar arguments, while
 ## Returns
 * `orbits::SymmetryOrbitMap{T}`: Exact symmetry-orbit map.
 """
-_fold_boundary(::Type{T}, billiard::Bi, N::Int, symmetry::AbsSymmetry, character::Tuple) where {T<:Real,Bi<:AbsBilliard} = BilliardGeometry.symmetry_index_orbits(T, billiard, N, symmetry, Complex{T}.(character)...)
-_fold_boundary(::Type{T}, billiard::Bi, N::Int, symmetry::CompositeReflection, character::Tuple) where {T<:Real,Bi<:AbsBilliard} = BilliardGeometry.symmetry_index_orbits(T, billiard, N, symmetry, Complex{T}[character...])
+_fold_boundary(::Type{T}, billiard::Bi, N::Int, symmetry::AbsSymmetry, character::Tuple) where {T<:Real,Bi<:AbsBilliard} = BilliardGeometry.symmetry_index_orbits(T, billiard, N, symmetry, _orbit_character_args(T, symmetry, character)...)
 
-# Convert the stored rotational character tuple to the integer Cₙ sector
-# expected by BilliardGeometry's exact rotational orbit construction.
-function _fold_boundary(::Type{T}, billiard::Bi, N::Int, symmetry::NFoldRotation, character::Tuple) where {T<:Real,Bi<:AbsBilliard}
-    isempty(character) && return BilliardGeometry.symmetry_index_orbits(T, billiard, N, symmetry)
+# Arguments that follow the symmetry in `symmetry_index_orbits` and `group_symmetry_orbits`.
+# Ordinary symmetries take the characters as separate scalars, `CompositeReflection` as one
+# vector, and `NFoldRotation` the integer Cₙ sector.
+_orbit_character_args(::Type{T}, ::AbsSymmetry, character::Tuple) where {T<:Real} = Complex{T}.(character)
+_orbit_character_args(::Type{T}, ::CompositeReflection, character::Tuple) where {T<:Real} = (Complex{T}[character...],)
+
+function _orbit_character_args(::Type{T}, ::NFoldRotation, character::Tuple) where {T<:Real}
+    isempty(character) && return ()
     length(character) == 1 || throw(ArgumentError("NFoldRotation requires exactly one sector"))
     sector = only(character)
     sector isa Int || throw(ArgumentError("NFoldRotation sector must be an Int"))
-    return BilliardGeometry.symmetry_index_orbits(T, billiard, N, symmetry, sector)
+    return (sector,)
 end
+
+# Orbit map of boundary group `group` (0 outer boundary, `i` the `i`-th hole object) acted on by the symmetry group of the billiard.
+_fold_group(::Type{T}, billiard::Bi, group::Int, N::Int, symmetry::AbsSymmetry, character::Tuple) where {T<:Real,Bi<:AbsBilliard} = BilliardGeometry.group_symmetry_orbits(T, billiard, group, N, symmetry, _orbit_character_args(T, symmetry, character)...)
+
+# Node-count multiple that the boundary discretization of a solver with `symmetry` must satisfy on its own.
+# Reflections about axes other than the four special ones need no multiple here: the composite path
+# supplies the number of reconstruction blocks of the boundary group through `multiple`.
+_bim_node_multiple(::Nothing) = 1
+_bim_node_multiple(symmetry::AbsSymmetry) = symmetry_node_multiple(symmetry)
+_bim_node_multiple(symmetry::AxisReflection{A}) where {A} = A in (0//1, 1//4, 1//2, 3//4) ? symmetry_node_multiple(symmetry) : 1
+_bim_node_multiple(symmetry::CompositeReflection) = foldl(lcm, (_bim_node_multiple(ref) for ref in symmetry.reflections); init = 1)
+
+# Round `N` up to a multiple of `needed`, or return the forced count `N_override`.
+@inline _bim_round_nodes(N::Int, needed::Int, ::Nothing) = cld(N, needed) * needed
+@inline _bim_round_nodes(::Int, ::Int, N_override::Int) = N_override
+
 
 # Infer the discrete symmetry used to fold the full-boundary Fredholm operator
 # directly from `billiard`'s minimal registered symmetry generators
@@ -569,7 +588,7 @@ function _cfie_normal_derivative(::CombinedFieldIntegralEquationSolver, pts::Bou
 end
 
 function _cfie_normal_derivative(solver::CompositeBIMSolver, pts::BoundaryPoints{T}, μ::AbstractVector{Complex{T}}, k::T) where {T<:Real}
-    nc = length(solver.component_solvers)
+    nc = length(solver.loop_solver)
     offs = _composite_offsets(pts,nc)
     comp = [_composite_component_slice(pts,offs[a]:offs[a+1]-1,a) for a in 1:nc]
     return _cfie_normal_derivative(comp,offs,μ,k)

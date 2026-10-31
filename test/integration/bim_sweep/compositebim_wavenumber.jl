@@ -7,12 +7,13 @@ const COMPOSITE_SWEEP_REFERENCES = Dict{Symbol,Float64}()
 
 # solver: Composite BIM, one CFIE component per boundary domain
 # kernel/basis: CFIE, SmoothPeriodicGrading, min_pts=64
-# billiard: Annular (AnnularBilliard(0.3, 0.0)), concentric, inner radius 0.3, outer radius 1
+# billiard: Annular (AnnularBilliard(0.3, 0.0; center=[0.2, 0.1])), concentric, inner radius 0.3, outer radius 1; the nonzero center keeps the
+#   unreduced construction (the origin-centered annulus is symmetric since B7)
 # symmetry: None
 # reference: analytic, first root of the annulus Bessel determinant (next level 4.7058 lies outside the window)
 # functions to test: solve_wavenumber
 @testset "Composite CFIE - Annular - Ground State" begin
-    billiard = AnnularBilliard(0.3, 0.0)
+    billiard = AnnularBilliard(0.3, 0.0; center=[0.2, 0.1])
     component() = CombinedFieldIntegralEquationSolver(10.0, billiard; grading=SmoothPeriodicGrading(), min_pts=64)
     solver = CompositeBIMSolver(component(), component())
     k_ref = annulus_spectrum(0.3, 1.0, 0.0, 6.0)[1]

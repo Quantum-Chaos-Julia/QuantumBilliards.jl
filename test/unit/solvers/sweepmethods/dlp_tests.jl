@@ -15,13 +15,15 @@
 #   * the symmetry reduced matrix against the orbit-summed columns of the full matrix on the same nodes (X, Y, XY, inferred
 #     rectangle reflections, C3 and Star rotations); the orbits come from BilliardGeometry.symmetry_index_orbits and their
 #     geometry is verified on the nodes;
-#   * boundary_matrix_size and threaded = serial assembly.
+#   * boundary_matrix_size and threaded = serial assembly;
+#   * the keywords `multiple` and `N_override` of _dlp_evaluate_points (node count a multiple of lcm(...) with `multiple`, forced node
+#     count, unchanged defaults) for the smooth and the corner graded discretization; the node counts follow from the rounding rule.
 # Helper definitions use the prefix `dlp_`.
 
 using LinearAlgebra: norm, diag
 using SpecialFunctions: besselj1, besselh
 using StaticArrays: SVector
-using QuantumBilliards: _construct_matrices_multi_k_taylor, _is_nontrivial_dlp_grading
+using QuantumBilliards: _construct_matrices_multi_k_taylor, _is_nontrivial_dlp_grading, _dlp_evaluate_points
 
 # Explicit Kress matrix of the periodic kernel log(4 sin^2((t - tau) / 2)) for the N = 2n midpoint nodes.
 function dlp_kress_matrix(N::Int)
@@ -178,6 +180,59 @@ end
         full = DoubleLayerPotentialSolver(5.0, stadium; min_pts=8)
         @test evaluate_points(solver, stadium, 8.0).xy == evaluate_points(full, stadium, 8.0).xy
         @test sum(evaluate_points(solver, stadium, 8.0).ds) ≈ sum(c.length for c in full_boundary(stadium))
+    end
+end
+
+@testset "_dlp_evaluate_points: multiple and N_override" begin
+    circle = CircleBilliard(1.0)
+    rect = RectangleBilliard(1.0, 0.6)
+    ccomp = full_boundary(circle)
+    rcomp = full_boundary(rect)
+
+    @testset "smooth periodic grading" begin
+        solver = DoubleLayerPotentialSolver(5.0, circle; min_pts=33)        # N0 = 33 at k = 3, rounded to the even 34
+        grading = solver.grading
+        @test length(_dlp_evaluate_points(solver, grading, ccomp, 3.0)) == 34
+        @test length(_dlp_evaluate_points(solver, grading, ccomp, 3.0; multiple=1)) == 34
+        @test length(_dlp_evaluate_points(solver, grading, ccomp, 3.0; multiple=3)) == 36      # lcm(2, 3) = 6
+        @test length(_dlp_evaluate_points(solver, grading, ccomp, 3.0; multiple=5)) == 40      # lcm(2, 5) = 10
+        @test length(_dlp_evaluate_points(solver, grading, ccomp, 3.0; multiple=4)) == 36      # lcm(2, 4) = 4
+        @test length(_dlp_evaluate_points(solver, grading, ccomp, 3.0; N_override=50)) == 50
+        @test length(_dlp_evaluate_points(solver, grading, ccomp, 3.0; multiple=7, N_override=50)) == 50   # the override wins
+        @test length(_dlp_evaluate_points(solver, grading, ccomp, 3.0; N_override=17)) == 17   # forced as given, not rounded
+        # the defaults reproduce evaluate_points
+        @test _dlp_evaluate_points(solver, grading, ccomp, 3.0).xy == evaluate_points(solver, circle, 3.0).xy
+        # a forced count gives the uniform midpoint nodes of that count
+        forced = _dlp_evaluate_points(solver, grading, ccomp, 3.0; N_override=50)
+        @test forced.ts ≈ [(j - 1 / 2) * 2π / 50 for j in 1:50]
+        @test sum(forced.ws) ≈ 2π
+        # the multiple combines with a solver symmetry through lcm: 4 (XY reflection) and 3 give 12
+        sym = DoubleLayerPotentialSolver(5.0, circle; min_pts=33, symmetry=XYAxisReflection(), sym_characters=(1, 1))
+        @test length(_dlp_evaluate_points(sym, sym.grading, ccomp, 3.0)) == 36
+        @test length(_dlp_evaluate_points(sym, sym.grading, ccomp, 3.0; multiple=5)) == 40     # lcm(2, 4, 5) = 20
+        @test length(_dlp_evaluate_points(sym, sym.grading, ccomp, 3.0; multiple=3)) == 36     # lcm(2, 4, 3) = 12
+    end
+
+    @testset "corner graded (GlobalCornerGrading)" begin
+        solver = DoubleLayerPotentialSolver(5.0, rect; min_pts=32, grading=GlobalCornerGrading())   # N0 = 32 at k = 3
+        grading = solver.grading
+        @test length(_dlp_evaluate_points(solver, grading, rcomp, 3.0)) == 32
+        @test length(_dlp_evaluate_points(solver, grading, rcomp, 3.0; multiple=1)) == 32
+        @test length(_dlp_evaluate_points(solver, grading, rcomp, 3.0; multiple=5)) == 40      # lcm(2, 5) = 10
+        @test length(_dlp_evaluate_points(solver, grading, rcomp, 3.0; multiple=7)) == 42      # lcm(2, 7) = 14
+        @test length(_dlp_evaluate_points(solver, grading, rcomp, 3.0; N_override=48)) == 48
+        @test length(_dlp_evaluate_points(solver, grading, rcomp, 3.0; multiple=7, N_override=48)) == 48
+        base = _dlp_evaluate_points(solver, grading, rcomp, 3.0)
+        @test base.xy == evaluate_points(solver, rect, 3.0).xy
+        @test _dlp_evaluate_points(solver, grading, rcomp, 3.0; multiple=1, N_override=nothing).xy == base.xy
+        forced = _dlp_evaluate_points(solver, grading, rcomp, 3.0; N_override=48)
+        @test _is_nontrivial_dlp_grading(forced)
+        @test sum(forced.ws) ≈ 2π
+        @test forced.ts ≈ [(j - 1 / 2) * 2π / 48 for j in 1:48]
+        # with a symmetry the graded site rounds to lcm(symmetry multiple, multiple)
+        sym = DoubleLayerPotentialSolver(5.0, rect; min_pts=32, grading=GlobalCornerGrading(), sym_characters=(1, 1))
+        @test length(_dlp_evaluate_points(sym, sym.grading, rcomp, 3.0)) == 32
+        @test length(_dlp_evaluate_points(sym, sym.grading, rcomp, 3.0; multiple=3)) == 36     # lcm(4, 3) = 12
     end
 end
 

@@ -32,6 +32,7 @@ end
 @group "symmetry" begin
     include("symmetry/reflection_spectra.jl")
     include("symmetry/rotation_spectra.jl")
+    include("symmetry/hole_sector_matrices.jl")
 end
 
 @group "drivers and states" begin

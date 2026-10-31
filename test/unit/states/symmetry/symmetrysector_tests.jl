@@ -1,7 +1,13 @@
 # Unit tests for
 #   src/states/symmetry/symmetrysector.jl   (SymmetrySector, symmetry_sector (pair form and positional form),
 #                                            _sector_character, _check_sector_billiard, _resolve_bim_symmetry,
-#                                            _match_rotation_sector, and the reflection / rotation resolution helpers)
+#                                            _match_rotation_sector, _rotation_subgroup_order, and the reflection / rotation
+#                                            resolution helpers)
+# Billiards with holes: the sector reads the symmetry group G' of the billiard (BilliardGeometry.get_symmetry_group), not the outer
+# registry G. A generator registered in G but not in G' raises an ArgumentError naming G'; rotation sectors range over 0:d-1 with d
+# the order of the rotation subgroup of G'. The hole fixtures are the D2 quarter-square billiard with a hole that keeps only X
+# (the D2 disc about (0.5, 0)) or nothing (a DomainHole); a registry {NFoldRotation(6,2), NFoldRotation(6,4)} (C3 inside C6) checks
+# the subgroup sector range and the folded phases chi_s(g^m) = exp(2 pi i s m / 6).
 # The symmetry generators, the registry and the orbit maps belong to BilliardGeometry; here they are only used as
 # inputs (RectangleBilliard: D2 reflections, StarBilliard: cyclic rotations, a circular PolarBilliard: a single
 # diagonal reflection, TriangleBilliard: no symmetry) and the characters recovered from them are compared with the
@@ -10,7 +16,8 @@
 # folding of BilliardGeometry with the plane-wave pattern count of RealPlaneWaves for the same sector.
 # Helper functions use the prefix `ss_`.
 
-using QuantumBilliards: _sector_character, _match_rotation_sector, _resolve_bim_symmetry, _check_sector_billiard
+using StaticArrays: SVector
+using QuantumBilliards: _sector_character, _match_rotation_sector, _resolve_bim_symmetry, _check_sector_billiard, _rotation_subgroup_order
 
 # Vector of generator => character pairs in the exact element type consumed by the vector method of
 # `_resolve_bim_symmetry`.
@@ -436,10 +443,29 @@ end
         end
     end
 
-    @testset "ambiguous sector from a single element g^(N/2)" begin
-        gens = ss_gens(NFoldRotation(4, 2, 1) => -1)
+    # The element g^(N/2) of C4 alone only fixes the character on the rotation subgroup it generates ({e, g^2}, order 2), so
+    # the sector range is 0:d-1 with d = 2 and the character is resolved uniquely.
+    @testset "single element g^(N/2): resolved by the subgroup order" begin
+        for (char, sector) in ((1, 0), (-1, 1))
+            gens = ss_gens(NFoldRotation(4, 2, 1) => char)
+            gen, chars = _resolve_bim_symmetry(gens)
+            @test gen === gens[1].first
+            @test chars == (sector,)
+            # the sector reproduces the requested character on the element: chi_s(g) = exp(2 pi i s/d), d = 2
+            @test cis(2pi * sector * 1 / 2) ≈ char atol = 1e-13
+        end
+        # a character that is not a value of the subgroup of order 2 is still rejected
+        @test_throws ArgumentError _resolve_bim_symmetry(ss_gens(NFoldRotation(4, 2, 1) => im))
+        @test_throws ArgumentError _resolve_bim_symmetry(ss_gens(NFoldRotation(4, 2, 1) => ComplexF64(0.5)))
+    end
+
+    @testset "elements of a rotation subgroup with inconsistent characters are rejected" begin
+        # C3 inside C6: chi_s(g^2) = exp(2 pi i s/3) and chi_s(g^4) = exp(4 pi i s/3). The pair (exp(2 pi i/3), exp(2 pi i/3)) would
+        # need s = 1 for g^2 and s = 2 for g^4.
+        gens = ss_gens(NFoldRotation(6, 2, 1) => cis(2pi / 3), NFoldRotation(6, 4, 2) => cis(2pi / 3))
+        @test_throws ArgumentError _resolve_bim_symmetry(gens)
         err = try _resolve_bim_symmetry(gens) catch e; e end
-        @test err isa ArgumentError && occursin("Ambiguous rotation sector", err.msg)
+        @test err isa ArgumentError && occursin("Inconsistent rotation sector", err.msg)
     end
 end
 
@@ -591,4 +617,149 @@ end
         @test orbit_size(orbits) == 3
         @test fundamental_size(orbits) == N ÷ 3
     end
+end
+
+################################################################################
+######################## symmetry group G' of billiards with holes #############
+################################################################################
+
+# Minimal billiard holding a MultiplyConnectedDomain and a registry (the production hole billiards have an empty registry).
+struct ss_HoleBilliard{T} <: AbsBilliard where {T<:Real}
+    fundamental_domain::MultiplyConnectedDomain{T}
+    symmetries::SymmetryRegistry
+end
+
+ss_disc_domain(R, x0, y0, id) = SimpleDomain{Float64}(AbsCurve[CircleSegment(R, 2π, 0.0, [x0, y0]; domain_id = id, segment_id = 1)],
+                                                      SVector{2,Float64}[SVector(x0 + R, y0)], id)
+
+# Quarter square [0,1]^2 of RectangleBilliard(1.0, 1.0) (registry Y, XY, X = sym_ids 1, 2, 3) with one hole object.
+ss_hole_billiard(hole, reg = D2_symmetry()) =
+    ss_HoleBilliard{Float64}(MultiplyConnectedDomain(RectangleBilliard(1.0, 1.0).fundamental_domain, [hole], 1), reg)
+
+# Disc of radius 0.1 about (0.5, 0) with its own D2 group: only X keeps it in place, G' = {e, XAxisReflection(3)}.
+function ss_x_disc_billiard()
+    piece = CircleWedge(0.1, pi / 2, 0.0, 0.5, 0.0, 2; bcs = AbsBoundaryCondition[SpecularReflection(), SymmetryWall(1, 2), SymmetryWall(3, 4)])
+    return ss_hole_billiard(SymmetricHole(piece, D2_symmetry(), SVector(0.5, 0.0)))
+end
+# Four discs placed by D2: G' = D2.
+ss_four_discs_billiard() = ss_hole_billiard(SymmetrizedHoles(DomainHole(ss_disc_domain(0.1, 0.4, 0.2, 5)), D2_symmetry()))
+# Asymmetric disc: G' = {e}.
+ss_plain_disc_billiard() = ss_hole_billiard(DomainHole(ss_disc_domain(0.2, 0.3, 0.4, 5)))
+
+# Unit circle whose registry holds the given symmetries (only the registry is inspected by the sector resolution).
+function ss_registry_circle(syms::AbsSymmetry...)
+    seg = FourierCoeffPolarSegment(Float64[]; shift_angle = pi / 4)
+    dom = BilliardGeometry.PolarDomain{Float64}([seg], [curve(seg, 0.0)], 1)
+    return PolarBilliard{Float64}(dom, register_symmetries(syms...))
+end
+
+@testset "_rotation_subgroup_order" begin
+    # the identity and every orientation-preserving element
+    @test _rotation_subgroup_order(register_symmetries()) == 1
+    @test _rotation_subgroup_order(register_symmetries(XAxisReflection())) == 1
+    @test _rotation_subgroup_order(D2_symmetry()) == 2                  # {e, XY}
+    @test _rotation_subgroup_order(D4_symmetry()) == 4                  # {e, R1, XY, R3}
+    @test _rotation_subgroup_order(Cn_symmetry(6)) == 6
+    @test _rotation_subgroup_order(Cn_symmetry(1)) == 1
+    @test _rotation_subgroup_order(register_symmetries(NFoldRotation(6, 2), NFoldRotation(6, 4))) == 3
+    # a billiard registry and a G' registry alike
+    @test _rotation_subgroup_order(RectangleBilliard(1.0, 0.6).symmetries) == 2
+    @test _rotation_subgroup_order(get_symmetry_group(ss_x_disc_billiard())) == 1      # G' = {e, X}
+    @test _rotation_subgroup_order(get_symmetry_group(ss_four_discs_billiard())) == 2  # G' = D2
+end
+
+@testset "symmetry_sector reads G' (billiards with holes)" begin
+    b2 = ss_x_disc_billiard()
+    @test length(b2.symmetries) == 3
+    @test length(get_symmetry_group(b2)) == 1
+    # X is in G'
+    sec = symmetry_sector(b2, XAxisReflection => -1)
+    @test sec isa SymmetrySector
+    @test sec.billiard === b2
+    @test sec.characters == Dict{Int,ComplexF64}(3 => -1)
+    # Y and XY are registered by the billiard but broken by the hole: the error names G'
+    err = try symmetry_sector(b2, YAxisReflection => 1) catch e; e end
+    @test err isa ArgumentError
+    @test err.msg == "YAxisReflection is registered by the billiard but not in its symmetry group G' = {e, XAxisReflection(3)}; a hole breaks it"
+    @test_throws "G'" symmetry_sector(b2, YAxisReflection => 1)
+    @test_throws "G'" symmetry_sector(b2, XYAxisReflection => 1)
+    @test_throws "G'" symmetry_sector(b2, XAxisReflection => 1, YAxisReflection => 1)
+    # a type not registered at all keeps the old message (no G' mention)
+    err = try symmetry_sector(b2, DiagonalReflection => 1) catch e; e end
+    @test err isa ArgumentError && occursin("no registered DiagonalReflection", err.msg) && !occursin("G'", err.msg)
+    # the abstract type selects only the elements of G'
+    @test symmetry_sector(b2, BilliardGeometry.AbsReflection => 1).characters == Dict{Int,ComplexF64}(3 => 1)
+
+    # a DomainHole breaks all of G: G' = {e}
+    plain = ss_plain_disc_billiard()
+    @test_throws "G' = {e}" symmetry_sector(plain, XAxisReflection => 1)
+    @test_throws ArgumentError symmetry_sector(plain, YAxisReflection => 1)
+    @test isempty(symmetry_sector(plain).characters)
+    @test_throws ArgumentError symmetry_sector(plain, 1)                # no generators in G'
+
+    # all of D2 survives four discs placed by D2
+    four = ss_four_discs_billiard()
+    @test symmetry_sector(four, XAxisReflection => -1, YAxisReflection => 1).characters == Dict{Int,ComplexF64}(3 => -1, 1 => 1)
+
+    # positional form: one character per generator of G'
+    @test symmetry_sector(b2, -1).characters == Dict{Int,ComplexF64}(3 => -1)
+    @test_throws ArgumentError symmetry_sector(b2, 1, 1)                # G' has a single generator
+    @test symmetry_sector(four, -1, 1).characters == symmetry_sector(four, YAxisReflection => -1, XAxisReflection => 1).characters
+
+    # billiards without holes are unchanged
+    rect = RectangleBilliard(1.0, 0.6)
+    @test symmetry_sector(rect, YAxisReflection => 1).characters == Dict{Int,ComplexF64}(1 => 1)
+end
+
+@testset "_resolve_bim_symmetry reads G' (billiards with holes)" begin
+    b2 = ss_x_disc_billiard()
+    gen, chars = _resolve_bim_symmetry(b2, symmetry_sector(b2, XAxisReflection => -1))
+    @test gen isa CompositeReflection
+    @test only(gen.reflections) isa XAxisReflection
+    @test only(gen.reflections).sym_id == 3                              # the element of G', same sym_id as in the registry
+    @test chars == (-1.0 + 0.0im,)
+
+    four = ss_four_discs_billiard()
+    gen4, chars4 = _resolve_bim_symmetry(four, symmetry_sector(four, XAxisReflection => -1, YAxisReflection => 1))
+    @test gen4 isa CompositeReflection
+    @test Set(typeof.(gen4.reflections)) == Set([XAxisReflection, YAxisReflection])
+    @test ss_char_by_type(gen4, chars4) == Dict(XAxisReflection => -1, YAxisReflection => 1)
+
+    # empty sector
+    @test _resolve_bim_symmetry(b2, symmetry_sector(b2)) == (nothing, ())
+end
+
+@testset "symmetry_sector rotation subgroup (C3 inside C6)" begin
+    b = ss_registry_circle(NFoldRotation(6, 2), NFoldRotation(6, 4))
+    reg = b.symmetries
+    @test _rotation_subgroup_order(reg) == 3
+    # sectors range over 0:d-1 with d = 3 the order of the rotation subgroup, not 0:5
+    for s in 0:2
+        sec = symmetry_sector(b, NFoldRotation => s)
+        @test sec.characters[reg[1].sym_id] ≈ cis(2pi * s * 2 / 6) atol = 1e-13
+        @test sec.characters[reg[2].sym_id] ≈ cis(2pi * s * 4 / 6) atol = 1e-13
+    end
+    @test_throws ArgumentError symmetry_sector(b, NFoldRotation => 3)
+    @test_throws ArgumentError symmetry_sector(b, NFoldRotation => -1)
+    @test_throws "0:2" symmetry_sector(b, NFoldRotation => 3)
+
+    # every sector resolves to the generator of the subgroup (m = 2) and the sector itself
+    for s in 0:2
+        gen, chars = _resolve_bim_symmetry(b, symmetry_sector(b, NFoldRotation => s))
+        @test gen isa NFoldRotation && gen.order == 6 && gen.m == 2
+        @test chars == (s,)
+        # fold: the image of a node under g^l carries chi_s(g^(2l)) = exp(2 pi i s (2l) / 6), and g^2 (l = 2) is the element (6, 4)
+        orbits = symmetry_index_orbits(Float64, b, 12, gen, chars[1])
+        @test orbit_size(orbits) == 3
+        @test fundamental_size(orbits) == 4
+        @test sort(vec(orbits.fund_to_full)) == 1:12
+        @test orbits.fund_to_scale[:, 1] ≈ [cis(2pi * s * 2l / 6) for l in 0:2] atol = 1e-13
+        sec = symmetry_sector(b, NFoldRotation => s)
+        @test orbits.fund_to_scale[3, 1] ≈ sec.characters[reg[2].sym_id] atol = 1e-13
+        @test orbits.fund_to_scale[2, 1] ≈ sec.characters[reg[1].sym_id] atol = 1e-13
+    end
+
+    # the positional form takes the single generator of the subgroup
+    @test symmetry_sector(b, 2).characters == symmetry_sector(b, NFoldRotation => 2).characters
+    @test_throws ArgumentError symmetry_sector(b, 3)
 end

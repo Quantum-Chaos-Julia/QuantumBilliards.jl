@@ -244,6 +244,11 @@ end
 # Asymmetric disc of radius 0.2 about (0.3, 0.4): G' = {e}, |G'| = 1.
 uf_plain_disc() = uf_hole_billiard(DomainHole(uf_disc_domain(0.2, 0.3, 0.4, 5)))
 
+# Origin-centered Sinai and annulus are symmetric since B7 (registry D4 resp. {X}); a nonzero center keeps the unreduced construction with an
+# empty registry. Sinai(1, 0.3): full area 4 - pi 0.09, full perimeter 8 + 2 pi 0.3.
+uf_sinai_shifted() = SinaiBilliard(1.0, 0.3; center=[0.2, 0.1])
+uf_annulus_shifted() = AnnularBilliard(0.3, 0.2; center=[0.5, 0.1])
+
 # Full area, full perimeter and full corner angles: outer square [-1,1]^2 (area 4, perimeter 8, four right angles) minus the discs.
 const uf_RTOL = 1e-10
 
@@ -254,8 +259,11 @@ const uf_RTOL = 1e-10
     @test _has_reduced_holes(uf_plain_disc())          # also for G' = {e}: the registry of the outer region is nonempty
     # empty registry: the old code path
     @test !_has_reduced_holes(uf_hole_billiard(DomainHole(uf_disc_domain(0.2, 0.3, 0.4, 5)), register_symmetries()))
-    @test !_has_reduced_holes(SinaiBilliard(1.0, 0.3))
-    @test !_has_reduced_holes(AnnularBilliard(0.3, 0.2))
+    @test !_has_reduced_holes(uf_sinai_shifted())
+    @test !_has_reduced_holes(uf_annulus_shifted())
+    # origin-centered Sinai (D4) and annulus ({X}) are reduced since B7
+    @test _has_reduced_holes(SinaiBilliard(1.0, 0.3))
+    @test _has_reduced_holes(AnnularBilliard(0.3, 0.2))
     # billiards without holes
     @test !_has_reduced_holes(CircleBilliard(1.0))
     @test !_has_reduced_holes(RectangleBilliard(1.0, 0.5))
@@ -296,12 +304,32 @@ end
     Ac_full, Lc_full = _weyl_area_length(c, false)
     @test Ac_full ≈ pi rtol = uf_RTOL
     @test Lc_full == sum(crv.length for crv in full_boundary(c))
-    # empty registry with holes: the full billiard is the fundamental one
-    s = SinaiBilliard(1.0, 0.3)
+    # empty registry with holes (center-shifted Sinai): the full billiard is the fundamental one
+    s = uf_sinai_shifted()
     As, Ls = _weyl_area_length(s, true)
     @test As ≈ 4 - pi * 0.09 rtol = uf_RTOL
     @test Ls ≈ 8 + 2pi * 0.3 rtol = uf_RTOL
     @test (As, Ls) == _weyl_area_length(s, false)
+    sa = uf_annulus_shifted()
+    @test _weyl_area_length(sa, true)[1] ≈ pi * (1 - 0.09) rtol = uf_RTOL
+    @test _weyl_area_length(sa, true)[2] ≈ 2pi * (1 + 0.3) rtol = uf_RTOL
+    @test _weyl_area_length(sa, true) == _weyl_area_length(sa, false)
+    # origin-centered Sinai (G' = D4, order 8): the full values are 4 - pi R^2 and 8 + 2 pi R, the fundamental ones an eighth of them
+    d4 = SinaiBilliard(1.0, 0.3)
+    A8, L8 = _weyl_area_length(d4, true)
+    A8_full, L8_full = _weyl_area_length(d4, false)
+    @test A8_full ≈ 4 - pi * 0.09 rtol = uf_RTOL
+    @test L8_full ≈ 8 + 2pi * 0.3 rtol = uf_RTOL
+    @test A8 ≈ A8_full / 8 rtol = uf_RTOL
+    @test L8 ≈ L8_full / 8 rtol = uf_RTOL
+    @test A8 ≈ fundamental_area(d4) rtol = uf_RTOL
+    # origin-centered annulus (G' = {X}, order 2)
+    an = AnnularBilliard(0.3, 0.2)
+    A2a, L2a = _weyl_area_length(an, true)
+    @test _weyl_area_length(an, false)[1] ≈ pi * (1 - 0.09) rtol = uf_RTOL
+    @test _weyl_area_length(an, false)[2] ≈ 2pi * (1 + 0.3) rtol = uf_RTOL
+    @test A2a ≈ pi * (1 - 0.09) / 2 rtol = uf_RTOL
+    @test L2a ≈ 2pi * (1 + 0.3) / 2 rtol = uf_RTOL
 end
 
 @testset "_weyl_angles" begin
@@ -315,7 +343,14 @@ end
     # no holes or empty registry: the corner angles of the billiard itself
     @test _weyl_angles(CircleBilliard(1.0), true) == corner_angles(CircleBilliard(1.0))
     @test _weyl_angles(RectangleBilliard(1.0, 0.5), false) == corner_angles(RectangleBilliard(1.0, 0.5); fundamental=false)
-    @test _weyl_angles(SinaiBilliard(1.0, 0.3), true) == corner_angles(SinaiBilliard(1.0, 0.3))
+    @test _weyl_angles(uf_sinai_shifted(), true) == corner_angles(uf_sinai_shifted())
+    @test _weyl_angles(uf_sinai_shifted(), true) ≈ fill(pi / 2, 4)
+    # origin-centered Sinai (G' = D4, |G'| = 8): one corner per orbit of the four right angles of the outer square, fundamental or not
+    @test _weyl_angles(SinaiBilliard(1.0, 0.3), false) ≈ fill(pi / 2, 4)
+    @test _weyl_angles(SinaiBilliard(1.0, 0.3), true) ≈ [pi / 2]
+    # annuli have no corners
+    @test isempty(_weyl_angles(AnnularBilliard(0.3, 0.2), true))
+    @test isempty(_weyl_angles(uf_annulus_shifted(), true))
 end
 
 @testset "_weyl_inputs" begin
@@ -338,12 +373,22 @@ end
     # G' = {e}: identical to the unreduced inputs
     b1 = uf_plain_disc()
     @test _weyl_inputs(b1, true) == _weyl_inputs(b1, false)
-    # billiards without holes, and the empty-registry Sinai billiard, keep the old inputs
+    # billiards without holes, and the empty-registry (center-shifted) Sinai billiard, keep the old inputs
     c = CircleBilliard(1.0)
     @test _weyl_inputs(c, true) == (fundamental_area(c), sum(crv.length for crv in get_boundary_curves(c)), corner_angles(c))
-    s = SinaiBilliard(1.0, 0.3)
+    s = uf_sinai_shifted()
     @test _weyl_inputs(s, true) == (fundamental_area(s), sum(crv.length for crv in get_boundary_curves(s)), corner_angles(s))
     @test _weyl_inputs(s, false)[1] ≈ 4 - pi * 0.09 rtol = uf_RTOL
+    # origin-centered Sinai (G' = D4): the reduced inputs are the full ones divided by 8, with one corner
+    d4 = SinaiBilliard(1.0, 0.3)
+    Af, Lf, anglesf = _weyl_inputs(d4, false)
+    A8, L8, angles8 = _weyl_inputs(d4, true)
+    @test Af ≈ 4 - pi * 0.09 rtol = uf_RTOL
+    @test Lf ≈ 8 + 2pi * 0.3 rtol = uf_RTOL
+    @test anglesf ≈ fill(pi / 2, 4)
+    @test A8 ≈ Af / 8 rtol = uf_RTOL
+    @test L8 ≈ Lf / 8 rtol = uf_RTOL
+    @test angles8 ≈ [pi / 2]
 end
 
 @testset "Weyl accessors (billiards with holes)" begin
@@ -404,8 +449,16 @@ end
         @test k_at_state(50, c) == k_at_state(50, fundamental_area(c), sum(crv.length for crv in get_boundary_curves(c)), corner_angles(c))
         @test state_at_k(20.0, c) == state_at_k(20.0, fundamental_area(c), sum(crv.length for crv in get_boundary_curves(c)), corner_angles(c))
         @test spectral_density(20.0, c) == spectral_density(20.0, fundamental_area(c), sum(crv.length for crv in get_boundary_curves(c)))
-        s = SinaiBilliard(1.0, 0.3)
+        s = uf_sinai_shifted()
         @test k_at_state(50, s) == k_at_state(50, fundamental_area(s), sum(crv.length for crv in get_boundary_curves(s)), corner_angles(s))
         @test k_at_state(50, s) == k_at_state(50, s; fundamental=false)    # empty registry: fundamental and full coincide
+    end
+
+    @testset "origin-centered Sinai (G' = D4)" begin
+        d4 = SinaiBilliard(1.0, 0.3)
+        A_full, L_full = 4 - pi * 0.09, 8 + 2pi * 0.3
+        @test k_at_state(50, d4) ≈ k_at_state(50, A_full / 8, L_full / 8, [pi / 2]) rtol = 1e-9
+        @test k_at_state(50, d4; fundamental=false) ≈ k_at_state(50, A_full, L_full, fill(pi / 2, 4)) rtol = 1e-9
+        @test k_at_state(50, d4) > k_at_state(50, d4; fundamental=false)
     end
 end
