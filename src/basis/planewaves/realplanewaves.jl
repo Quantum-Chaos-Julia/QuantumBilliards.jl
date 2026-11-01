@@ -248,7 +248,9 @@ function RealPlaneWaves(dim::Int, billiard::BilliardGeometry.AbsBilliard, sector
         "RealPlaneWaves only supports XAxisReflection/YAxisReflection symmetry " *
         "sectors; sector constrains sym_id(s) $(collect(unhandled)) (e.g. an " *
         "NFoldRotation generator) that RealPlaneWaves has no representation " *
-        "for, instead of silently building the unrestricted basis."))
+        "for (rotation and two-dimensional dihedral irrep sectors are supported " *
+        "by boundary-integral solvers only), instead of silently building the " *
+        "unrestricted basis."))
 
     return RealPlaneWaves(dim; sym_x, sym_y, angle_arc, angle_shift, sampler,
                           use_taylor=use_taylor, taylor_degree=taylor_degree,

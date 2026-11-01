@@ -586,3 +586,25 @@ end
         @test construct_matrices(solver, pts, k; multithreaded=true) == construct_matrices(solver, pts, k; multithreaded=false)
     end
 end
+
+@testset "CFIE constructor: sym_characters resolved from the billiard symmetry group (Sinai, D4)" begin
+    sinai = SinaiBilliard(1.0, 0.3)
+
+    @testset "single integer: cyclic sector of the order-4 rotation" begin
+        sol = CombinedFieldIntegralEquationSolver(20.0, sinai; sym_characters=(1,))
+        @test sol.symmetry isa NFoldRotation
+        @test sol.symmetry.order == 4
+        @test sol.symmetry.m == 1
+        @test sol.sym_characters == (1,)
+    end
+
+    @testset "one inner tuple: composite reflection, characters in generator order" begin
+        sol = CombinedFieldIntegralEquationSolver(20.0, sinai; sym_characters=((1, -1),))
+        @test sol.symmetry isa CompositeReflection
+        @test sol.sym_characters == (-1, 1)
+    end
+
+    @testset "two inner tuples are rejected" begin
+        @test_throws ArgumentError CombinedFieldIntegralEquationSolver(20.0, sinai; sym_characters=((1, 1), (1, -1)))
+    end
+end

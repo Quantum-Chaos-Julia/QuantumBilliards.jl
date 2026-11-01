@@ -364,7 +364,8 @@ function FourierBessel(dim::Int, billiard::BilliardGeometry.AbsBilliard, sector:
     isempty(unhandled) || throw(ArgumentError(
         "FourierBessel only supports XAxisReflection/YAxisReflection symmetry " *
         "sectors; sector constrains sym_id(s) $(collect(unhandled)) that " *
-        "FourierBessel has no representation for."))
+        "FourierBessel has no representation for (rotation and two-dimensional " *
+        "dihedral irrep sectors are supported by boundary-integral solvers only)."))
     return FourierBessel(dim; sym_x, sym_y, kwargs...)
 end
 

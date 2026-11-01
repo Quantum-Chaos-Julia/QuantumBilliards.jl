@@ -50,7 +50,8 @@ end
     chars = Dict{Int,ComplexF64}(1 => 1, 3 => -1)
     sec = SymmetrySector(rect, chars)
     @test sec isa SymmetrySector{RectangleBilliard{Float64}}
-    @test fieldnames(SymmetrySector) == (:billiard, :characters)
+    @test fieldnames(SymmetrySector) == (:billiard, :characters, :degeneracy)
+    @test sec.degeneracy == 1                                              # two-argument constructor defaults to a 1D irrep
     @test sec.billiard === rect
     @test sec.characters === chars
     @test !isabstracttype(typeof(sec))
@@ -323,7 +324,7 @@ end
     @testset "wrong number of characters" begin
         @test_throws ArgumentError symmetry_sector(rect, 1)                    # D2 needs two
         @test_throws ArgumentError symmetry_sector(rect, 1, 1, 1)
-        @test_throws ArgumentError symmetry_sector(star, 1)                    # D3 needs two (one per mirror generator)
+        @test symmetry_sector(star, 1).degeneracy == 2                         # D3: a single integer is the 2D irrep E_1, not an error
         @test_throws ArgumentError symmetry_sector(star, 1, 1, 1)
         @test_throws ArgumentError symmetry_sector(tri, 1)                     # no generators at all
         err = try symmetry_sector(rect, 1) catch e; e end
@@ -334,6 +335,47 @@ end
         @test_throws ArgumentError symmetry_sector(rect, 0, 1)
         @test_throws ArgumentError symmetry_sector(rect, 1, 2)
         @test_throws ArgumentError symmetry_sector(star, 0, 1)
+    end
+end
+
+@testset "symmetry_sector single integer and tuple forms" begin
+    sinai = SinaiBilliard(1.0, 0.3)                                            # D4: two mirror generators, d = 4
+    star = StarBilliard(1.0, 0.3, 3)                                           # D3
+    c3 = C3Billiard(0.02)                                                      # one generator (rotation)
+
+    @testset "single integer on D_d, d >= 3: irrep2d sector" begin
+        for (b, k) in ((sinai, 1), (star, 1))
+            sec = symmetry_sector(b, k)
+            ref = symmetry_sector(b; irrep2d = k)
+            @test sec.degeneracy == 2
+            @test sec.characters == ref.characters
+            @test sec.degeneracy == ref.degeneracy
+        end
+    end
+
+    @testset "single integer on one-generator group: 1D sector" begin
+        sec = symmetry_sector(c3, 1)
+        @test sec.degeneracy == 1
+        @test sec.characters == symmetry_sector(c3, NFoldRotation => 1).characters
+    end
+
+    @testset "two integers on D4: 1D sector" begin
+        @test symmetry_sector(sinai, 1, -1).degeneracy == 1
+    end
+
+    @testset "tuple of integers equals splatted form" begin
+        a = symmetry_sector(sinai, (1, -1))
+        b = symmetry_sector(sinai, 1, -1)
+        @test a.characters == b.characters
+        @test a.degeneracy == b.degeneracy
+        @test a.billiard === b.billiard
+    end
+
+    @testset "tuple of tuples: vector of sectors" begin
+        secs = symmetry_sector(sinai, ((1, 1), (1, -1), (1,)))
+        @test secs isa Vector{<:SymmetrySector}
+        @test length(secs) == 3
+        @test [s.degeneracy for s in secs] == [1, 1, 2]
     end
 end
 
@@ -827,4 +869,118 @@ end
 
     tri = TriangleBilliard(1.0, 1.5)
     @test_logs (:info, r"no symmetry") @test log_symmetries(tri) === nothing
+end
+
+@testset "symmetry_sector irrep2d" begin
+    star = StarBilliard(1.0, 0.2, 5)
+    sinai = SinaiBilliard(1.0, 0.3)
+
+    @testset "degeneracy and rotation characters cis(2 pi k m / N)" begin
+        for (b, N, ks) in ((star, 5, 1:2), (sinai, 4, 1:1), (JuliaBilliard(0.3, 0.6), 3, 1:1))
+            rots = filter(g -> g isa NFoldRotation, BilliardGeometry.get_symmetry_group(b))
+            for k in ks
+                sec = symmetry_sector(b; irrep2d = k)
+                @test sec isa SymmetrySector
+                @test sec.billiard === b
+                @test sec.degeneracy == 2
+                @test symmetry_degeneracy(sec) == 2
+                @test Set(keys(sec.characters)) == Set(g.sym_id for g in rots)
+                for g in rots
+                    @test g.order == N
+                    @test sec.characters[g.sym_id] ≈ cis(2pi * k * g.m / N) atol = 1e-13
+                end
+            end
+        end
+    end
+
+    @testset "symmetry_degeneracy of 1D sectors" begin
+        rect = RectangleBilliard(1.0, 0.6)
+        @test symmetry_degeneracy(symmetry_sector(rect, XAxisReflection => 1)) == 1
+        @test symmetry_degeneracy(symmetry_sector(rect)) == 1
+        @test symmetry_degeneracy(symmetry_sector(star, NFoldRotation => 1)) == 1
+    end
+
+    @testset "invalid k" begin
+        @test_throws ArgumentError symmetry_sector(star; irrep2d = 0)
+        @test_throws ArgumentError symmetry_sector(star; irrep2d = 3)          # D_5 has E_1, E_2 only
+        @test_throws ArgumentError symmetry_sector(sinai; irrep2d = 2)         # D_4 has E_1 only
+        @test_throws ArgumentError symmetry_sector(sinai; irrep2d = -1)
+        err = try symmetry_sector(star; irrep2d = 3) catch e; e end
+        @test occursin("1:2", err.msg)
+    end
+
+    @testset "G' is not D_d with d >= 3" begin
+        @test_throws ArgumentError symmetry_sector(RectangleBilliard(1.0, 0.6); irrep2d = 1)   # D_2
+        @test_throws ArgumentError symmetry_sector(LimaconBilliard(0.3); irrep2d = 1)          # D_1
+        @test_throws ArgumentError symmetry_sector(C3Billiard(0.1); irrep2d = 1)               # C_3, no mirrors
+        @test_throws ArgumentError symmetry_sector(TriangleBilliard(1.0, 1.5); irrep2d = 1)    # trivial
+        err = try symmetry_sector(C3Billiard(0.1); irrep2d = 1) catch e; e end
+        @test occursin("dihedral", err.msg)
+    end
+
+    @testset "cannot be combined with Pair choices" begin
+        @test_throws ArgumentError symmetry_sector(star, NFoldRotation => 1; irrep2d = 1)
+        @test_throws ArgumentError symmetry_sector(sinai, XAxisReflection => 1; irrep2d = 1)
+        err = try symmetry_sector(star, NFoldRotation => 1; irrep2d = 1) catch e; e end
+        @test occursin("irrep2d", err.msg)
+    end
+end
+
+@testset "symmetry_irreps - 2D irrep fields" begin
+    @test symmetry_irreps(StarBilliard(1.0, 0.2, 5)).irreps_2d == [1, 2]
+    @test symmetry_irreps(StarBilliard(1.0, 0.2, 5)).n_2d == 2
+    @test symmetry_irreps(SinaiBilliard(1.0, 0.3)).irreps_2d == [1]
+    @test symmetry_irreps(JuliaBilliard(0.3, 0.6)).irreps_2d == [1]
+    for b in (RectangleBilliard(1.0, 0.6), C3Billiard(0.1), TriangleBilliard(1.0, 1.5), LimaconBilliard(0.3))
+        info = symmetry_irreps(b)
+        @test info.irreps_2d == Int[]
+        @test info.n_2d == 0
+    end
+    # every advertised k is accepted by symmetry_sector
+    for b in (StarBilliard(1.0, 0.2, 5), SinaiBilliard(1.0, 0.3))
+        @test all(k -> symmetry_degeneracy(symmetry_sector(b; irrep2d = k)) == 2, symmetry_irreps(b).irreps_2d)
+    end
+end
+
+@testset "symmetry_partner" begin
+    sinai = SinaiBilliard(1.0, 0.3)
+    star = StarBilliard(1.0, 0.2, 5)
+    f(pt) = pt[1] + 2 * pt[2] + pt[1] * pt[2]
+    pts = [SVector(0.3, 0.1), SVector(-0.2, 0.7), SVector(0.5, -0.4)]
+    for b in (sinai, star)
+        group = BilliardGeometry.get_symmetry_group(b)
+        sigma = group[findfirst(g -> g isa BilliardGeometry.AbsReflection, group)]
+        g = symmetry_partner(f, b)
+        @test all(p -> isapprox(g(p), f(BilliardGeometry.apply_symmetry(sigma, p)); atol = 1e-13), pts)
+        # the mirror is an involution, so partner of the partner is f
+        @test all(p -> isapprox(symmetry_partner(g, b)(p), f(p); atol = 1e-13), pts)
+        @test any(p -> !isapprox(g(p), f(p); atol = 1e-6), pts)               # partner differs from f
+    end
+    # constant function is invariant
+    @test symmetry_partner(pt -> 3.0, sinai)(pts[1]) == 3.0
+    @test_throws ArgumentError symmetry_partner(f, C3Billiard(0.1))          # no mirror
+    @test_throws ArgumentError symmetry_partner(f, TriangleBilliard(1.0, 1.5))
+end
+
+@testset "_resolve_bim_symmetry - irrep2d" begin
+    sinai = SinaiBilliard(1.0, 0.3)
+    gen, chars = _resolve_bim_symmetry(sinai, symmetry_sector(sinai; irrep2d = 1))
+    @test gen isa NFoldRotation
+    @test gen.order == 4
+    @test gen.m == 1
+    @test chars == (1,)
+
+    star = StarBilliard(1.0, 0.2, 5)
+    for k in 1:2
+        gen, chars = _resolve_bim_symmetry(star, symmetry_sector(star; irrep2d = k))
+        @test gen isa NFoldRotation && gen.order == 5 && gen.m == 1
+        @test chars == (k,)
+    end
+end
+
+@testset "irrep2d sectors are rejected by basis solvers" begin
+    sinai = SinaiBilliard(1.0, 0.3)
+    sec = symmetry_sector(sinai; irrep2d = 1)
+    @test_throws ArgumentError FourierBessel(10, sinai, sec)
+    @test_throws ArgumentError RealPlaneWaves(10, sinai, sec)
 end
