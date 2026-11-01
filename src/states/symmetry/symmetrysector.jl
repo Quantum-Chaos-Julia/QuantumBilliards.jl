@@ -122,6 +122,75 @@ end
 _group_description(group) = isempty(group) ? "{e}" : "{e, " * join(string.(group), ", ") * "}"
 
 """
+    symmetry_irreps(billiard::BilliardGeometry.AbsBilliard) → info::NamedTuple
+
+Classify the symmetry group `G'` of `billiard` (see
+[`get_symmetry_group`](@ref BilliardGeometry.get_symmetry_group)) and list its
+one-dimensional irreps in the form accepted by
+`symmetry_sector(billiard, characters...)`.
+
+## Returns
+* `info.group`: Group label, `"trivial"`, `"C_d"` (rotations only) or `"D_d"` (`d` rotations and `d` mirrors, `D_1` being a single mirror).
+* `info.order`: Group order `|G'|`.
+* `info.generators`: Minimal generators, in the order the `characters` entries refer to.
+* `info.characters`: One `Tuple{Vararg{Int}}` per 1D irrep: `±1` per mirror generator, or the sector `s ∈ 0:d-1` of a cyclic group.
+* `info.n_2d`: Number of 2D irreps, which `SymmetrySector` cannot represent.
+"""
+function symmetry_irreps(billiard::BilliardGeometry.AbsBilliard)
+    group = BilliardGeometry.get_symmetry_group(billiard)
+    order = length(group) + 1
+    isempty(group) && return (group = "trivial", order = 1, generators = (), characters = [()], n_2d = 0)
+    gens = BilliardGeometry.get_symmetries(group)
+    d = _rotation_subgroup_order(group)
+    nmirror = order - d
+    if nmirror == 0
+        return (group = "C_$d", order = order, generators = gens, characters = [(s,) for s in 0:d-1], n_2d = 0)
+    end
+    nmirror == d || throw(ArgumentError("symmetry group of order $order with $d rotations and $nmirror mirrors is not dihedral"))
+    all(g -> g isa BilliardGeometry.AbsReflection, gens) || throw(ArgumentError("dihedral group generators are expected to be mirrors; received $(map(typeof, gens))"))
+    ng = length(gens)
+    all_chars = collect(Iterators.product(ntuple(_ -> (1, -1), ng)...))[:]
+    chars = isodd(d) && d > 1 ? filter(allequal, all_chars) : all_chars
+    return (group = "D_$d", order = order, generators = gens, characters = Tuple{Vararg{Int}}[c for c in chars], n_2d = isodd(d) ? (d - 1) ÷ 2 : (d - 2) ÷ 2)
+end
+
+_symmetry_label(g::BilliardGeometry.AbsSymmetry) = string(g)
+_symmetry_label(g::BilliardGeometry.NFoldRotation) = "Rotation(2π*$(g.m)/$(g.order))"
+_irrep_description(::BilliardGeometry.AbsReflection, χ::Integer) = χ == 1 ? "+1 (Neumann on the mirror)" : "-1 (Dirichlet on the mirror)"
+function _irrep_description(::BilliardGeometry.NFoldRotation, s::Integer, d::Integer)
+    d1 = s == 0 || 2s == d
+    return d1 ? "s=$s (real)" : "s=$s (complex, degenerate with s=$(d - s))"
+end
+
+"""
+    log_symmetries(billiard::BilliardGeometry.AbsBilliard) → nothing
+
+Log with `@info` the symmetry group `G'` of `billiard`, its irreps and the
+character values accepted by [`symmetry_sector`](@ref) for each generator.
+"""
+function log_symmetries(billiard::BilliardGeometry.AbsBilliard)
+    name = nameof(typeof(billiard))
+    info = symmetry_irreps(billiard)
+    if info.order == 1
+        @info "$name: no symmetry, a single (trivial) sector; use symmetry_sector(billiard) with no characters"
+        return nothing
+    end
+    gens = info.generators
+    d = _rotation_subgroup_order(BilliardGeometry.get_symmetry_group(billiard))
+    lines = String[]
+    for c in info.characters
+        parts = [_symmetry_label(gens[i]) * " => " * (gens[i] isa BilliardGeometry.NFoldRotation ? _irrep_description(gens[i], c[i], d) : _irrep_description(gens[i], c[i])) for i in eachindex(gens)]
+        push!(lines, "  symmetry_sector(billiard, " * join(c, ", ") * "):  " * join(parts, ", "))
+    end
+    n1 = length(info.characters)
+    msg = "$name: symmetry group $(info.group) of order $(info.order); generators $(join(_symmetry_label.(gens), ", ")); $n1 one-dimensional irrep(s)" *
+          (info.n_2d > 0 ? " and $(info.n_2d) two-dimensional irrep(s) (not supported by SymmetrySector)" : "") *
+          "\n" * join(lines, "\n")
+    @info msg
+    return nothing
+end
+
+"""
     symmetry_sector(billiard::BilliardGeometry.AbsBilliard, characters::Integer...) → sector::SymmetrySector
 
 Construct a [`SymmetrySector`](@ref) for `billiard` by assigning one

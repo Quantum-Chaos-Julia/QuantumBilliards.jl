@@ -37,7 +37,7 @@ end
 # Whether the cyclic sector `s` of `billiard` resolves without error to exactly the sector index `s`.
 function ss_resolves_to_sector(billiard, s)
     try
-        _, chars = _resolve_bim_symmetry(billiard, symmetry_sector(billiard, s))
+        _, chars = _resolve_bim_symmetry(billiard, symmetry_sector(billiard, NFoldRotation => s))
         return chars == (s,)
     catch err
         err isa ArgumentError || rethrow()
@@ -224,19 +224,19 @@ end
     end
 end
 
-@testset "symmetry_sector pairs - rotation billiard (Star, C3)" begin
+@testset "symmetry_sector pairs - rotation billiard (Star, D3)" begin
     star = StarBilliard(1.0, 0.3, 3)
-    # StarBilliard registers NFoldRotation(3, m) with sym_id = m = 1, 2.
+    # StarBilliard registers Dn_symmetry(3): the rotations NFoldRotation(3, m) have sym_id = 2m = 2, 4 (odd ids are mirrors).
     @testset "sector s gives chi_s(g^m) = exp(2 pi i s m / 3)" begin
         for s in 0:2
             sec = symmetry_sector(star, NFoldRotation => s)
             @test sec.billiard === star
-            @test Set(keys(sec.characters)) == Set([1, 2])
-            @test sec.characters[1] ≈ cis(2pi * s * 1 / 3) atol = 1e-13
-            @test sec.characters[2] ≈ cis(2pi * s * 2 / 3) atol = 1e-13
-            @test sec.characters[2] ≈ sec.characters[1]^2 atol = 1e-13
+            @test Set(keys(sec.characters)) == Set([2, 4])
+            @test sec.characters[2] ≈ cis(2pi * s * 1 / 3) atol = 1e-13
+            @test sec.characters[4] ≈ cis(2pi * s * 2 / 3) atol = 1e-13
+            @test sec.characters[4] ≈ sec.characters[2]^2 atol = 1e-13
         end
-        @test symmetry_sector(star, NFoldRotation => 0).characters == Dict{Int,ComplexF64}(1 => 1, 2 => 1)
+        @test symmetry_sector(star, NFoldRotation => 0).characters == Dict{Int,ComplexF64}(2 => 1, 4 => 1)
     end
 
     @testset "abstract rotation type" begin
@@ -266,7 +266,7 @@ end
         @test_throws ArgumentError symmetry_sector(tri, XAxisReflection => 1)
         @test_throws ArgumentError symmetry_sector(rect, NFoldRotation => 1)
         @test_throws ArgumentError symmetry_sector(rect, DiagonalReflection => 1)
-        @test_throws ArgumentError symmetry_sector(star, XAxisReflection => 1)
+        @test_throws ArgumentError symmetry_sector(star, DiagonalReflection => 1)   # the D3 mirrors are not the diagonal
         err = try symmetry_sector(tri, XAxisReflection => 1) catch e; e end
         @test occursin("XAxisReflection", err.msg)
     end
@@ -306,16 +306,25 @@ end
         @test symmetry_sector(rect, 1, -1).characters == symmetry_sector(rect, YAxisReflection => 1, XAxisReflection => -1).characters
     end
 
-    @testset "cyclic: one integer sector" begin
-        for s in 0:2
-            @test symmetry_sector(star, s).characters == symmetry_sector(star, NFoldRotation => s).characters
+    @testset "dihedral: one mirror character per generator" begin
+        # D3 = Dn_symmetry(3): two mirror generators; the positional form assigns characters to the mirrors only
+        gens = BilliardGeometry.get_symmetries(star)
+        @test length(gens) == 2
+        @test all(g -> g isa AxisReflection, gens)
+        for c in (1, -1)
+            sec = symmetry_sector(star, c, c)
+            @test sec.billiard === star
+            @test sec.characters == symmetry_sector(star, typeof(gens[1]) => c, typeof(gens[2]) => c).characters
+            @test Set(keys(sec.characters)) == Set(g.sym_id for g in gens)
+            @test all(==(c), values(sec.characters))
         end
     end
 
     @testset "wrong number of characters" begin
         @test_throws ArgumentError symmetry_sector(rect, 1)                    # D2 needs two
         @test_throws ArgumentError symmetry_sector(rect, 1, 1, 1)
-        @test_throws ArgumentError symmetry_sector(star, 0, 0)                 # C3 needs one
+        @test_throws ArgumentError symmetry_sector(star, 1)                    # D3 needs two (one per mirror generator)
+        @test_throws ArgumentError symmetry_sector(star, 1, 1, 1)
         @test_throws ArgumentError symmetry_sector(tri, 1)                     # no generators at all
         err = try symmetry_sector(rect, 1) catch e; e end
         @test occursin("2 expected", err.msg) && occursin("received 1", err.msg)
@@ -324,7 +333,7 @@ end
     @testset "invalid values are forwarded to the pair form" begin
         @test_throws ArgumentError symmetry_sector(rect, 0, 1)
         @test_throws ArgumentError symmetry_sector(rect, 1, 2)
-        @test_throws ArgumentError symmetry_sector(star, 3)
+        @test_throws ArgumentError symmetry_sector(star, 0, 1)
     end
 end
 
@@ -409,7 +418,7 @@ end
     @test chars == (-1.0 + 0.0im,)
 end
 
-@testset "_resolve_bim_symmetry - rotation sectors (Star, C3 and C4)" begin
+@testset "_resolve_bim_symmetry - rotation sectors (Star, D3 and D4)" begin
     star = StarBilliard(1.0, 0.3, 3)
     for s in 0:2
         sec = symmetry_sector(star, NFoldRotation => s)
@@ -420,15 +429,15 @@ end
     end
 
     @testset "resolved generator is a registered element" begin
-        gen, _ = _resolve_bim_symmetry(star, symmetry_sector(star, 1))
-        @test gen.sym_id in (1, 2)
+        gen, _ = _resolve_bim_symmetry(star, symmetry_sector(star, NFoldRotation => 1))
+        @test gen.sym_id in (2, 4)
         @test BilliardGeometry.symmetry_of(star.symmetries, gen.sym_id) === gen
     end
 
     @testset "C4: sector is recovered from characters of all registered powers" begin
         star4 = StarBilliard(1.0, 0.3, 4)
         for s in 0:1
-            gen, chars = _resolve_bim_symmetry(star4, symmetry_sector(star4, s))
+            gen, chars = _resolve_bim_symmetry(star4, symmetry_sector(star4, NFoldRotation => s))
             @test gen.order == 4
             @test chars == (s,)
         end
@@ -607,11 +616,11 @@ end
     end
 end
 
-@testset "SymmetrySector - orbit folding for a cyclic sector (Star, C3)" begin
+@testset "SymmetrySector - orbit folding for a rotation sector (Star, D3)" begin
     star = StarBilliard(1.0, 0.3, 3)
     N = 30
     for s in 0:2
-        sector = symmetry_sector(star, s)
+        sector = symmetry_sector(star, NFoldRotation => s)
         generator, characters = _resolve_bim_symmetry(star, sector)
         orbits = symmetry_index_orbits(Float64, star, N, generator, characters[1])
         @test orbit_size(orbits) == 3
@@ -762,4 +771,60 @@ end
     # the positional form takes the single generator of the subgroup
     @test symmetry_sector(b, 2).characters == symmetry_sector(b, NFoldRotation => 2).characters
     @test_throws ArgumentError symmetry_sector(b, 3)
+end
+
+# Billiards (constructed outside @test_logs: some constructors log an @info of their own) with the expected
+# (group label, order, characters, n_2d) of G'.
+ss_irrep_cases() = [
+    ("Rectangle", RectangleBilliard(1.0, 0.6), "D_2", 4, Set([(1, 1), (1, -1), (-1, 1), (-1, -1)]), 0),
+    ("Circle", CircleBilliard(1.0), "D_2", 4, Set([(1, 1), (1, -1), (-1, 1), (-1, -1)]), 0),
+    ("Stadium", StadiumBilliard(0.5), "D_2", 4, Set([(1, 1), (1, -1), (-1, 1), (-1, -1)]), 0),
+    ("Prosen", ProsenBilliard(0.3), "D_2", 4, Set([(1, 1), (1, -1), (-1, 1), (-1, -1)]), 0),
+    ("Limacon", LimaconBilliard(0.3), "D_1", 2, Set([(1,), (-1,)]), 0),
+    ("Mushroom", MushroomBilliard(0.5, 1.0), "D_1", 2, Set([(1,), (-1,)]), 0),
+    ("Annular", AnnularBilliard(0.3, 0.0), "D_1", 2, Set([(1,), (-1,)]), 0),
+    ("C3", C3Billiard(0.1), "C_3", 3, Set([(0,), (1,), (2,)]), 0),
+    ("Julia", JuliaBilliard(0.3, 0.6), "D_3", 6, Set([(1, 1), (-1, -1)]), 1),
+    ("Star5", StarBilliard(1.0, 0.2, 5), "D_5", 10, Set([(1, 1), (-1, -1)]), 2),
+    ("Sinai", SinaiBilliard(1.0, 0.3), "D_4", 8, Set([(1, 1), (1, -1), (-1, 1), (-1, -1)]), 1),
+    ("Triangle", TriangleBilliard(1.0, 1.5), "trivial", 1, Set([()]), 0),
+]
+
+@testset "symmetry_irreps" begin
+    for (name, b, group, order, chars, n2d) in ss_irrep_cases()
+        @testset "$name" begin
+            info = symmetry_irreps(b)
+            @test info.group == group
+            @test info.order == order
+            @test Set(info.characters) == chars
+            @test length(info.characters) == length(chars)        # no duplicates
+            @test info.n_2d == n2d
+            @test length(info.generators) == (group == "trivial" ? 0 : length(first(info.characters)))
+            # every returned character is accepted by symmetry_sector
+            for c in info.characters
+                @test symmetry_sector(b, c...) isa SymmetrySector
+            end
+        end
+    end
+
+    @testset "|G'| = sum of squared irrep dimensions" begin
+        for (_, b, _, _, _, _) in ss_irrep_cases()
+            info = symmetry_irreps(b)
+            @test info.order == length(info.characters) + 4 * info.n_2d
+        end
+    end
+end
+
+@testset "log_symmetries" begin
+    rect = RectangleBilliard(1.0, 0.6)
+    @test_logs (:info, r"D_2 of order 4") @test log_symmetries(rect) === nothing
+
+    star = StarBilliard(1.0, 0.2, 5)
+    @test_logs (:info, r"D_5 of order 10") @test log_symmetries(star) === nothing
+
+    sinai = SinaiBilliard(1.0, 0.3)
+    @test_logs (:info, r"D_4 of order 8") @test log_symmetries(sinai) === nothing
+
+    tri = TriangleBilliard(1.0, 1.5)
+    @test_logs (:info, r"no symmetry") @test log_symmetries(tri) === nothing
 end

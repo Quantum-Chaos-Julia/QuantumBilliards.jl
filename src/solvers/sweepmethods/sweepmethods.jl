@@ -176,6 +176,9 @@ _bim_node_multiple(symmetry::AbsSymmetry) = symmetry_node_multiple(symmetry)
 _bim_node_multiple(symmetry::AxisReflection{A}) where {A} = A in (0//1, 1//4, 1//2, 3//4) ? symmetry_node_multiple(symmetry) : 1
 _bim_node_multiple(symmetry::CompositeReflection) = foldl(lcm, (_bim_node_multiple(ref) for ref in symmetry.reflections); init = 1)
 
+# Node multiple of a solver: its symmetry's own multiple and the number of reconstruction blocks of the outer boundary.
+_bim_solver_node_multiple(solver) = isnothing(solver.symmetry) ? 1 : lcm(_bim_node_multiple(solver.symmetry), length(solver.billiard.symmetries) + 1)
+
 # Round `N` up to a multiple of `needed`, or return the forced count `N_override`.
 @inline _bim_round_nodes(N::Int, needed::Int, ::Nothing) = cld(N, needed) * needed
 @inline _bim_round_nodes(::Int, ::Int, N_override::Int) = N_override

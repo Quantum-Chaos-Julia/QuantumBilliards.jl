@@ -536,11 +536,12 @@ end
 @testset "reduced matrix equals orbit-summed full matrix: Star billiard, rotation sector 2" begin
     star = StarBilliard(1.0, 0.05, 3)
     k = 3.0
+    rot = star.symmetries[2]                                            # NFoldRotation(3, 1); Star registers D3, whose generators are mirrors
     full = DoubleLayerPotentialSolver(5.0, star; min_pts=36)
-    red = DoubleLayerPotentialSolver(5.0, star; min_pts=36, sym_characters=(2,))
+    red = DoubleLayerPotentialSolver(5.0, star; min_pts=36, symmetry=rot, sym_characters=(2,))
     pts = evaluate_points(red, star, k)
     N = length(pts)
-    orbits = symmetry_index_orbits(Float64, star, N, get_symmetries(star)[1], 2)
+    orbits = symmetry_index_orbits(Float64, star, N, rot, 2)
 
     @test dlp_orbit_matches(pts, orbits, (x -> x, x -> dlp_rotate(x, 2π / 3), x -> dlp_rotate(x, 4π / 3)))
     @test isapprox(construct_matrices(red, pts, k), dlp_orbit_sum(construct_matrices(full, pts, k), orbits); atol=1e-12, rtol=0)

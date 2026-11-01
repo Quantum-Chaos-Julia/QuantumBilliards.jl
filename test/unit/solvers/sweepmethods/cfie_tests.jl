@@ -530,10 +530,11 @@ end
 @testset "reduced matrix equals orbit-summed full matrix: Star billiard, rotation sector 1" begin
     star = StarBilliard(1.0, 0.05, 3)
     k = 3.0
+    rot = star.symmetries[2]                                            # NFoldRotation(3, 1); Star registers D3, whose generators are mirrors
     full = CombinedFieldIntegralEquationSolver(5.0, star; min_pts=36)
-    red = CombinedFieldIntegralEquationSolver(5.0, star; min_pts=36, sym_characters=(1,))
+    red = CombinedFieldIntegralEquationSolver(5.0, star; min_pts=36, symmetry=rot, sym_characters=(1,))
     pts = evaluate_points(red, star, k)
-    orbits = symmetry_index_orbits(Float64, star, length(pts), get_symmetries(star)[1], 1)
+    orbits = symmetry_index_orbits(Float64, star, length(pts), rot, 1)
 
     @test cf_orbit_matches(pts, orbits, (x -> x, x -> cf_rotate(x, 2π / 3), x -> cf_rotate(x, 4π / 3)))
     @test isapprox(construct_matrices(red, pts, k), cf_orbit_sum(construct_matrices(full, pts, k), orbits); atol=1e-12, rtol=0)

@@ -286,9 +286,9 @@ end
 
     @testset "sectors RealPlaneWaves cannot represent are rejected" begin
         star = StarBilliard(1.0, 0.3, 3)
-        @test_throws ArgumentError RealPlaneWaves(n, star, symmetry_sector(star, 1))            # rotation sector
+        @test_throws ArgumentError RealPlaneWaves(n, star, symmetry_sector(star, NFoldRotation => 1))            # rotation sector
         @test_throws ArgumentError RealPlaneWaves(n, rect, symmetry_sector(rect, XYAxisReflection => 1))
-        err = try RealPlaneWaves(n, star, symmetry_sector(star, 1)); nothing catch e; e end
+        err = try RealPlaneWaves(n, star, symmetry_sector(star, NFoldRotation => 1)); nothing catch e; e end
         @test err isa ArgumentError && occursin("XAxisReflection/YAxisReflection", err.msg)
     end
 

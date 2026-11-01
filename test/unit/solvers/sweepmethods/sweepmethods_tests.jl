@@ -23,7 +23,7 @@ using SpecialFunctions: hankelh1
 using StaticArrays: SVector
 using QuantumBilliards: _fold_boundary, _infer_bim_symmetry, symmetrize_layer_density, _bim_normal_derivative,
                         _bim_dlp_cross_kernel_entry, _cfie_derivative!, _orbit_character_args, _fold_group,
-                        _bim_node_multiple, _bim_round_nodes
+                        _bim_node_multiple, _bim_round_nodes, _bim_solver_node_multiple
 
 # Whether two SymmetryOrbitMaps agree in every field.
 sw_same_orbits(a, b) = a.fundamental_indices == b.fundamental_indices && a.orbit_of == b.orbit_of && a.phase == b.phase &&
@@ -214,6 +214,25 @@ end
     @test _bim_node_multiple(NFoldRotation(6, 5)) == 6
     @test (@inferred _bim_node_multiple(XAxisReflection())) isa Int
     @test (@inferred _bim_node_multiple(nothing)) isa Int
+end
+
+@testset "_bim_solver_node_multiple" begin
+    rect = RectangleBilliard(1.0, 0.7)
+    stadium = StadiumBilliard(1.0)
+    c3 = C3Billiard(0.02)
+    # no symmetry: no constraint
+    @test _bim_solver_node_multiple(DoubleLayerPotentialSolver(5.0, rect; min_pts = 33)) == 1
+    # Composite (Y, X) on the rectangle (D2, three registered elements): lcm(4, 3 + 1) = 4
+    solver = DoubleLayerPotentialSolver(5.0, rect; min_pts = 33, sym_characters = (1, 1))
+    @test _bim_solver_node_multiple(solver) == 4
+    @test _bim_solver_node_multiple(solver) == lcm(_bim_node_multiple(solver.symmetry), length(rect.symmetries) + 1)
+    # single reflection on a hole-free billiard: lcm(4, number of blocks)
+    solver = DoubleLayerPotentialSolver(5.0, stadium; min_pts = 33, symmetry = YAxisReflection(), sym_characters = (1,))
+    @test _bim_solver_node_multiple(solver) == lcm(4, length(stadium.symmetries) + 1)
+    # rotation: lcm(3, 3)
+    solver = DoubleLayerPotentialSolver(5.0, c3; min_pts = 33, sym_characters = (1,))
+    @test _bim_solver_node_multiple(solver) == lcm(3, length(c3.symmetries) + 1) == 3
+    @test (@inferred _bim_solver_node_multiple(solver)) isa Int
 end
 
 @testset "_bim_round_nodes" begin

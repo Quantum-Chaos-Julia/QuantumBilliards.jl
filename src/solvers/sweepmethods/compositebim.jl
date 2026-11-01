@@ -604,8 +604,10 @@ function evaluate_points(solver::CompositeBIMSolver, billiard::Bi, k) where {Bi<
     @inbounds for a in 1:nloops
         g = loop_groups[a] + 1
         nl = count(==(g - 1), loop_groups)
-        multiple = nl == 1 ? nblocks[g] : 1
-        N_override = nblocks[g] > 1 && nl == nblocks[g] && forced_N[g] != 0 ? forced_N[g] : nothing
+        nb = nblocks[g]
+        splits_loops = nl > 1 && nb > 1 && nb % nl == 0
+        multiple = nl == 1 ? nb : splits_loops ? nb ÷ nl : 1
+        N_override = splits_loops && forced_N[g] != 0 ? forced_N[g] : nothing
         p = _composite_component_points(_loop_solver(solver, a), groups[a], kT; multiple, N_override)
         forced_N[g] == 0 && (forced_N[g] = length(p))
         comp_pts[a] = is_hole[a] ? _flip_component_orientation(p) : p

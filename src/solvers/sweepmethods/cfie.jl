@@ -177,7 +177,7 @@ function _cfie_evaluate_points(solver::CombinedFieldIntegralEquationSolver, ::Sm
     _, _, Ltot = component_lengths(comp)
     scale = solver.pts_scaling_factor[1]
     N = max(solver.min_pts, round(Int, k*Ltot*scale/twopi))
-    N = _bim_round_nodes(N, lcm(2, _bim_node_multiple(solver.symmetry), multiple), N_override)
+    N = _bim_round_nodes(N, lcm(2, _bim_solver_node_multiple(solver), multiple), N_override)
     h = twopi/T(N)
     ts = T[s_mid(j, N) for j in 1:N]
     tphys = copy(ts)
@@ -229,7 +229,7 @@ function _cfie_evaluate_points(solver::CombinedFieldIntegralEquationSolver, grad
     L = T(crv.length)
     scale = solver.pts_scaling_factor[1]
     N = max(solver.min_pts, round(Int, k*L*scale/twopi))
-    N = _bim_round_nodes(N, lcm(2, _bim_node_multiple(solver.symmetry), multiple), N_override)
+    N = _bim_round_nodes(N, lcm(2, _bim_solver_node_multiple(solver), multiple), N_override)
     σ, tmap, jac, jac2, _ = kress_graded_nodes_data(T, N; q=grading.kressq, minsep_tol=T(grading.min_t_spacing))
     tphys = tmap./twopi
     xy = curve(crv, tphys)
@@ -282,7 +282,7 @@ function _cfie_evaluate_points_graded(solver::CombinedFieldIntegralEquationSolve
     _, _, Ltot = component_lengths(comp)
     scale = solver.pts_scaling_factor[1]
     N = max(solver.min_pts, round(Int, k*Ltot*scale/twopi))
-    N = _bim_round_nodes(N, lcm(solver.symmetry === nothing ? 2 : _bim_node_multiple(solver.symmetry), multiple), N_override)
+    N = _bim_round_nodes(N, lcm(solver.symmetry === nothing ? 2 : _bim_solver_node_multiple(solver), multiple), N_override)
     σ, tmap, jac, jac2, _ = multi_kress_graded_nodes_data(T, N, corners; q=grading.kressq, minsep_tol=T(grading.min_t_spacing))
     tphys = tmap
     xy = Vector{SVector{2,T}}(undef, N)
