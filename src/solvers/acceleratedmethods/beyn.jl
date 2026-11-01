@@ -141,13 +141,13 @@ end
 
 _bim_numeric_type(::BeynSolver{T}) where {T} = T
 
-@inline function weyl_window_width(billiard::Bi, k::T, m::Int; fundamental::Bool=true) where {T<:Real,Bi<:AbsBilliard}
-    A = fundamental ? fundamental_area(billiard) : area(billiard)
+@inline function weyl_window_width(billiard::Bi, k::T, m::Int; fundamental_only::Bool=false) where {T<:Real,Bi<:AbsBilliard}
+    A = fundamental_only ? fundamental_area(billiard) : area(billiard)
     return sqrt(k^2+T(4pi*m/A))-k
 end
 
 """
-    plan_weyl_windows(billiard::Bi, k1::T, k2::T; m::Int=10, Rmax::Real=1.0, fundamental::Bool=true)
+    plan_weyl_windows(billiard::Bi, k1::T, k2::T; m::Int=10, Rmax::Real=1.0, fundamental_only::Bool=false)
 
 Partition `[k1,k2]` into adjacent spectral windows containing approximately
 `m` states according to the leading Weyl law.
@@ -160,16 +160,16 @@ Partition `[k1,k2]` into adjacent spectral windows containing approximately
 ## Keyword Arguments
 * `m::Int=10`: Approximate number of states per window.
 * `Rmax::Real=1.0`: Maximum contour radius.
-* `fundamental::Bool=true`: Use the fundamental-domain area.
+* `fundamental_only::Bool=false`: Use the desymmetrized fundamental-domain area (Dirichlet walls).
 
 ## Returns
 * `Vector{Tuple{T,T}}`: Adjacent spectral intervals `(kL,kR)`.
 """
-function plan_weyl_windows(billiard::Bi, k1::T, k2::T; m::Int=10, Rmax::Real=1.0, fundamental::Bool=true) where {T<:Real,Bi<:AbsBilliard}
+function plan_weyl_windows(billiard::Bi, k1::T, k2::T; m::Int=10, Rmax::Real=1.0, fundamental_only::Bool=false) where {T<:Real,Bi<:AbsBilliard}
     k2 > k1 || return Tuple{T,T}[]; m > 0 || throw(ArgumentError("m must be positive; received m=$m")); Rmax > 0 || throw(ArgumentError("Rmax must be positive; received Rmax=$Rmax"))
     intervals = Tuple{T,T}[]; maxwidth = T(2Rmax); k = k1
     while k < k2
-        dk = min(weyl_window_width(billiard, k, m; fundamental), maxwidth, k2-k); dk > zero(T) || throw(ArgumentError("Weyl window width vanished at k=$k"))
+        dk = min(weyl_window_width(billiard, k, m; fundamental_only), maxwidth, k2-k); dk > zero(T) || throw(ArgumentError("Weyl window width vanished at k=$k"))
         kr = k+dk; push!(intervals, (k, kr)); k = kr
     end
     return intervals

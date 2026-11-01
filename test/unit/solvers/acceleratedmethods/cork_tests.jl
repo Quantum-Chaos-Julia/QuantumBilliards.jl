@@ -642,7 +642,7 @@ end
 
 # The synthetic kernel has no symmetry, so the Weyl count is that of the full unit circle (area/perimeter terms of `state_at_k`).
 # Helper definitions use the prefix `ck_`.
-ck_weyl(k1, k2) = QuantumBilliards.state_at_k(k2, ck_circle; fundamental=false) - QuantumBilliards.state_at_k(k1, ck_circle; fundamental=false)
+ck_weyl(k1, k2) = QuantumBilliards.state_at_k(k2, ck_circle; fundamental_only=false) - QuantumBilliards.state_at_k(k1, ck_circle; fundamental_only=false)
 ck_tolerance(expected) = max(0.3 * expected, 3.0)
 
 @testset "_cork_warn_if_incomplete: Weyl-law completeness warning" begin

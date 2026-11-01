@@ -619,7 +619,7 @@ end
 
     @testset "the number-of-states interface uses the Weyl-law wavenumber range" begin
         g = eb_scripted((k0, nl) -> (ComplexF64[k0], [1e-4]); use_taylor=false)
-        k1, k2 = k_range_for_states(eb_circle, 5, 12; fundamental=false)
+        k1, k2 = k_range_for_states(eb_circle, 5, 12; fundamental_only=false)
         byk = compute_spectrum(g, eb_circle, k1, k2; dk=k -> 0.05, multithreaded=false, show_progress=false)
         byn = compute_spectrum(g, eb_circle, 5, 12; dk=k -> 0.05, multithreaded=false, show_progress=false)
         @test length(byk) > 0

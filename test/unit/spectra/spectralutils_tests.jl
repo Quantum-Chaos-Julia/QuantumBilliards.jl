@@ -459,9 +459,10 @@ end
     A_full = 4a * bb
     k, dk = 10.0, 0.5
 
-    @test weyl_window_count(b, k, dk; fundamental=false) ≈ A_full * ((k + dk)^2 - k^2) / (4pi)
-    @test weyl_window_count(b, k, dk; fundamental=false) ≈ weyl_law(k + dk, A_full, 0.0) - weyl_law(k, A_full, 0.0)
-    @test weyl_window_count(b, k, dk) ≈ weyl_window_count(b, k, dk; fundamental=false) / 4   # D2 reduction
+    @test weyl_window_count(b, k, dk) ≈ A_full * ((k + dk)^2 - k^2) / (4pi)                      # default: complete billiard
+    @test weyl_window_count(b, k, dk) ≈ weyl_law(k + dk, A_full, 0.0) - weyl_law(k, A_full, 0.0)
+    @test weyl_window_count(b, k, dk) == weyl_window_count(b, k, dk; fundamental_only=false)
+    @test weyl_window_count(b, k, dk; fundamental_only=true) ≈ weyl_window_count(b, k, dk) / 4     # D2 reduction
     @test weyl_window_count(b, k, 0.0) == 0.0
     @test weyl_window_count(b, k, dk) > 0
     @test weyl_window_count(b, k, 2dk) > 2 * weyl_window_count(b, k, dk)                    # grows quadratically
@@ -471,14 +472,15 @@ end
 @testset "weyl_window_width" begin
     b = RectangleBilliard(1.0, 0.5)
     k, m = 10.0, 7
-    w = weyl_window_width(b, k, m)
-    @test w > 0
-    @test weyl_window_count(b, k, w) ≈ m                                   # width contains exactly m Weyl states
-    wfull = weyl_window_width(b, k, m; fundamental=false)
-    @test weyl_window_count(b, k, wfull; fundamental=false) ≈ m
+    wfull = weyl_window_width(b, k, m)                                     # default: complete billiard
+    @test wfull > 0
+    @test weyl_window_count(b, k, wfull) ≈ m                               # width contains exactly m Weyl states
+    @test wfull == weyl_window_width(b, k, m; fundamental_only=false)
+    w = weyl_window_width(b, k, m; fundamental_only=true)
+    @test weyl_window_count(b, k, w; fundamental_only=true) ≈ m
     @test wfull < w                                                        # larger area -> narrower window
-    @test weyl_window_width(b, 20.0, m) < w                                # density grows with k
-    @test weyl_window_width(b, k, 2m) > w
+    @test weyl_window_width(b, 20.0, m) < wfull                            # density grows with k
+    @test weyl_window_width(b, k, 2m) > wfull
     @test @inferred(weyl_window_width(b, k, m)) isa Float64
 end
 
@@ -496,7 +498,7 @@ end
 
     @testset "uncapped windows hold m states, last window at most m" begin
         wins = plan_weyl_windows(b, 10.0, 30.0; m=10, Rmax=100.0)
-        counts = [weyl_window_count(b, kL, kR - kL) for (kL, kR) in wins]
+        counts = [weyl_window_count(b, kL, kR - kL) for (kL, kR) in wins]   # default on both sides: complete billiard
         @test all(c -> isapprox(c, 10.0; rtol=1e-8), counts[1:end-1])
         @test 0 < counts[end] <= 10.0 * (1 + 1e-8)
     end
@@ -509,9 +511,10 @@ end
         @test length(wins) == 4
     end
 
-    @testset "fundamental flag changes window width" begin
-        wf = plan_weyl_windows(b, 10.0, 30.0; m=10, Rmax=100.0)
-        wfull = plan_weyl_windows(b, 10.0, 30.0; m=10, Rmax=100.0, fundamental=false)
+    @testset "fundamental_only flag changes window width" begin
+        wfull = plan_weyl_windows(b, 10.0, 30.0; m=10, Rmax=100.0)
+        wf = plan_weyl_windows(b, 10.0, 30.0; m=10, Rmax=100.0, fundamental_only=true)
+        @test wfull == plan_weyl_windows(b, 10.0, 30.0; m=10, Rmax=100.0, fundamental_only=false)
         @test length(wfull) > length(wf)
     end
 

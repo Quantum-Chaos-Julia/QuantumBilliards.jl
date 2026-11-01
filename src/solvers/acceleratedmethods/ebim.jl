@@ -891,8 +891,8 @@ number of local levels if `nlevels` is not increased explicitly.
 * `tbest`: Magnitude of its EBIM correction.
 """
 function solve_wavenumber(solver::ExpandedBIMSolver, billiard::Bi, k, dk; multithreaded::Bool = true, nlevels::Int = 5) where {Bi<:AbsBilliard}
-    fundamental = solver.kernel.symmetry !== nothing
-    nreq = max(nlevels, ceil(Int, weyl_window_count(billiard, k - dk, 2 * dk; fundamental)))
+    fundamental_only = solver.kernel.symmetry !== nothing
+    nreq = max(nlevels, ceil(Int, weyl_window_count(billiard, k - dk, 2 * dk; fundamental_only)))
     pts = evaluate_points(solver, billiard, k)
     ks, ts = solve(solver, pts, k, nreq; multithreaded)
     isempty(ks) && return nothing, nothing
@@ -922,8 +922,8 @@ Compute all local EBIM eigenvalue estimates in `[k-dk,k+dk]`.
 * `ts::Vector`: Magnitudes of their EBIM corrections.
 """
 function solve_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k, dk; multithreaded::Bool = true, nlevels::Int = 5) where {Bi<:AbsBilliard}
-    fundamental = solver.kernel.symmetry !== nothing
-    nreq = max(nlevels, ceil(Int, weyl_window_count(billiard, k - dk, 2 * dk; fundamental)))
+    fundamental_only = solver.kernel.symmetry !== nothing
+    nreq = max(nlevels, ceil(Int, weyl_window_count(billiard, k - dk, 2 * dk; fundamental_only)))
     pts = evaluate_points(solver, billiard, k)
     ks, ts = solve(solver, pts, k, nreq; multithreaded)
     keep = findall(q -> abs(real(ks[q]) - k) <= dk, eachindex(ks))

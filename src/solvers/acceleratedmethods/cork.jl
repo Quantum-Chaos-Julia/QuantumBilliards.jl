@@ -1247,15 +1247,15 @@ end
 # Evaluate the Weyl estimate for the number of levels in `[k-dk/2,k+dk/2]`; an empty Ritz set is only
 # accepted as converged when this estimate is below one half.
 _cork_expected_count(solver::CORKSolver, billiard::AbsBilliard, k, dk) =
-    weyl_window_count(billiard, Float64(k - dk / 2), Float64(dk); fundamental = solver.kernel.symmetry !== nothing)
+    weyl_window_count(billiard, Float64(k - dk / 2), Float64(dk); fundamental_only = solver.kernel.symmetry !== nothing)
 
 # CORK convergence is judged on the accepted Ritz set only, so levels that the Chebyshev polynomial or the
 # Krylov space cannot resolve are dropped without any signal. Compare the number of accepted roots in
 # `[k1,k2]` with the Weyl count (area, perimeter and corner terms) and warn on a large deficit. The tolerance
 # `max(0.3N, 3)` leaves room for Weyl fluctuations, so this is a warning and not an error.
 function _cork_warn_if_incomplete(solver::CORKSolver, billiard::AbsBilliard, nfound::Integer, k1, k2)
-    fundamental = solver.kernel.symmetry !== nothing
-    expected = state_at_k(k2, billiard; fundamental) - state_at_k(k1, billiard; fundamental)
+    fundamental_only = solver.kernel.symmetry !== nothing
+    expected = state_at_k(k2, billiard; fundamental_only) - state_at_k(k1, billiard; fundamental_only)
     deficit = expected - nfound
     if deficit > max(0.3 * expected, 3.0)
         @warn "CORK returned $nfound levels in [$k1, $k2] but the Weyl law predicts about $(round(expected; digits=1)); the spectrum is probably incomplete. Increase the polynomial degree `p` (direct `solve_spectrum` uses a fixed `p`, `compute_spectrum` tunes it), narrow the window, or increase `ppw`/`min_pts` of the kernel."

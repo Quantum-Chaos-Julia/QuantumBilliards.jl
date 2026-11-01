@@ -1,7 +1,7 @@
 # Integration tests for the `compute_spectrum` drivers (src/spectra/spectralutils.jl): the wavenumber-range method
 # `compute_spectrum(solver, billiard, k1, k2)` (accelerated basis solvers additionally take the spacing `dk`) and the
 # Weyl state-index method `compute_spectrum(solver, billiard, N1, N2)`, which only converts `(N1, N2)` through
-# `k_range_for_states(billiard, N1, N2; fundamental)` (`fundamental = true` for symmetry-reduced kernels and for basis
+# `k_range_for_states(billiard, N1, N2; fundamental_only)` (`fundamental_only = true` for symmetry-reduced kernels and for basis
 # solvers, `false` for the unreduced BIM kernels used here) and calls the k-range method.
 # Window edges are checked to lie away from levels, so level counts are stable. Rectangle references are analytic.
 # RectangleBilliard(1.0, 0.7) is the full 2.0 x 1.4 rectangle (area 2.8; fundamental domain: first quadrant, area 0.7).
@@ -36,7 +36,7 @@ _drv_rectangle_levels(k1, k2) = rectangle_spectrum(2.0, 1.4, k1, k2)
     @test all(isapprox.(ks_k, ref_k; atol=SPECTRUM_ATOL_VS))
     @test all(data_k.ten .< TENSION_TOL_VS)
     N1, N2 = 20, 26
-    kN1, kN2 = k_range_for_states(billiard, N1, N2)
+    kN1, kN2 = k_range_for_states(billiard, N1, N2; fundamental_only=true)
     data_N = compute_spectrum(solver, basis, billiard, N1, N2; N_expect=0.35, ten_tol=nothing, multithreaded=true, show_progress=false)
     ref_N = rectangle_spectrum(2.0, 1.4, kN1, kN2; parity_x=1, parity_y=1)
     ks_N = sort(real.(data_N.k))
@@ -57,7 +57,7 @@ end
     billiard = RectangleBilliard(1.0, 0.7)
     kernel = CombinedFieldIntegralEquationSolver(10.0, billiard; grading=GlobalCornerGrading())
     solver = BeynSolver(kernel; use_chebyshev=false, eigenvectors=false)
-    k1, k2 = k_range_for_states(billiard, 3, 8; fundamental=false)
+    k1, k2 = k_range_for_states(billiard, 3, 8; fundamental_only=false)
     ref = _drv_rectangle_levels(k1, k2)
     data_k = compute_spectrum(solver, billiard, k1, k2; multithreaded=true, show_progress=false)
     data_N = compute_spectrum(solver, billiard, 3, 8; multithreaded=true, show_progress=false)
@@ -82,7 +82,7 @@ end
     billiard = RectangleBilliard(1.0, 0.7)
     kernel = CombinedFieldIntegralEquationSolver(20.0, billiard; grading=GlobalCornerGrading(), min_pts=800)
     solver = CORKSolver(kernel; nlevels=40)
-    k1, k2 = k_range_for_states(billiard, 3, 8; fundamental=false)
+    k1, k2 = k_range_for_states(billiard, 3, 8; fundamental_only=false)
     ref = _drv_rectangle_levels(k1, k2)
     data_k = compute_spectrum(solver, billiard, k1, k2; multithreaded=true, show_progress=false)
     data_N = compute_spectrum(solver, billiard, 3, 8; multithreaded=true, show_progress=false)
@@ -109,7 +109,7 @@ end
     billiard = RectangleBilliard(1.0, 0.7)
     kernel = CombinedFieldIntegralEquationSolver(10.0, billiard; grading=GlobalCornerGrading())
     solver = ExpandedBIMSolver(kernel)
-    k1, k2 = k_range_for_states(billiard, 3, 8; fundamental=false)
+    k1, k2 = k_range_for_states(billiard, 3, 8; fundamental_only=false)
     ref = _drv_rectangle_levels(k1, k2)
     # ten_tol=nothing: the default EBIM filter (5e-4) would drop genuine levels (tension up to 0.04); confidence is judged by TENSION_TOL_EBIM below
     data_k = compute_spectrum(solver, billiard, k1, k2; ten_tol=nothing, multithreaded=true, show_progress=false)
@@ -135,8 +135,8 @@ end
     kernel = CombinedFieldIntegralEquationSolver(10.0, billiard; grading=GlobalCornerGrading())
     solver = BeynSolver(kernel; m=3, use_chebyshev=false, eigenvectors=false)
     k1, k2 = 3.0, 10.0
-    windows = QuantumBilliards.plan_weyl_windows(billiard, k1, k2; m=solver.m, Rmax=solver.Rmax, fundamental=false)
-    counts = [QuantumBilliards.weyl_window_count(billiard, kl, kr - kl; fundamental=false) for (kl, kr) in windows]
+    windows = QuantumBilliards.plan_weyl_windows(billiard, k1, k2; m=solver.m, Rmax=solver.Rmax, fundamental_only=false)
+    counts = [QuantumBilliards.weyl_window_count(billiard, kl, kr - kl; fundamental_only=false) for (kl, kr) in windows]
     @test length(windows) > 1
     @test windows[1][1] == k1 && windows[end][2] == k2
     @test all(i -> windows[i][2] == windows[i+1][1], 1:length(windows)-1)
