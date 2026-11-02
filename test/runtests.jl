@@ -1,5 +1,8 @@
 using Test
+using Logging
 using QuantumBilliards, BilliardGeometry
+
+global_logger(ConsoleLogger(stderr, Logging.Error))
 
 const QB_TEST_GROUPS = ("unit", "integration", "all")
 const QB_TEST_GROUP = get(ENV, "QB_TEST_GROUP", "all")
