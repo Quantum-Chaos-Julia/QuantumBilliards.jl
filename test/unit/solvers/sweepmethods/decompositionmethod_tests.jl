@@ -40,7 +40,7 @@ dm_rect() = RectangleBilliard(1.0, 0.7)
     @testset "returned fields" begin
         @test pts isa BoundaryPoints{Float64}
         N = length(pts)
-        @test N > 40
+        @test N >= 40
         @test length(pts.xy) == length(pts.normal) == length(pts.ds) == length(pts.w_dm) == N
         @test isempty(pts.xy_int)                                           # interior points belong to the PSM
         @test isempty(pts.w_vs)                                             # Vergini-Saraceno weights are not set
@@ -134,18 +134,18 @@ end
 
     @testset "the number of points follows the scaling factors" begin
         solver = DecompositionMethodSolver(2.0, 3.0)
-        @test length(evaluate_points(solver, rect, 20.0)) == sum(_determine_bp_sizes(curves, [3.0, 3.0], 20.0))
-        small = length(evaluate_points(solver, rect, 20.0))
-        large = length(evaluate_points(solver, rect, 40.0))
+        @test length(evaluate_points(solver, rect, 100.0)) == sum(_determine_bp_sizes(curves, [3.0, 3.0], 100.0))
+        small = length(evaluate_points(solver, rect, 100.0))
+        large = length(evaluate_points(solver, rect, 200.0))
         @test abs(large - 2small) <= 2                                      # linear in k up to rounding
         double = DecompositionMethodSolver(2.0, 6.0)
-        @test abs(length(evaluate_points(double, rect, 20.0)) - 2small) <= 2     # linear in the point scaling factor
+        @test abs(length(evaluate_points(double, rect, 100.0)) - 2small) <= 2     # linear in the point scaling factor
     end
 
     @testset "per-curve scaling factors" begin
         solver = DecompositionMethodSolver(2.0, [3.0, 6.0])
-        pts = evaluate_points(solver, rect, 20.0)
-        Ns = _determine_bp_sizes(curves, [3.0, 6.0], 20.0)
+        pts = evaluate_points(solver, rect, 100.0)
+        Ns = _determine_bp_sizes(curves, [3.0, 6.0], 100.0)
         @test length(pts) == sum(Ns)
         @test Ns[2] / Ns[1] ≈ 6.0 / 3.0 * 1.0 / 0.7 rtol = 0.05             # edge lengths 1.0 and 0.7
         @test sum(pts.ds) ≈ 1.7

@@ -1,5 +1,5 @@
-#TODO Replace independant sin and cos calls with sincos
-#TODO Steer's reccurence formula for besselj might provide speedup, already in Bessels but we have to compute redundant terms.
+#TODO Replace independent sin and cos calls with sincos
+#TODO Steed's recurrence formula for besselj might provide a speedup; it is already in Bessels but redundant terms would be computed.
 """
     Jv(nu, r) → J
 

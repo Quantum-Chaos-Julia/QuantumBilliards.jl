@@ -217,26 +217,24 @@ function construct_matrices(solver::DecompositionMethodSolver,basis::Ba,pts::Bou
 
         @debug "Matrix construction started" N M k nsym
         @timeit_debug "basis_and_gradient_matrices" begin
-            # the alogrithm consctructs B and the normal derivative Bn with syrk to minimize the allocation cost. It does this with the trick of putting sqrt(w_n) into both the rows of B and the rows of B' so that we can use syrk on sqrt(W)*B to get B'*(W*B) without forming W*B as a temporary matrix (posible b/c W is diagonal)
+            # F = B'*(W*B) and G = Bn'*(Wn*Bn) are formed with syrk on row-scaled copies sqrt(W)*B and
+            # sqrt(Wn)*Bn (W is diagonal), which avoids the temporary W*B.
             @blas_1 B,dX,dY=basis_and_gradient_matrices(basis,k,xy;multithreaded)
-            # Form F = B'*(W*B) by inplace scaling the rows of B by sqrt(w) (inplace to B) and use syrk to perform the Rank-k update of a symmetric matrix
-            _scale_rows_sqrtw!(B,w,nsym) #  trick of putting sqrt(w_n) into the rows of the transposed and original B to get (sqrt(W)*B)' * (sqrt(W)*B) so we can use syrk on sqrt(W)*B
+            _scale_rows_sqrtw!(B,w,nsym)
         end
         @debug "Basis and gradient matrix computed" size=size(B) 
         @timeit_debug "compute_F" begin
-            F=Matrix{eltype(B)}(undef,N,N) # preallocate F
-            @blas_multi_then_1 MAX_BLAS_THREADS BLAS.syrk!('U','T',one(eltype(B)),B,zero(eltype(B)),F) # F[u ∈ upper]+=1.0*B'*B, no need to fill(F,0) since the additive constant in C is 0
-            _symmetrize_from_upper!(F) # since we chose "U" in syrk, we need to mirror upper -> lower
-            # Build Bn into dX: dX <- nx*dX + ny*dY 
+            F=Matrix{eltype(B)}(undef,N,N)
+            @blas_multi_then_1 MAX_BLAS_THREADS BLAS.syrk!('U','T',one(eltype(B)),B,zero(eltype(B)),F)
+            _symmetrize_from_upper!(F)
             _build_Bn_inplace!(dX,dY,pts.normal)
-            # Form G = Bn'*(Wn*Bn) by first scaling the rows of Bn (dX) by sqrt(w_n) (inplace to dX) and use syrk to perform the Rank-k update of a symmetric matrix
-            _scale_rows_sqrtw!(dX,wn,nsym) # like for F form sqrt(Wn*Bn) with row scaling with the same trick of putting sqrt(w_n) into the rows of the transposed and original dX to get (sqrt(Wn)*Bn)' * (sqrt(Wn)*Bn) so we can use syrk on dX
+            _scale_rows_sqrtw!(dX,wn,nsym)
         end
         @debug "F computed" size=size(F)
         @timeit_debug "compute_G" begin
-            G=Matrix{eltype(B)}(undef,N,N) # preallocate G, no need to fill with zeros since we use zero(eltype(B)) for the additive constant in syrk
-            @blas_multi_then_1 MAX_BLAS_THREADS BLAS.syrk!('U','T',one(eltype(B)),dX,zero(eltype(B)),G) # G[u ∈ upper]+=1.0*dX'*dX where dX is now sqrt(Wn)*Bn due to inplace scalings above
-            _symmetrize_from_upper!(G) # since we chose "U" in syrk, we need to mirror upper -> lower
+            G=Matrix{eltype(B)}(undef,N,N)
+            @blas_multi_then_1 MAX_BLAS_THREADS BLAS.syrk!('U','T',one(eltype(B)),dX,zero(eltype(B)),G)
+            _symmetrize_from_upper!(G)
         end
         @debug "G computed" size=size(F)
         return F,G

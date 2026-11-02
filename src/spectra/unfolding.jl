@@ -2,6 +2,23 @@
 
 corner_correction(corner_angles) =  sum([(pi^2 - c^2)/(24*pi*c) for c in corner_angles])
 
+"""
+    weyl_law(k, A, L) → N
+    weyl_law(k, A, L, corner_angles) → N
+
+Smooth Weyl state-counting function `N(k) = (A*k^2 - L*k)/(4π)` of a Dirichlet
+billiard of area `A` and boundary length `L`. The second method adds the
+constant corner correction `Σ (π² - c²)/(24π c)` over the interior corner angles `c`.
+
+## Arguments
+* `k`: Wavenumber or array of wavenumbers.
+* `A`: Billiard area.
+* `L`: Boundary length.
+* `corner_angles`: Interior corner angles.
+
+## Returns
+* `N`: Expected number of levels below `k`, with the shape of `k`.
+"""
 weyl_law(k,A,L) =  @. (A * k^2 - L * k)/(4*pi)
 weyl_law(k,A,L,corner_angles) =  weyl_law(k,A,L) .+ corner_correction(corner_angles)
 

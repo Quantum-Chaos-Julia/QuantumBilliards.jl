@@ -190,7 +190,31 @@ function match_wavenumbers(ks_l::Vector{K}, ts_l::Vector{T}, ks_r::Vector{K}, ts
     return ks, ts, control, states
 end
 
-# Merge a new overlapping spectral window into the accumulated spectrum.
+"""
+    overlap_and_merge!(k_left, ten_left, k_right, ten_right, control_left, kl, kr; tol=1e-3, states_left=nothing, states_right=nothing)
+
+Merge a new spectral window `(k_right, ten_right)` into the accumulated spectrum
+`(k_left, ten_left)` in place. Wavenumbers whose uncertainty intervals overlap in
+the window-boundary region `[kl, kr]` are identified, and the representative with the
+lower tension is retained.
+
+## Arguments
+* `k_left::Vector{K}`: Accumulated wavenumbers, modified in place.
+* `ten_left::Vector{T}`: Accumulated tensions, modified in place.
+* `k_right::Vector{K}`: Wavenumbers of the new window.
+* `ten_right::Vector{T}`: Tensions of the new window.
+* `control_left::Vector{Bool}`: Flags marking levels confirmed by two windows, modified in place.
+* `kl`: Lower edge of the overlap region.
+* `kr`: Upper edge of the overlap region.
+
+## Keyword Arguments
+* `tol::Real=1e-3`: Tolerance used to match levels across windows.
+* `states_left`: Optional states aligned with `k_left`, modified in place.
+* `states_right`: Optional states aligned with `k_right`.
+
+## Returns
+* `nothing`: The accumulated vectors are modified in place.
+"""
 function overlap_and_merge!(k_left::Vector{K}, ten_left::Vector{T}, k_right::Vector{K}, ten_right::Vector{T}, control_left::Vector{Bool}, kl, kr; tol::Real=1e-3, states_left::SL=nothing, states_right::SR=nothing) where {K<:Number,T<:Real,SL<:Union{Nothing,Vector{<:AbsState}},SR<:Union{Nothing,Vector{<:AbsState}}}
     if isempty(k_left)
         append!(k_left, k_right); append!(ten_left, ten_right); append!(control_left, fill(false, length(k_right)))
@@ -579,7 +603,33 @@ function _local_gap(xs::AbstractVector{T}, i::Int; w::Int=4) where {T<:Real}
     return isodd(n) ? gaps[(n+1)÷2] : (gaps[n÷2]+gaps[n÷2+1])/2
 end
 
-# Cluster and merge duplicate EBIM corrections.
+"""
+    overlap_and_merge_ebim!(k_left, ten_left, k_right, ten_right, control_left; tol=1e-5, spacing_frac=0.02, tolmax=5e-3, local_window=4, states_left=nothing, states_right=nothing)
+
+Append the EBIM corrections `(k_right, ten_right)` to the accumulated spectrum in
+place and cluster duplicates. Neighboring wavenumbers closer than
+`min(tolmax, max(tol, spacing_frac*gap))`, where `gap` is the local median spacing,
+form one cluster, from which the root with the smallest combined imaginary part and
+tension is kept.
+
+## Arguments
+* `k_left::Vector{K}`: Accumulated wavenumbers, modified in place.
+* `ten_left::Vector{T}`: Accumulated tensions, modified in place.
+* `k_right::Vector{K}`: New wavenumbers.
+* `ten_right::Vector{T}`: New tensions.
+* `control_left::Vector{Bool}`: Flags marking levels confirmed by more than one expansion center, modified in place.
+
+## Keyword Arguments
+* `tol::T=1e-5`: Minimum clustering distance.
+* `spacing_frac::T=0.02`: Fraction of the local level spacing used as clustering distance.
+* `tolmax::T=5e-3`: Maximum clustering distance.
+* `local_window::Int=4`: Number of neighboring spacings on each side used to estimate the local spacing.
+* `states_left`: Optional states aligned with `k_left`, modified in place.
+* `states_right`: Optional states aligned with `k_right`.
+
+## Returns
+* `nothing`: The accumulated vectors are modified in place.
+"""
 function overlap_and_merge_ebim!(k_left::Vector{K}, ten_left::Vector{T}, k_right::Vector{K}, ten_right::Vector{T}, control_left::Vector{Bool}; tol::T=T(1e-5), spacing_frac::T=T(0.02), tolmax::T=T(5e-3), local_window::Int=4, states_left::SL=nothing, states_right::SR=nothing) where {K<:Number,T<:Real,SL<:Union{Nothing,Vector{<:AbsState}},SR<:Union{Nothing,Vector{<:AbsState}}}
     isempty(k_right) && return nothing
     append!(k_left, k_right); append!(ten_left, ten_right); append!(control_left, fill(false, length(k_right))); states_left!==nothing && append!(states_left, states_right)
@@ -601,6 +651,23 @@ function overlap_and_merge_ebim!(k_left::Vector{K}, ten_left::Vector{T}, k_right
     return nothing
 end
 
+"""
+    weyl_window_count(billiard, k, dk; fundamental_only=false)
+
+Leading-order Weyl estimate `A*((k+dk)^2-k^2)/(4π)` of the number of levels
+in `[k, k+dk]`.
+
+## Arguments
+* `billiard::Bi`: Billiard geometry.
+* `k::T`: Lower wavenumber.
+* `dk::T`: Window width.
+
+## Keyword Arguments
+* `fundamental_only::Bool=false`: Use the fundamental-domain area instead of the full area.
+
+## Returns
+* `T`: Expected number of levels in the window.
+"""
 @inline function weyl_window_count(billiard::Bi, k::T, dk::T; fundamental_only::Bool=false) where {T<:Real,Bi<:AbsBilliard}
     A = fundamental_only ? fundamental_area(billiard) : area(billiard)
     return A*((k+dk)^2-k^2)/(T(4pi))
@@ -820,7 +887,7 @@ function compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; accept_tol::
                 p -= 1; err = err1
             end
         end
-        solver.verbose && @printf("CORK polynomial degree: %d -> %d, validation error = %.3e, tolerance = %.3e\n", solver.p, p, err, solver.taylor_tol)
+        solver.verbose && @info @sprintf("CORK polynomial degree: %d -> %d, validation error = %.3e, tolerance = %.3e", solver.p, p, err, solver.taylor_tol)
     end
     ks = Complex{T}[]; ts = T[]
     if solver.eigenvectors

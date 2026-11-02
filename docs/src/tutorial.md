@@ -2,11 +2,31 @@
 This section will guide you through getting started with QuantumBilliards.jl.
 
 ## Installation
-TODO: `Pkg.add`/`Pkg.dev` instructions.
+```julia
+using Pkg
+Pkg.add(url="https://github.com/Quantum-Chaos-Julia/QuantumBilliards.jl")
+```
 
 ## Core components
-TODO: brief overview of the main types/functions a new user should know about,
-linking to them with `[`Symbol`](@ref)`.
+A computation combines a billiard from `BilliardGeometry.jl`, a solver and,
+for basis solvers, a basis. Boundary-integral solvers such as
+[`BeynSolver`](@ref) and [`CORKSolver`](@ref) wrap a kernel
+([`DoubleLayerPotentialSolver`](@ref), [`CombinedFieldIntegralEquationSolver`](@ref)
+or [`CompositeBIMSolver`](@ref)); basis solvers such as
+[`VerginiSaracenoSolver`](@ref) use a basis such as [`FourierBessel`](@ref),
+[`CornerAdaptedFourierBessel`](@ref) or [`RealPlaneWaves`](@ref).
+[`compute_spectrum`](@ref) returns a [`SpectralData`](@ref) from which
+[`wavefunction`](@ref), [`boundary_function`](@ref) and
+[`husimi_function`](@ref) reconstruct the states.
+
+```julia
+using QuantumBilliards, BilliardGeometry
+billiard = C3Billiard(0.2)
+kernel = DoubleLayerPotentialSolver(8.0, billiard)
+solver = BeynSolver(kernel; nlevels = 10)
+k1, k2 = k_range_for_states(billiard, 250, 257)
+spectrum = compute_spectrum(solver, billiard, k1, k2)
+```
 
 ## Billiards with holes and symmetry
 A billiard with holes has the symmetry group `G'` of the elements of its

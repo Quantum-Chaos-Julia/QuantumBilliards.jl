@@ -150,8 +150,6 @@ function _composite_loop_groups(domain::AbsMultiplyConnectedDomain)
     end
     return groups
 end
-# for grid size, mostly legacy now
-_bim_grid_scale(solver::CompositeBIMSolver) = solver.component_solvers[1].pts_scaling_factor[1]
 
 # Closed boundary loops of the complete billiard boundary in solver order,
 # together with their hole flags. For a MultiplyConnectedDomain the loops come

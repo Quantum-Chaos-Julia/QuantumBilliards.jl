@@ -1032,7 +1032,7 @@ function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ
     mstep % block_size == 0 || error("mstep must be divisible by block_size")
     S = init_cork(B, p, N; block_size); mdim = size(S.Hb, 2); m = min(mstart, mdim)
     kmin = k0 - Δ; kmax = k0 + Δ; prev = Tuple{Float64,Float64,Float64}[]; have_prev = false; nstable = 0; t0 = time_ns()
-    verbose && @printf("Interval k: [%.3f, %.3f]\n", kmin, kmax)
+    verbose && @info @sprintf("CORK interval k: [%.3f, %.3f]", kmin, kmax)
     while true
         extend!(S, B, F, m)
         allroots, Vall = ritz_roots(S, k0, Δpoly, m; edge_tol = edge_tol, imag_search_tol = imag_search_tol)
@@ -1055,7 +1055,7 @@ function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ
         converged = nstable >= stable_checks && (edge_ok || empty_ok)
         maxρ = isempty(phys) ? Inf : maximum(x[3] for x in phys)
         status = empty_ok ? "EMPTY" : edge_ok ? "PASS" : "FAIL"
-        verbose && @printf("m=%4d/%4d rank=%4d ritz=%4d conv=%4d states=%4d maxρ=%9.2e drift=%9.2e stable=%d/%d edges=%s applies=%4d time=%7.3f\n", m, mdim, S.r, length(requested), length(phys), length(ks), maxρ, drift, nstable, stable_checks, status, S.napply, (time_ns() - t0) * 1e-9)
+        verbose && @info @sprintf("m=%4d/%4d rank=%4d ritz=%4d conv=%4d states=%4d maxρ=%9.2e drift=%9.2e stable=%d/%d edges=%s applies=%4d time=%7.3f", m, mdim, S.r, length(requested), length(phys), length(ks), maxρ, drift, nstable, stable_checks, status, S.napply, (time_ns() - t0) * 1e-9)
         if converged
             Ψ = eigenvectors ? reconstruct_cork_eigenvectors(S, Matrix{ComplexF64}(Vphys), m) : nothing
             return S, ks, Ψ, requested, allroots, edges, edge_good, m
@@ -1176,8 +1176,8 @@ function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=t
         P, tbuild = build_cork_polynomial(solver.kernel, pts, k0f, Δpoly, p; multithreaded)
     end
     if solver.verbose
-        @printf("CORK matrix size     = %d\npolynomial degree    = %d\nB build              = %.6f s\nB memory             = %.3f MiB\n", P.N, p, tbuild, Base.summarysize(P.B)/2^20)
-        solver.kernel.symmetry!==nothing && @printf("dimension reduction  = %.3fx\n", length(pts.xy)/P.N)
+        @info @sprintf("CORK matrix size = %d, polynomial degree = %d, B build = %.6f s, B memory = %.3f MiB", P.N, p, tbuild, Base.summarysize(P.B)/2^20)
+        solver.kernel.symmetry!==nothing && @info @sprintf("CORK dimension reduction = %.3fx", length(pts.xy)/P.N)
     end
     t = time_ns(); A0 = get_A0(P.B, P.N, p); ta0 = (time_ns()-t)*1e-9
     F = nothing; t = time_ns()
@@ -1185,7 +1185,7 @@ function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=t
         F = lu(A0)
     end
     tfact = (time_ns()-t)*1e-9
-    solver.verbose && @printf("\nP(0) assembly        = %.6f s\nLU                   = %.6f s\n\n", ta0, tfact)
+    solver.verbose && @info @sprintf("CORK P(0) assembly = %.6f s, LU = %.6f s", ta0, tfact)
     S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = adaptive_cork(P.B, F, p, P.N; k0=k0f, Δ=Δ, Δpoly=Δpoly, block_size=solver.block_size, mstart=solver.mstart, mstep=solver.mstep, stable_checks=solver.stable_checks, imag_tol=solver.imag_tol, edge_tol=solver.edge_tol, res_tol=solver.res_tol, stable_tol=solver.stable_tol, imag_search_tol=solver.imag_search_tol, eigenvectors, verbose=solver.verbose, expected)
     return P, S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal
 end

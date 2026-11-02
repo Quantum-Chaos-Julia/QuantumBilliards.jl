@@ -137,6 +137,23 @@ end
 
 _bim_numeric_type(::BeynSolver{T}) where {T} = T
 
+"""
+    weyl_window_width(billiard, k, nlevels; fundamental_only=false)
+
+Width `dk` of the window starting at `k` that contains approximately `nlevels` levels
+according to the leading Weyl law, i.e. `sqrt(k^2 + 4π*nlevels/A) - k`.
+
+## Arguments
+* `billiard::Bi`: Billiard geometry.
+* `k::T`: Lower wavenumber.
+* `nlevels::Int`: Target number of levels in the window.
+
+## Keyword Arguments
+* `fundamental_only::Bool=false`: Use the fundamental-domain area instead of the full area.
+
+## Returns
+* `T`: Window width.
+"""
 @inline function weyl_window_width(billiard::Bi, k::T, nlevels::Int; fundamental_only::Bool=false) where {T<:Real,Bi<:AbsBilliard}
     A = fundamental_only ? fundamental_area(billiard) : area(billiard)
     return sqrt(k^2+T(4pi*nlevels/A))-k
@@ -171,6 +188,18 @@ function plan_weyl_windows(billiard::Bi, k1::T, k2::T; nlevels::Int=10, Rmax::Re
     return intervals
 end
 
+"""
+    beyn_disks_from_windows(intervals)
+
+Convert real spectral windows into the contour disks used by Beyn's method: the
+center is the window midpoint and the radius is half the window width.
+
+## Arguments
+* `intervals::Vector{Tuple{T,T}}`: Windows `(kL, kR)`.
+
+## Returns
+* `Tuple{Vector{Complex{T}},Vector{T}}`: Disk centers and radii.
+"""
 function beyn_disks_from_windows(intervals::Vector{Tuple{T,T}}) where {T<:Real}
     k0 = Vector{Complex{T}}(undef, length(intervals)); R = Vector{T}(undef, length(intervals))
     @inbounds for (i, (kL, kR)) in pairs(intervals)
@@ -179,6 +208,21 @@ function beyn_disks_from_windows(intervals::Vector{Tuple{T,T}}) where {T<:Real}
     return k0, R
 end
 
+"""
+    beyn_buffer_matrices(::Type{T}, N, r, rng)
+
+Allocate the work matrices of Beyn's method: a random probing matrix `V` of size
+`N`×`r` drawn from `rng`, and the buffers `X`, `A0`, `A1` of the same size.
+
+## Arguments
+* `T`: Real element type.
+* `N::Int`: Matrix dimension of the Fredholm operator.
+* `r::Int`: Number of probing columns.
+* `rng`: Random number generator.
+
+## Returns
+* `NTuple{4,Matrix{Complex{T}}}`: `(V, X, A0, A1)`.
+"""
 function beyn_buffer_matrices(::Type{T}, N::Int, r::Int, rng) where {T<:Real}
     V = randn(rng, Complex{T}, N, r); X = similar(V); A0 = zeros(Complex{T}, N, r); A1 = zeros(Complex{T}, N, r)
     return V, X, A0, A1

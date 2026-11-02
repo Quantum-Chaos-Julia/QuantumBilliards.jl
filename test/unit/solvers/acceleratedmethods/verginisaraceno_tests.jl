@@ -50,7 +50,7 @@ vs_points(k=20.0; scaling=3.0) = evaluate_points(VerginiSaracenoSolver(2.0, scal
 
     @testset "returned fields" begin
         @test pts isa BoundaryPoints{Float64}
-        @test length(pts) == sum(Ns) > 40
+        @test length(pts) == sum(Ns) >= 40
         @test length(pts.xy) == length(pts.w_vs) == length(pts)
         @test isempty(pts.normal) && isempty(pts.ds) && isempty(pts.s)      # only the positions and w_vs are stored
         @test isempty(pts.w_dm) && isempty(pts.xy_int)
@@ -94,10 +94,10 @@ end
     curves = get_boundary_curves(rect)
 
     @testset "the number of points follows the scaling factors" begin
-        small = length(vs_points(20.0))
-        @test small == sum(_determine_bp_sizes(curves, [3.0, 3.0], 20.0))
-        @test abs(length(vs_points(40.0)) - 2small) <= 2                    # linear in k up to rounding
-        @test abs(length(vs_points(20.0; scaling=6.0)) - 2small) <= 2       # linear in the point scaling factor
+        small = length(vs_points(100.0))
+        @test small == sum(_determine_bp_sizes(curves, [3.0, 3.0], 100.0))
+        @test abs(length(vs_points(200.0)) - 2small) <= 2                   # linear in k up to rounding
+        @test abs(length(vs_points(100.0; scaling=6.0)) - 2small) <= 2      # linear in the point scaling factor
     end
 
     @testset "per-curve scaling factors" begin

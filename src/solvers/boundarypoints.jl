@@ -271,10 +271,10 @@ delegating directly to [`is_inside`](@ref).
 @inline points_in_billiard(pts, billiard) = is_inside(billiard, pts)
 
 function _determine_bp_sizes(curves, bs, k)
-    Ns = Vector{Int64}(undef,length(curves)) # store the data to indexwise access. This needs to be this way b/c we dont know beforehand which curves are real and which are abstract. Use sizehint! to give an idea as to not need to resize b/c it could the that real and abstract curves and intermingled
+    Ns = Vector{Int64}(undef,length(curves)) # per-curve point counts, indexed by curve
     @inbounds for i in eachindex(curves) # make an initial size calculation of the resulting vectors
         crv=curves[i]
-        Ns[i] =max(20,round(Int,k*crv.length*bs[i]/2*pi))
+        Ns[i] =max(20,round(Int,k*crv.length*bs[i]/(2*pi)))
     end
     return Ns
 end

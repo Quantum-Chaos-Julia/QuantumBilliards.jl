@@ -152,7 +152,6 @@ end
 function boundary_function(state::S, billiard::AbsBilliard; ppw::Real=5.0, multithreaded::Bool=true) where {S<:AbsState}
     type = eltype(state.vec)
     u, pts, norm = _basis_boundary_function_pts(state, billiard; ppw, multithreaded)
-    #println(norm)
     return u, pts.s::Vector{type}, norm
 end
 

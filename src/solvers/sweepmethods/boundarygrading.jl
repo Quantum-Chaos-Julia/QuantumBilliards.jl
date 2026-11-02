@@ -1,5 +1,5 @@
 """
-BoundaryGrading
+    BoundaryGrading
 
 `BoundaryGrading` is the abstract supertype for the boundary discretization
 strategies used by [`SweepBIMSolver`](@ref) concrete types

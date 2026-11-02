@@ -37,6 +37,21 @@ function rectify_grid(grid::AbstractVector{T}) where {T<:Real}
     return grid
 end
 
+"""
+    boundary_limits(curves; grd=1000, padding=0.01)
+
+Bounding box of a collection of boundary curves, sampled densely and padded on every side.
+
+## Arguments
+* `curves`: Boundary curves.
+
+## Keyword Arguments
+* `grd::Int=1000`: Sampling density parameter; each curve of length `L` is sampled with `max(512, round(Int, grd/L))` points.
+* `padding::Real=0.01`: Margin added on every side.
+
+## Returns
+* `Tuple`: `((xmin, xmax), (ymin, ymax))` of the padded limits.
+"""
 function boundary_limits(curves; grd::Int = 1000, padding::Real = 0.01)
     T = typeof(first(curves).length)
     x_bnd = Vector{T}(); y_bnd = Vector{T}()
@@ -496,7 +511,7 @@ end
 # reconstructed on one shared grid, or BasisEigenstates, each on its own
 # per-state grid), while `wavefunction(data, i)` reconstructs a single state
 # with the same unwrapped (Matrix, x, y) shape as calling `wavefunction`
-# directly on that state used to have.
+# directly on that state.
 ################################################################################
 
 # The `SpectralData` entry points forward one keyword set to every state type. A keyword that is valid only

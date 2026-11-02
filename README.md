@@ -3,7 +3,7 @@
 [![Build Status](https://github.com/clozej/QuantumBilliards.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/clozej/QuantumBilliards.jl/actions/workflows/CI.yml?query=branch%3Amain)
 [![Documentation](https://img.shields.io/badge/docs-stable-blue.svg)](https://Quantum-Chaos-Julia.github.io/QuantumBilliards.jl/)
 [![Documentation (dev)](https://img.shields.io/badge/docs-dev-blue.svg)](https://Quantum-Chaos-Julia.github.io/QuantumBilliards.jl/dev/)
-[![Julia](https://img.shields.io/badge/julia-%E2%89%A5%201.8-9558B2.svg?logo=julia)](https://julialang.org)
+[![Julia](https://img.shields.io/badge/julia-%E2%89%A5%201.12-9558B2.svg?logo=julia)](https://julialang.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 [![SciPost Physics Codebases](https://img.shields.io/badge/SciPost-Codebases-blue.svg)](#citation)
 <!-- TODO: replace with real badges after publication:
@@ -54,7 +54,7 @@ All accelerated BIM solvers wrap a sweep kernel (DLP/CFIE), which defines the in
 
 ## Choosing a solver
 - **Default choice: `BeynSolver` or `CORKSolver`.** They work for general geometries (smooth, cornered, multiply connected) without needing a basis that converges for the shape. Exact performance can depend on the billiard and computer architecture. CORK solver typically has a smaller memory footprint.
-- **`VerginiSaracenoSolver` is usefull for star shaped billiards and special shapes where efficient bases are known, such as triangles.** It will be less accurate than the boundary-integral solvers, but it can still be faster and has a much smaller memory footprint. It requires a basis that converges for the geometry (e.g. `CornerAdaptedFourierBessel`), which is not guaranteed for strongly deformed shapes.
+- **`VerginiSaracenoSolver` is useful for star shaped billiards and special shapes where efficient bases are known, such as triangles.** It will be less accurate than the boundary-integral solvers, but it can still be faster and has a much smaller memory footprint. It requires a basis that converges for the geometry (e.g. `CornerAdaptedFourierBessel`), which is not guaranteed for strongly deformed shapes.
 - **`ExpandedBIMSolver`** for cross validation.
 - **Sweep solvers** only for validation, basis convergence studies and spot checks at single wavenumbers.
 - Running two independent solvers on the same billiard is a good way to cross-validate a computed spectrum.
@@ -77,7 +77,7 @@ kernel = DoubleLayerPotentialSolver(
     sym_characters = (1,),                # symmetry sector
 )
 
-solver = BeynSolver(kernel; nq = 40, m = 10, Rmax = 0.5,
+solver = BeynSolver(kernel; nlevels = 10, nq = 40, Rmax = 0.5,
                     svd_tol = 1e-11, res_tol = 1e-7, eigenvectors = true)
 
 # 8 states starting from the 250-th
