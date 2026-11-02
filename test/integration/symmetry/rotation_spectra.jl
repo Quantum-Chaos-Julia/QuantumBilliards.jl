@@ -18,9 +18,9 @@ function _rot_c3_spectrum(chars::Tuple)
     return get!(ROTATION_SPECTRA_CACHE, (:c3, chars)) do
         billiard = C3Billiard(0.2)
         kernel = CombinedFieldIntegralEquationSolver(8.0, billiard; grading=SmoothPeriodicGrading(), sym_characters=chars)
-        solver = BeynSolver(kernel; m=6, nq=16, r=16, Rmax=0.5, svd_tol=1e-10, res_tol=2e-5,
+        solver = BeynSolver(kernel; nlevels=6, nq=16, r=16, Rmax=0.5, svd_tol=1e-10, res_tol=2e-5,
             taylor_degree=6, use_chebyshev=false, imag_k_check=false, eigenvectors=false)
-        compute_spectrum(solver, billiard, 3.0, 12.0; ten_tol=nothing, multithreaded=true, show_progress=false)
+        compute_spectrum(solver, billiard, 3.0, 12.0; accept_tol=nothing, multithreaded=true, show_progress=false)
     end
 end
 

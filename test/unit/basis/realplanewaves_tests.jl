@@ -1,6 +1,6 @@
 # Unit tests for
-#   src/basis/planewaves/realplanewaves.jl   (RealPlaneWaves, parity_pattern, infer_quantum_numbers, the constructors
-#                                             (dim; sym_x, sym_y), (dim, symmetries[, sym_qnumbers]) and
+#   src/basis/planewaves/realplanewaves.jl   (RealPlaneWaves, parity_pattern, infer_sym_characters, the constructors
+#                                             (dim; sym_x, sym_y), (dim, symmetries[, sym_characters]) and
 #                                             (dim, billiard, sector), resize_basis, basis_fun, gradient,
 #                                             basis_and_gradient, dk_fun)
 #   src/solvers/matrixconstructors.jl        (the generic basis_matrix, dk_matrix, gradient_matrices and
@@ -13,7 +13,7 @@
 # No eigen solves, no pinned wavefunction values. Helper functions use the prefix `rpw_`.
 
 using StaticArrays: SVector
-using QuantumBilliards: parity_pattern, infer_quantum_numbers, filter_matrix!, gradient_matrices
+using QuantumBilliards: parity_pattern, infer_sym_characters, filter_matrix!, gradient_matrices
 
 # Fixed deterministic evaluation points, away from the symmetry axes.
 rpw_pts(::Type{T}=Float64) where {T} = SVector{2,T}[SVector{2,T}(0.15 * j - 0.4, 0.5 - 0.17 * j) for j in 1:6]
@@ -54,7 +54,7 @@ end
 # Field-by-field equality of two bases (symmetries are compared by type).
 function rpw_same_basis(a, b)
     return a.dim == b.dim && a.angles == b.angles && a.parity_x == b.parity_x && a.parity_y == b.parity_y &&
-           a.sym_qnumbers == b.sym_qnumbers && typeof.(something(a.symmetries, [])) == typeof.(something(b.symmetries, [])) &&
+           a.sym_characters == b.sym_characters && typeof.(something(a.symmetries, [])) == typeof.(something(b.symmetries, [])) &&
            a.angle_arc == b.angle_arc && a.angle_shift == b.angle_shift &&
            (a.use_taylor, a.taylor_degree, a.taylor_radius, a.taylor_tol) == (b.use_taylor, b.taylor_degree, b.taylor_radius, b.taylor_tol)
 end
@@ -62,7 +62,7 @@ end
 @testset "RealPlaneWaves type" begin
     @test RealPlaneWaves <: AbsBasis
     @test !isabstracttype(RealPlaneWaves)
-    @test fieldnames(RealPlaneWaves) == (:dim, :symmetries, :sym_qnumbers, :angle_arc, :angle_shift, :angles,
+    @test fieldnames(RealPlaneWaves) == (:dim, :symmetries, :sym_characters, :angle_arc, :angle_shift, :angles,
                                          :parity_x, :parity_y, :sampler, :use_taylor, :taylor_degree, :taylor_radius, :taylor_tol)
     basis = RealPlaneWaves(3)
     @test basis isa RealPlaneWaves{Float64,LinearNodes{Float64}}
@@ -108,11 +108,11 @@ end
     end
 end
 
-@testset "infer_quantum_numbers" begin
-    @test infer_quantum_numbers(nothing) === nothing
-    @test infer_quantum_numbers(BilliardGeometry.AbsReflection[]) === nothing
-    @test infer_quantum_numbers(BilliardGeometry.AbsReflection[XAxisReflection()]) == [1.0]
-    q = infer_quantum_numbers(BilliardGeometry.AbsReflection[YAxisReflection(), XYAxisReflection(), XAxisReflection()])
+@testset "infer_sym_characters" begin
+    @test infer_sym_characters(nothing) === nothing
+    @test infer_sym_characters(BilliardGeometry.AbsReflection[]) === nothing
+    @test infer_sym_characters(BilliardGeometry.AbsReflection[XAxisReflection()]) == [1.0]
+    q = infer_sym_characters(BilliardGeometry.AbsReflection[YAxisReflection(), XYAxisReflection(), XAxisReflection()])
     @test q == [1.0, 1.0, 1.0]
     @test q isa Vector{Float64}
 end
@@ -122,7 +122,7 @@ end
     basis = RealPlaneWaves(n)
     @test basis.dim == 4n
     @test basis.symmetries === nothing
-    @test basis.sym_qnumbers === nothing
+    @test basis.sym_characters === nothing
     @test basis.angle_arc ≈ π
     @test basis.angle_shift == 0
     @test length(basis.angles) == length(basis.parity_x) == length(basis.parity_y) == 4n
@@ -141,7 +141,7 @@ end
     @test basis.dim == 2n
     @test basis.symmetries isa Vector{BilliardGeometry.AbsReflection}
     @test typeof.(basis.symmetries) == [XAxisReflection]
-    @test basis.sym_qnumbers == [-1.0]
+    @test basis.sym_characters == [-1.0]
     @test [basis.angle_arc, basis.angle_shift] ≈ [π, 0.0]
     @test basis.angles ≈ repeat([(i - 0.5) / n * π for i in 1:n], inner=2)
     @test basis.parity_x == repeat([1, -1], n)
@@ -154,7 +154,7 @@ end
     basis = RealPlaneWaves(n; sym_x=-1)
     @test basis.dim == 2n
     @test typeof.(basis.symmetries) == [YAxisReflection]
-    @test basis.sym_qnumbers == [-1.0]
+    @test basis.sym_characters == [-1.0]
     @test [basis.angle_arc, basis.angle_shift] ≈ [π, -π / 2]        # right half-plane of directions
     @test basis.angles ≈ repeat([(i - 0.5) / n * π - π / 2 for i in 1:n], inner=2)
     @test all(==(-1), basis.parity_x)
@@ -168,8 +168,8 @@ end
     basis = RealPlaneWaves(n; sym_x=-1, sym_y=1)
     @test basis.dim == n
     @test typeof.(basis.symmetries) == [YAxisReflection, XYAxisReflection, XAxisReflection]
-    @test basis.sym_qnumbers == [-1.0, -1.0, 1.0]                    # [sym_x, sym_x*sym_y, sym_y]
-    @test RealPlaneWaves(n; sym_x=-1, sym_y=-1).sym_qnumbers == [-1.0, 1.0, -1.0]
+    @test basis.sym_characters == [-1.0, -1.0, 1.0]                    # [sym_x, sym_x*sym_y, sym_y]
+    @test RealPlaneWaves(n; sym_x=-1, sym_y=-1).sym_characters == [-1.0, 1.0, -1.0]
     @test [basis.angle_arc, basis.angle_shift] ≈ [π / 2, 0.0]        # first quadrant only
     @test basis.angles ≈ [(i - 0.5) / n * π / 2 for i in 1:n]
     @test all(a -> 0 < a < π / 2, basis.angles)
@@ -198,11 +198,11 @@ end
     @test (tb.taylor_degree, tb.taylor_radius, tb.taylor_tol) == (8, 0.25, 1e-9)
 end
 
-@testset "RealPlaneWaves(dim, symmetries[, sym_qnumbers])" begin
+@testset "RealPlaneWaves(dim, symmetries[, sym_characters])" begin
     @testset "explicit quantum numbers" begin
         basis = RealPlaneWaves(3, BilliardGeometry.AbsReflection[YAxisReflection()], [-1])
         @test basis.dim == 6
-        @test basis.sym_qnumbers == [-1.0]
+        @test basis.sym_characters == [-1.0]
         @test all(==(-1), basis.parity_x)
         @test basis.parity_y == repeat([1, -1], 3)
         @test [basis.angle_arc, basis.angle_shift] ≈ [π, 0.0]         # no auto-adjustment in this form
@@ -217,7 +217,7 @@ end
     @testset "inferred quantum numbers are all +1" begin
         syms = BilliardGeometry.AbsReflection[YAxisReflection(), XYAxisReflection(), XAxisReflection()]
         basis = RealPlaneWaves(3, syms; angle_arc=π / 2)
-        @test basis.sym_qnumbers == [1.0, 1.0, 1.0]
+        @test basis.sym_characters == [1.0, 1.0, 1.0]
         @test basis.parity_x == fill(1, 3) && basis.parity_y == fill(1, 3)
         @test rpw_same_basis(basis, RealPlaneWaves(3; sym_x=1, sym_y=1))
     end
@@ -258,7 +258,7 @@ end
         basis = RealPlaneWaves(n, rect, sector)
         @test rpw_same_basis(basis, RealPlaneWaves(n; sym_x=1, sym_y=-1))
         @test basis.parity_x == fill(1, n) && basis.parity_y == fill(-1, n)
-        @test basis.sym_qnumbers == [1.0, -1.0, -1.0]
+        @test basis.sym_characters == [1.0, -1.0, -1.0]
     end
 
     @testset "single y-axis reflection sector" begin
@@ -316,7 +316,7 @@ end
         resized = resize_basis(basis, rect, 10, 12.0)
         @test resized.dim == 10
         @test resized.symmetries == basis.symmetries
-        @test resized.sym_qnumbers == basis.sym_qnumbers
+        @test resized.sym_characters == basis.sym_characters
         @test [resized.angle_arc, resized.angle_shift] ≈ [π / 2, 0.0]
         @test rpw_same_basis(resized, RealPlaneWaves(10; sym_x=-1, sym_y=1))
 
@@ -742,7 +742,7 @@ end
         @test eltype(b32.angles) == Float32
         @test b32.angle_arc isa Float32 && b32.angle_shift isa Float32
         @test b32.taylor_radius isa Float32 && b32.taylor_tol isa Float32
-        @test eltype(b32.sym_qnumbers) == Float32
+        @test eltype(b32.sym_characters) == Float32
         @test b32.angles ≈ Float32.(b64.angles)
         @test b32.parity_x == b64.parity_x && b32.parity_y == b64.parity_y
     end

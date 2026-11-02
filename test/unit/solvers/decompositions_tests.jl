@@ -78,15 +78,15 @@ end
     @testset "eps sets the relative cut-off" begin
         A = Matrix(Diagonal([1.0, 1e-8, 1e-12]))
         B = Matrix(1.0I, 3, 3)
-        mu_all, _, C_all = generalized_eigen(A, B)                        # default eps = 1e-15 keeps everything
+        mu_all, _, C_all = generalized_eigen(A, B)                        # default eig_tol = 1e-15 keeps everything
         @test size(C_all, 2) == 3
         @test mu_all ≈ [1.0, 1e8, 1e12]
 
-        mu, _, C = generalized_eigen(A, B; eps=1e-10)                     # drops 1e-12 < 1e-10 * 1
+        mu, _, C = generalized_eigen(A, B; eig_tol=1e-10)                     # drops 1e-12 < 1e-10 * 1
         @test size(C, 2) == 2
         @test mu ≈ [1.0, 1e8]
 
-        mu, _, C = generalized_eigen(A, B; eps=1e-5)                      # drops 1e-8 as well
+        mu, _, C = generalized_eigen(A, B; eig_tol=1e-5)                      # drops 1e-8 as well
         @test size(C, 2) == 1
         @test mu ≈ [1.0]
     end
@@ -150,8 +150,8 @@ end
         A = Matrix(Diagonal([1.0, 1e-8, 1e-12]))
         B = Matrix(1.0I, 3, 3)
         @test generalized_eigvals(A, B) ≈ [1.0, 1e8, 1e12]
-        @test generalized_eigvals(A, B; eps=1e-10) ≈ [1.0, 1e8]
-        @test generalized_eigvals(A, B; eps=1e-5) ≈ [1.0]
+        @test generalized_eigvals(A, B; eig_tol=1e-10) ≈ [1.0, 1e8]
+        @test generalized_eigvals(A, B; eig_tol=1e-5) ≈ [1.0]
         @test generalized_eigvals(Matrix(Diagonal([4.0, 1.0, 0.0])), Matrix(Diagonal([2.0, 3.0, 5.0]))) ≈ [0.5, 3.0]
         @test isempty(generalized_eigvals(zeros(3, 3), Matrix(1.0I, 3, 3)))
     end

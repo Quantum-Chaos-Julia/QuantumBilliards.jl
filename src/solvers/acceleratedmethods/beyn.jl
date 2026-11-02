@@ -60,7 +60,7 @@ order and terminates after a prescribed sequence of residual-good roots.
 
 ## Fields
 * `kernel::K`: Boundary-integral solver defining `A(k)`.
-* `m::Int`: Target number of states per Weyl window.
+* `nlevels::Int`: Target number of states per Weyl window.
 * `nq::Int`: Number of contour quadrature nodes.
 * `r::Int`: Initial random probing rank.
 * `Rmax::T`: Maximum contour radius in spectrum sweeps.
@@ -79,7 +79,7 @@ order and terminates after a prescribed sequence of residual-good roots.
 """
 mutable struct BeynSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
     kernel::K
-    m::Int
+    nlevels::Int
     nq::Int
     r::Int
     Rmax::T
@@ -98,7 +98,7 @@ mutable struct BeynSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
 end
 
 """
-    BeynSolver(kernel::K; m::Int=10, nq::Int=48, r::Int=48, Rmax::Real=1.0, svd_tol::Real=1e-12, res_tol::Real=1e-9, auto_discard_spurious::Bool=true, use_taylor::Bool=true, taylor_degree::Int=14, taylor_tol::Real=1e-12, use_chebyshev::Bool=true, n_panels_h::Int=15000, M_h::Int=5, n_panels_j::Int=10000, M_j::Int=5, cheb_config::Union{Nothing,ChebyshevConfig}=nothing, imag_k_check::Bool=true, imag_k_pad::Int=20, imag_k_group_size::Int=20)
+    BeynSolver(kernel::K; nlevels::Int=100, nq::Int=40, r::Int=200, Rmax::Real=0.5, svd_tol::Real=1e-11, res_tol::Real=1e-8, auto_discard_spurious::Bool=true, use_taylor::Bool=true, taylor_degree::Int=14, taylor_tol::Real=1e-12, use_chebyshev::Bool=false, cheb_config::Union{Nothing,ChebyshevConfig}=nothing, imag_k_check::Bool=true, imag_k_pad::Int=20, imag_k_group_size::Int=20, eigenvectors::Bool=true)
 
 Construct a Beyn nonlinear eigensolver.
 
@@ -110,7 +110,7 @@ imaginary-`k` screening by default to verify the spectrum integrity.
 * `kernel::K`: Boundary-integral solver defining the nonlinear matrix `A(k)`.
 
 ## Keyword Arguments
-* `m::Int=10`: Target number of states per Weyl window.
+* `nlevels::Int=100`: Target number of states per Weyl window.
 * `nq::Int=40`: Number of contour quadrature nodes.
 * `r::Int=200`: Initial random probing rank.
 * `Rmax::Real=0.5`: Maximum contour radius in spectrum sweeps.
@@ -120,37 +120,33 @@ imaginary-`k` screening by default to verify the spectrum integrity.
 * `use_taylor::Bool=true`: Use Fredholm matrix via Taylor expansion.
 * `taylor_degree::Int=14`: Taylor degree used by the analytic Taylor-Horner backend.
 * `taylor_tol::Real=1e-12`: Tolerance for the Taylor expansion.
-* `use_chebyshev::Bool=true`: Use Chebyshev-accelerated matrix construction.
-* `n_panels_h::Int=10000`: Hankel Chebyshev initial panel count.
-* `M_h::Int=5`: Hankel Chebyshev polynomial initial degree.
-* `n_panels_j::Int=5000`: Bessel Chebyshev initial panel count.
-* `M_j::Int=5`: Bessel Chebyshev polynomial initial degree.
-* `cheb_config::Union{Nothing,ChebyshevConfig}=nothing`: Explicit Chebyshev configuration. If nothing will construct it from the provided initial panel counts and polynomial degrees.
+* `use_chebyshev::Bool=false`: Use Chebyshev-accelerated matrix construction.
+* `cheb_config::Union{Nothing,ChebyshevConfig}=nothing`: Chebyshev configuration. If `nothing`, `ChebyshevConfig(T)` defaults are used.
 * `imag_k_check::Bool=true`: Enable imaginary-`k` screening in `compute_spectrum`. Should always be used in production runs to verify spectrum integrity.
 * `imag_k_pad::Int=20`: Consecutive residual-good roots required before stopping. Only applies when `imag_k_check` is enabled.
 * `imag_k_group_size::Int=20`: Maximum residual-check batch size. Only applies when `imag_k_check` is enabled.
-* `eigenvectors::Bool`: Whether `compute_spectrum` retains the layer densities returned by the Beyn solve.
+* `eigenvectors::Bool=true`: Whether `compute_spectrum` retains the layer densities returned by the Beyn solve.
 
 ## Returns
 * `BeynSolver{T,K}`: Configured Beyn solver.
 """
-function BeynSolver(kernel::K; m::Int=100, nq::Int=40, r::Int=200, Rmax::Real=0.5, svd_tol::Real=1e-11, res_tol::Real=1e-8, auto_discard_spurious::Bool=true, use_taylor::Bool=true, taylor_degree::Int=14, taylor_tol::Real=1e-12, use_chebyshev::Bool=false, n_panels_h::Int=10000, M_h::Int=5, n_panels_j::Int=5000, M_j::Int=5, cheb_config::Union{Nothing,ChebyshevConfig}=nothing, imag_k_check::Bool=true, imag_k_pad::Int=20, imag_k_group_size::Int=20, eigenvectors::Bool=true) where {K<:SweepBIMSolver}
-    T = _bim_numeric_type(kernel); cfg = cheb_config === nothing ? ChebyshevConfig(T; n_panels_h, M_h, n_panels_j, M_j) : cheb_config
-    return BeynSolver{T,K}(kernel, m, nq, r, T(Rmax), T(svd_tol), T(res_tol), auto_discard_spurious, use_taylor, taylor_degree, T(taylor_tol), use_chebyshev, cfg, imag_k_check, imag_k_pad, imag_k_group_size, eigenvectors)
+function BeynSolver(kernel::K; nlevels::Int=100, nq::Int=40, r::Int=200, Rmax::Real=0.5, svd_tol::Real=1e-11, res_tol::Real=1e-8, auto_discard_spurious::Bool=true, use_taylor::Bool=true, taylor_degree::Int=14, taylor_tol::Real=1e-12, use_chebyshev::Bool=false, cheb_config::Union{Nothing,ChebyshevConfig}=nothing, imag_k_check::Bool=true, imag_k_pad::Int=20, imag_k_group_size::Int=20, eigenvectors::Bool=true) where {K<:SweepBIMSolver}
+    T = _bim_numeric_type(kernel); cfg = cheb_config === nothing ? ChebyshevConfig(T) : cheb_config
+    return BeynSolver{T,K}(kernel, nlevels, nq, r, T(Rmax), T(svd_tol), T(res_tol), auto_discard_spurious, use_taylor, taylor_degree, T(taylor_tol), use_chebyshev, cfg, imag_k_check, imag_k_pad, imag_k_group_size, eigenvectors)
 end
 
 _bim_numeric_type(::BeynSolver{T}) where {T} = T
 
-@inline function weyl_window_width(billiard::Bi, k::T, m::Int; fundamental_only::Bool=false) where {T<:Real,Bi<:AbsBilliard}
+@inline function weyl_window_width(billiard::Bi, k::T, nlevels::Int; fundamental_only::Bool=false) where {T<:Real,Bi<:AbsBilliard}
     A = fundamental_only ? fundamental_area(billiard) : area(billiard)
-    return sqrt(k^2+T(4pi*m/A))-k
+    return sqrt(k^2+T(4pi*nlevels/A))-k
 end
 
 """
-    plan_weyl_windows(billiard::Bi, k1::T, k2::T; m::Int=10, Rmax::Real=1.0, fundamental_only::Bool=false)
+    plan_weyl_windows(billiard::Bi, k1::T, k2::T; nlevels::Int=10, Rmax::Real=1.0, fundamental_only::Bool=false)
 
 Partition `[k1,k2]` into adjacent spectral windows containing approximately
-`m` states according to the leading Weyl law.
+`nlevels` states according to the leading Weyl law.
 
 ## Arguments
 * `billiard::Bi`: Billiard geometry.
@@ -158,18 +154,18 @@ Partition `[k1,k2]` into adjacent spectral windows containing approximately
 * `k2::T`: Upper spectral endpoint.
 
 ## Keyword Arguments
-* `m::Int=10`: Approximate number of states per window.
+* `nlevels::Int=10`: Approximate number of states per window.
 * `Rmax::Real=1.0`: Maximum contour radius.
 * `fundamental_only::Bool=false`: Use the desymmetrized fundamental-domain area (Dirichlet walls).
 
 ## Returns
 * `Vector{Tuple{T,T}}`: Adjacent spectral intervals `(kL,kR)`.
 """
-function plan_weyl_windows(billiard::Bi, k1::T, k2::T; m::Int=10, Rmax::Real=1.0, fundamental_only::Bool=false) where {T<:Real,Bi<:AbsBilliard}
-    k2 > k1 || return Tuple{T,T}[]; m > 0 || throw(ArgumentError("m must be positive; received m=$m")); Rmax > 0 || throw(ArgumentError("Rmax must be positive; received Rmax=$Rmax"))
+function plan_weyl_windows(billiard::Bi, k1::T, k2::T; nlevels::Int=10, Rmax::Real=1.0, fundamental_only::Bool=false) where {T<:Real,Bi<:AbsBilliard}
+    k2 > k1 || return Tuple{T,T}[]; nlevels > 0 || throw(ArgumentError("nlevels must be positive; received nlevels=$nlevels")); Rmax > 0 || throw(ArgumentError("Rmax must be positive; received Rmax=$Rmax"))
     intervals = Tuple{T,T}[]; maxwidth = T(2Rmax); k = k1
     while k < k2
-        dk = min(weyl_window_width(billiard, k, m; fundamental_only), maxwidth, k2-k); dk > zero(T) || throw(ArgumentError("Weyl window width vanished at k=$k"))
+        dk = min(weyl_window_width(billiard, k, nlevels; fundamental_only), maxwidth, k2-k); dk > zero(T) || throw(ArgumentError("Weyl window width vanished at k=$k"))
         kr = k+dk; push!(intervals, (k, kr)); k = kr
     end
     return intervals

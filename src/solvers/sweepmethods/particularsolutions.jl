@@ -239,11 +239,11 @@ function solve_full(solver::ParticularSolutionsMethodSolver, basis::Ba, pts::Bou
     return minimum(solution)
 end
 
-@inline function _numerical_rank_from_F(F, tol::Real)
+@inline function _numerical_rank_from_F(F, rank_tol::Real)
     A = F.factors
     n = min(size(A,1), size(A,2))
     n == 0 && return 0
-    t = tol*abs(@inbounds A[1,1])
+    t = rank_tol*abs(@inbounds A[1,1])
     @inbounds for i in n:-1:1
         if abs(A[i,i]) > t
             return i
@@ -253,7 +253,7 @@ end
 end
 
 """
-    solve_with_rank_reduction(solver::ParticularSolutionsMethodSolver, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool = true, tol::Real = 1e-10) where {Ba<:AbsBasis} → t::Real
+    solve_with_rank_reduction(solver::ParticularSolutionsMethodSolver, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool = true, rank_tol::Real = 1e-10) where {Ba<:AbsBasis} → t::Real
 
 Computes the particular solutions method tension at wavenumber `k` using a
 rank-reduced singular value decomposition of `B`/`B_int` for improved
@@ -262,7 +262,7 @@ performance at large basis dimension.
 ## Description
 `B_int` is factorized with a rank-revealing pivoted QR, `B_int * P = Q * R`.
 Only the numerically well-determined leading `r × r` block of `R` (with `r`
-determined by [`_numerical_rank_from_F`](@ref) and `tol`) is used to reduce `B`
+determined by [`_numerical_rank_from_F`](@ref) and `rank_tol`) is used to reduce `B`
 via a stable triangular solve, after which the tension is the square root of
 the smallest eigenvalue of the small `r × r` matrix `B_reduced' * B_reduced`.
 This avoids ever forming the full generalized SVD of `(B, B_int)`.
@@ -275,17 +275,17 @@ This avoids ever forming the full generalized SVD of `(B, B_int)`.
 
 ## Keyword arguments
 * `multithreaded::Bool = true`: Whether the matrix construction is multithreaded.
-* `tol::Real = 1e-10`: Relative tolerance used to determine the numerical rank of `B_int`'s QR factorization. Should increase with `k` since `R[1,1]` decreases with `k`.
+* `rank_tol::Real = 1e-10`: Relative tolerance used to determine the numerical rank of `B_int`'s QR factorization. Should increase with `k` since `R[1,1]` decreases with `k`.
 
 ## Returns
 * `t`: The tension at wavenumber `k`.
 """
-function solve_with_rank_reduction(solver::ParticularSolutionsMethodSolver, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool=true, tol=1e-10) where {Ba<:AbsBasis}
+function solve_with_rank_reduction(solver::ParticularSolutionsMethodSolver, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool=true, rank_tol=1e-10) where {Ba<:AbsBasis}
     B, C = construct_matrices(solver, basis, pts, k; multithreaded=multithreaded)
     T = eltype(B)
     @blas_multi_then_1 MAX_BLAS_THREADS begin
         F = qr!(C, ColumnNorm()) # rank-revealing QR with column pivoting: C*P = Q*R, overwrite C since it is no longer needed
-        r = _numerical_rank_from_F(F, tol) # numerical rank r from the packed factors (no copy)
+        r = _numerical_rank_from_F(F, rank_tol) # numerical rank r from the packed factors (no copy)
         r == 0 && return Inf # degenerate fallback
         Rview = @views UpperTriangular(view(F.factors, 1:r, 1:r)) # well-determined r x r block of R (no copy)
         piv = F.p # permutation vector piv such that C[:,piv] = Q*R
@@ -299,7 +299,7 @@ function solve_with_rank_reduction(solver::ParticularSolutionsMethodSolver, basi
 end
 
 """
-    solve(solver::ParticularSolutionsMethodSolver, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool = true, use_rank_reduction::Bool = true, tol::Real = 1e-10) where {Ba<:AbsBasis} → t::Real
+    solve(solver::ParticularSolutionsMethodSolver, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool = true, use_rank_reduction::Bool = true, rank_tol::Real = 1e-10) where {Ba<:AbsBasis} → t::Real
 
 Computes the particular solutions method tension at wavenumber `k` for `basis`
 on the boundary/interior points `pts`.
@@ -318,21 +318,21 @@ to instead use the more robust, full-SVD [`solve_full`](@ref).
 ## Keyword arguments
 * `multithreaded::Bool = true`: Whether the matrix construction is multithreaded.
 * `use_rank_reduction::Bool = true`: If true, uses [`solve_with_rank_reduction`](@ref); otherwise uses [`solve_full`](@ref).
-* `tol::Real = 1e-10`: Rank tolerance passed to [`solve_with_rank_reduction`](@ref).
+* `rank_tol::Real = 1e-10`: Rank tolerance passed to [`solve_with_rank_reduction`](@ref).
 
 ## Returns
 * `t`: The tension at wavenumber `k`.
 """
-function solve(solver::ParticularSolutionsMethodSolver, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool=true, use_rank_reduction::Bool=true, tol=1e-10) where {Ba<:AbsBasis}
+function solve(solver::ParticularSolutionsMethodSolver, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool=true, use_rank_reduction::Bool=true, rank_tol=1e-10) where {Ba<:AbsBasis}
     if use_rank_reduction
-        return solve_with_rank_reduction(solver, basis, pts, k; multithreaded=multithreaded, tol=tol)
+        return solve_with_rank_reduction(solver, basis, pts, k; multithreaded=multithreaded, rank_tol=rank_tol)
     else
         return solve_full(solver, basis, pts, k; multithreaded=multithreaded)
     end
 end
 
 """
-    solve_vect(solver::ParticularSolutionsMethodSolver, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool = true, tol::Real = 1e-10) where {Ba<:AbsBasis} → (t::Real, x::Vector)
+    solve_vect(solver::ParticularSolutionsMethodSolver, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool = true, rank_tol::Real = 1e-10) where {Ba<:AbsBasis} → (t::Real, x::Vector)
 
 Computes the particular solutions method tension and the corresponding
 eigenvector (expressed in the original basis) at wavenumber `k`.
@@ -354,20 +354,20 @@ coefficient vector `x` in the original basis ordering expected by
 
 ## Keyword arguments
 * `multithreaded::Bool = true`: Whether the matrix construction is multithreaded.
-* `tol::Real = 1e-10`: Relative tolerance used to determine the numerical rank of `B_int`'s QR factorization.
+* `rank_tol::Real = 1e-10`: Relative tolerance used to determine the numerical rank of `B_int`'s QR factorization.
 
 ## Returns
 * `t`: The tension at wavenumber `k`.
 * `x`: The eigenvector expressed in the original basis coefficient ordering.
 """
-function solve_vect(solver::ParticularSolutionsMethodSolver, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool=true, tol=1e-10) where {Ba<:AbsBasis}
+function solve_vect(solver::ParticularSolutionsMethodSolver, basis::Ba, pts::BoundaryPoints, k; multithreaded::Bool=true, rank_tol=1e-10) where {Ba<:AbsBasis}
     B, C = construct_matrices(solver, basis, pts, k; multithreaded=multithreaded)
     @blas_multi_then_1 MAX_BLAS_THREADS begin
         T = eltype(B)
         F = qr(C, ColumnNorm()) # rank-revealing QR with column pivoting: C*P = Q*R
         R = UpperTriangular(F.R)
         piv = F.p # permutation vector piv such that C[:,piv] = Q*R
-        r = findlast(i -> abs(R[i,i]) > tol*abs(R[1,1]), 1:min(size(R)...)) # numerical rank
+        r = findlast(i -> abs(R[i,i]) > rank_tol*abs(R[1,1]), 1:min(size(R)...)) # numerical rank
         isnothing(r) && return (Inf, zeros(T, size(B,2))) # degenerate fallback
         Rr = R[1:r,1:r] # well-determined r x r block
         Br = B[:,piv[1:r]]/Rr # Br = B[:,piv[1:r]] * Rr^{-1} via stable triangular solve

@@ -3,7 +3,7 @@
 #                                      momentum_function for a sampled function, for a non-uniform sampling and for
 #                                      eigenstates, and the SpectralData wrappers)
 # The boundary function is the normal derivative u(s) = d_n psi(s) on the (unfolded) boundary and the momentum function is
-# its one-sided power spectral density. There is no `fundamental_domain` or `inside_only` keyword in this file; what
+# its one-sided power spectral density. There is no `fundamental_only` or `inside_only` keyword in this file; what
 # corresponds to it is whether the basis carries reflection symmetries: a basis with symmetries returns the function
 # unfolded onto the full boundary, a basis without symmetries returns the boundary of the fundamental domain only.
 #
@@ -253,7 +253,7 @@ end
     end
 
     @testset "b controls the sampling density, multithreaded does not change the values" begin
-        ub, sb, _ = boundary_function(st, BF_CIRCLE; b=3000.0)
+        ub, sb, _ = boundary_function(st, BF_CIRCLE; ppw=3000.0)
         @test length(ub) > length(u) && length(sb) == length(ub)
         @test maximum(abs, ub .- ub[1]) <= 1e-10 * abs(ub[1])
         us, ss, ns = boundary_function(st, BF_CIRCLE; multithreaded=false)
@@ -287,7 +287,7 @@ end
 
 @testset "boundary_function - circle J1 cos(theta) mode unfolds with the right signs" begin
     st = bf_j1_state()
-    @test st.basis.sym_qnumbers == [-1.0, -1.0, 1.0]                  # odd in x, even in y
+    @test st.basis.sym_characters == [-1.0, -1.0, 1.0]                  # odd in x, even in y
     u, pts, _ = bf_check_unfolded(st, BF_CIRCLE, (x, y) -> bf_grad_j1(x, y, st.k); ncopies=4, perimeter=2pi)
     θ = [atan(p[2], p[1]) for p in pts.xy]
     # u is proportional to cos(theta): the ratio is constant up to the nodes where cos(theta) vanishes
@@ -360,15 +360,14 @@ end
     u = collect(range(-1.0, -2.0, 32))
     st = bf_bim_state(BF_J01, u, pts)
 
-    @testset "reads the precomputed fields; b and multithreaded are ignored" begin
+    @testset "reads the precomputed fields and takes no keywords" begin
         ub, sb, nb = boundary_function(st)
         @test ub === u && sb === pts.s && nb == 1.25
-        @test boundary_function(st; b=100.0, multithreaded=false) == (u, pts.s, 1.25)
+        @test_throws MethodError boundary_function(st; ppw=100.0, multithreaded=false)
     end
 
     @testset "with a billiard: forwards to the one-argument method" begin
         @test boundary_function(st, BF_CIRCLE) == (u, pts.s, 1.25)
-        @test boundary_function(st, BF_CIRCLE; b=7.0) == (u, pts.s, 1.25)
     end
 
     @testset "with a solver: stored u is used when present, recomputed through the kernel when missing" begin
@@ -382,7 +381,7 @@ end
         st_missing = BIMEigenstate{Float64,Float64}(BF_J01, 0.0, nothing, 1e-9, pts, nothing, nothing)
         @test_throws ArgumentError boundary_function(st_missing)
         @test_throws "no stored boundary normal derivative" boundary_function(st_missing)
-        @test_throws ArgumentError boundary_function(st_missing; b=7.0, multithreaded=false)
+        @test_throws MethodError boundary_function(st_missing; ppw=7.0, multithreaded=false)
     end
 
     @testset "a missing u with a billiard but no solver throws" begin
@@ -561,7 +560,7 @@ end
         power, ks = momentum_function(st)
         @test power == ref && ks == ks_ref
         @test power[4] ≈ 0.5 atol = 1e-12
-        @test momentum_function(st; b=10.0, multithreaded=false) == (ref, ks_ref)
+        @test_throws MethodError momentum_function(st; ppw=10.0, multithreaded=false)
     end
 
     @testset "with a billiard and with a solver" begin
@@ -580,7 +579,7 @@ end
         st_missing = BIMEigenstate{Float64,Float64}(BF_J01, 0.0, nothing, 1e-9, pts, nothing, nothing)
         @test_throws ArgumentError momentum_function(st_missing)
         @test_throws "no stored boundary normal derivative" momentum_function(st_missing)
-        @test_throws ArgumentError momentum_function(st_missing; b=10.0, multithreaded=false)
+        @test_throws MethodError momentum_function(st_missing; ppw=10.0, multithreaded=false)
     end
 
     @testset "a missing u with a billiard but no solver throws" begin
@@ -615,7 +614,7 @@ end
 
     @testset "keywords are forwarded" begin
         st = bf_j1_state()
-        p_a, _ = momentum_function(st, BF_CIRCLE; b=3000.0)
+        p_a, _ = momentum_function(st, BF_CIRCLE; ppw=3000.0)
         p_b, _ = momentum_function(st, BF_CIRCLE; multithreaded=false)
         @test length(p_a) > length(momentum_function(st, BF_CIRCLE)[1])
         @test argmax(p_a) == 2
@@ -632,7 +631,7 @@ end
         @test (u1, sv1, n1) == boundary_function(s1, BF_CIRCLE)
         all_b = boundary_function(data)
         @test length(all_b) == 2 && all_b[1] == boundary_function(s0, BF_CIRCLE) && all_b[2] == (u1, sv1, n1)
-        @test boundary_function(data, 1; b=3000.0)[1] == boundary_function(s0, BF_CIRCLE; b=3000.0)[1]
+        @test boundary_function(data, 1; ppw=3000.0)[1] == boundary_function(s0, BF_CIRCLE; ppw=3000.0)[1]
 
         @test momentum_function(data, 2) == momentum_function(s1, BF_CIRCLE)
         all_m = momentum_function(data)

@@ -70,7 +70,7 @@ reused for all EBIM expansion centers lying within its validity radius.
 * `taylor_degree::Int`: Degree of each analytic Fredholm Taylor expansion.
 * `taylor_radius::T`: Maximum permitted distance from a Taylor panel center.
 * `taylor_tol::T`: Relative tolerance used to validate a Taylor panel.
-* `tol::T`: Convergence tolerance used by the Krylov eigensolver.
+* `krylov_tol::T`: Convergence tolerance used by the Krylov eigensolver.
 * `maxiter::Int`: Maximum number of Krylov iterations.
 * `krylovdim::Int`: Minimum Krylov subspace dimension.
 
@@ -85,13 +85,13 @@ struct ExpandedBIMSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
     taylor_degree::Int
     taylor_radius::T
     taylor_tol::T
-    tol::T
+    krylov_tol::T
     maxiter::Int
     krylovdim::Int
 end
 
 """
-    ExpandedBIMSolver(kernel::K; use_taylor::Bool=true, taylor_degree::Int=16, taylor_radius::Real=0.5, taylor_tol::Real=1e-11, tol::Real=1e-12, maxiter::Int=5000, krylovdim::Int=40) where {K<:SweepBIMSolver}
+    ExpandedBIMSolver(kernel::K; use_taylor::Bool=true, taylor_degree::Int=16, taylor_radius::Real=0.5, taylor_tol::Real=1e-11, krylov_tol::Real=1e-12, maxiter::Int=5000, krylovdim::Int=40) where {K<:SweepBIMSolver}
 
 Construct an [`ExpandedBIMSolver`](@ref).
 
@@ -103,18 +103,18 @@ Construct an [`ExpandedBIMSolver`](@ref).
 * `taylor_degree::Int = 16`: Taylor polynomial degree.
 * `taylor_radius::Real = 0.5`: Maximum permitted distance from a Taylor center.
 * `taylor_tol::Real = 1e-11`: Relative Taylor validation tolerance.
-* `tol::Real = 1e-12`: Krylov eigensolver tolerance.
+* `krylov_tol::Real = 1e-12`: Krylov eigensolver tolerance.
 * `maxiter::Int = 5000`: Maximum number of Krylov iterations.
 * `krylovdim::Int = 40`: Minimum Krylov subspace dimension.
 
 ## Returns
 * `solver::ExpandedBIMSolver`: Configured EBIM solver.
 """
-function ExpandedBIMSolver(kernel::K; use_taylor::Bool = true, taylor_degree::Int = 16, taylor_radius::Real = 0.5, taylor_tol::Real = 1e-11, tol::Real = 1e-12, maxiter::Int = 5000, krylovdim::Int = 40) where {K<:SweepBIMSolver}
+function ExpandedBIMSolver(kernel::K; use_taylor::Bool = true, taylor_degree::Int = 16, taylor_radius::Real = 0.5, taylor_tol::Real = 1e-11, krylov_tol::Real = 1e-12, maxiter::Int = 5000, krylovdim::Int = 40) where {K<:SweepBIMSolver}
     T = _bim_numeric_type(kernel)
     maxiter >= 1 || throw(ArgumentError("maxiter must be positive"))
     krylovdim >= 2 || throw(ArgumentError("krylovdim must be at least 2"))
-    return ExpandedBIMSolver{T,K}(kernel, use_taylor, taylor_degree, T(taylor_radius), T(taylor_tol), T(tol), maxiter, krylovdim)
+    return ExpandedBIMSolver{T,K}(kernel, use_taylor, taylor_degree, T(taylor_radius), T(taylor_tol), T(krylov_tol), maxiter, krylovdim)
 end
 
 _bim_numeric_type(::ExpandedBIMSolver{T}) where {T} = T
@@ -794,7 +794,7 @@ function _solve(solver::ExpandedBIMSolver, A::Matrix{Complex{T}}, dA::Matrix{Com
         dAt = adjoint(dA)
         op_r = x -> F \ (dA * x)
         op_l = x -> dAt * (Ft \ x)
-        μ, (VR, UL), (info_r, info_l) = KrylovKit.bieigsolve((op_r, op_l), n, nev, :LM, Complex{T}; tol = solver.tol, maxiter = solver.maxiter, krylovdim = max(solver.krylovdim, 2 * nev + 1))
+        μ, (VR, UL), (info_r, info_l) = KrylovKit.bieigsolve((op_r, op_l), n, nev, :LM, Complex{T}; tol = solver.krylov_tol, maxiter = solver.maxiter, krylovdim = max(solver.krylovdim, 2 * nev + 1))
         nconv::Int = min(info_r.converged, info_l.converged)
         nconv >= nlevels || error("EBIM Krylov solve converged only $nconv eigenpairs; requested $nlevels")
         p = sortperm(abs.(μ[1:nconv]); rev = true)
@@ -845,7 +845,7 @@ function solve(solver::ExpandedBIMSolver, pts::BoundaryPoints, k, nlevels::Int; 
 end
 
 """
-    solve(solver::ExpandedBIMSolver, cache::EBIMTaylorCache, k, nlevels::Int; multithreaded::Bool=true)
+    solve(solver::ExpandedBIMSolver, cache::EBIMTaylorCache, k, nlevels::Int)
 
 Compute local EBIM candidates from a cached Taylor panel.
 
@@ -855,32 +855,29 @@ Compute local EBIM candidates from a cached Taylor panel.
 * `k`: EBIM expansion center.
 * `nlevels::Int`: Minimum number of local candidates.
 
-## Keyword Arguments
-* `multithreaded::Bool = true`: Enable multithreaded Horner evaluation. Left for compatibility with the direct construction interface.
-
 ## Returns
 * `ks::Vector`: Local EBIM eigenvalue estimates.
 * `ts::Vector`: Magnitudes of the corresponding corrections.
 """
-function solve(solver::ExpandedBIMSolver, cache::EBIMTaylorCache, k, nlevels::Int; multithreaded::Bool = true)
+function solve(solver::ExpandedBIMSolver, cache::EBIMTaylorCache, k, nlevels::Int)
     A, dA, ddA = construct_matrices(solver, cache, k)
     return _solve(solver, A, dA, ddA, k, nlevels)
 end
 
 """
-    solve_wavenumber(solver::ExpandedBIMSolver, billiard::Bi, k, dk; multithreaded::Bool=true, nlevels::Int=5) where {Bi<:AbsBilliard}
+    solve_wavenumber(solver::ExpandedBIMSolver, billiard::Bi, k, halfwidth; multithreaded::Bool=true, nlevels::Int=5) where {Bi<:AbsBilliard}
 
 Compute the EBIM eigenvalue estimate closest to `k`.
 
 The local EBIM problem is solved around `k`, after which the candidate
-minimizing `|Re(kᵢ)-k|` is returned. `dk` is used when estimating the required
+minimizing `|Re(kᵢ)-k|` is returned. `halfwidth` is used when estimating the required
 number of local levels if `nlevels` is not increased explicitly.
 
 ## Arguments
 * `solver::ExpandedBIMSolver`: EBIM solver.
 * `billiard::Bi`: Billiard geometry.
 * `k`: EBIM expansion center.
-* `dk`: Local spectral half-width.
+* `halfwidth`: Local spectral half-width (the window is `[k-halfwidth,k+halfwidth]`, unlike the full-width `dk` of the sweep solvers).
 
 ## Keyword Arguments
 * `multithreaded::Bool = true`: Enable multithreaded matrix construction.
@@ -890,9 +887,9 @@ number of local levels if `nlevels` is not increased explicitly.
 * `kbest`: EBIM estimate closest to `k`.
 * `tbest`: Magnitude of its EBIM correction.
 """
-function solve_wavenumber(solver::ExpandedBIMSolver, billiard::Bi, k, dk; multithreaded::Bool = true, nlevels::Int = 5) where {Bi<:AbsBilliard}
+function solve_wavenumber(solver::ExpandedBIMSolver, billiard::Bi, k, halfwidth; multithreaded::Bool = true, nlevels::Int = 5) where {Bi<:AbsBilliard}
     fundamental_only = solver.kernel.symmetry !== nothing
-    nreq = max(nlevels, ceil(Int, weyl_window_count(billiard, k - dk, 2 * dk; fundamental_only)))
+    nreq = max(nlevels, ceil(Int, weyl_window_count(billiard, k - halfwidth, 2 * halfwidth; fundamental_only)))
     pts = evaluate_points(solver, billiard, k)
     ks, ts = solve(solver, pts, k, nreq; multithreaded)
     isempty(ks) && return nothing, nothing
@@ -903,29 +900,29 @@ function solve_wavenumber(solver::ExpandedBIMSolver, billiard::Bi, k, dk; multit
 end
 
 """
-    solve_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k, dk; multithreaded::Bool=true, nlevels::Int=5) where {Bi<:AbsBilliard}
+    solve_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k, halfwidth; multithreaded::Bool=true, nlevels::Int=5) where {Bi<:AbsBilliard}
 
-Compute all local EBIM eigenvalue estimates in `[k-dk,k+dk]`.
+Compute all local EBIM eigenvalue estimates in `[k-halfwidth,k+halfwidth]`.
 
 ## Arguments
 * `solver::ExpandedBIMSolver`: EBIM solver.
 * `billiard::Bi`: Billiard geometry.
 * `k`: EBIM expansion center.
-* `dk`: Spectral half-width.
+* `halfwidth`: Spectral half-width (unlike the full-width `dk` of the sweep solvers).
 
 ## Keyword Arguments
 * `multithreaded::Bool = true`: Enable multithreaded matrix construction.
 * `nlevels::Int = 5`: Minimum number of local candidates.
 
 ## Returns
-* `ks::Vector`: EBIM estimates satisfying `|Re(kᵢ)-k| <= dk`.
+* `ks::Vector`: EBIM estimates satisfying `|Re(kᵢ)-k| <= halfwidth`.
 * `ts::Vector`: Magnitudes of their EBIM corrections.
 """
-function solve_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k, dk; multithreaded::Bool = true, nlevels::Int = 5) where {Bi<:AbsBilliard}
+function solve_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k, halfwidth; multithreaded::Bool = true, nlevels::Int = 5) where {Bi<:AbsBilliard}
     fundamental_only = solver.kernel.symmetry !== nothing
-    nreq = max(nlevels, ceil(Int, weyl_window_count(billiard, k - dk, 2 * dk; fundamental_only)))
+    nreq = max(nlevels, ceil(Int, weyl_window_count(billiard, k - halfwidth, 2 * halfwidth; fundamental_only)))
     pts = evaluate_points(solver, billiard, k)
     ks, ts = solve(solver, pts, k, nreq; multithreaded)
-    keep = findall(q -> abs(real(ks[q]) - k) <= dk, eachindex(ks))
+    keep = findall(q -> abs(real(ks[q]) - k) <= halfwidth, eachindex(ks))
     return ks[keep], ts[keep]
 end

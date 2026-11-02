@@ -51,7 +51,7 @@ wavenumber `k` (see [`solve`](@ref), [`sm_results`](@ref)).
 * `dim_scaling_factor`: Scaling factor used to determine the basis dimension from the boundary length and wavenumber.
 * `pts_scaling_factor`: Vector of scaling factors, one per fundamental boundary curve, used to determine the number of boundary sampling points.
 * `sampler`: Vector of samplers, one per fundamental boundary curve, used to generate boundary points.
-* `eps`: Relative tolerance used to filter small eigenvalues in the generalized eigenvalue decomposition.
+* `eig_tol`: Relative tolerance used to filter small eigenvalues in the generalized eigenvalue decomposition.
 * `min_dim`: Minimum basis dimension.
 * `min_pts`: Minimum number of boundary sampling points.
 * `eigenvectors::Bool`: Whether `compute_spectrum` retains the basis eigenvectors returned by the scaling solve.
@@ -69,7 +69,7 @@ mutable struct VerginiSaracenoSolver{T} <: AcceleratedBasisSolver where {T<:Real
     dim_scaling_factor::T
     pts_scaling_factor::Vector{T}
     sampler::Vector
-    eps::T
+    eig_tol::T
     min_dim::Int64
     min_pts::Int64
     eigenvectors::Bool
@@ -347,7 +347,7 @@ their tensions, sorted by wavenumber.
 ## Description
 The matrices `F` and `Fk` are built with [`construct_matrices`](@ref), the
 generalized eigenvalues `mu` are computed with [`generalized_eigvals`](@ref)
-(truncated using `solver.eps`), and converted to wavenumbers and tensions with
+(truncated using `solver.eig_tol`), and converted to wavenumbers and tensions with
 [`sm_results`](@ref). Only the candidates satisfying `abs(ks - k) < dk` are kept.
 
 ## Arguments
@@ -366,7 +366,7 @@ generalized eigenvalues `mu` are computed with [`generalized_eigvals`](@ref)
 """
 function solve(solver::VerginiSaracenoSolver, basis::Ba, pts::BoundaryPoints, k, dk; multithreaded = true) where {Ba<:AbsBasis}
     F, Fk = construct_matrices(solver, basis, pts, k; multithreaded)
-    @blas_multi_then_1 MAX_BLAS_THREADS mu = generalized_eigvals(Symmetric(F),Symmetric(Fk);eps=solver.eps)
+    @blas_multi_then_1 MAX_BLAS_THREADS mu = generalized_eigvals(Symmetric(F),Symmetric(Fk); eig_tol = solver.eig_tol)
     ks, ten = sm_results(mu,k)
     idx = abs.(ks.-k) .< dk
     ks = ks[idx]
@@ -386,7 +386,7 @@ their tensions, sorted by wavenumber.
 The matrices `F` and `Fk` are constructed with the cached
 [`construct_matrices`](@ref) method, which evaluates the basis matrix and its
 wavenumber derivative from `cache`. The generalized eigenvalues `mu` are then
-computed with [`generalized_eigvals`](@ref), truncated using `solver.eps`, and
+computed with [`generalized_eigvals`](@ref), truncated using `solver.eig_tol`, and
 converted to wavenumbers and tensions with [`sm_results`](@ref).
 
 Only candidates satisfying `abs(ks - k) < dk` are retained.
@@ -408,7 +408,7 @@ Only candidates satisfying `abs(ks - k) < dk` are retained.
 """
 function solve(solver::VerginiSaracenoSolver, basis::Ba, pts::BoundaryPoints, cache::Ca, k, dk; multithreaded::Bool = true) where {Ba<:AbsBasis,Ca<:BasisCache}
     F, Fk = construct_matrices(solver, basis, pts, cache, k; multithreaded)
-    @blas_multi_then_1 MAX_BLAS_THREADS mu = generalized_eigvals(Symmetric(F), Symmetric(Fk); eps = solver.eps)
+    @blas_multi_then_1 MAX_BLAS_THREADS mu = generalized_eigvals(Symmetric(F), Symmetric(Fk); eig_tol = solver.eig_tol)
     ks, ten = sm_results(mu, k)
     idx = abs.(ks .- k) .< dk
     ks = ks[idx]
@@ -438,7 +438,7 @@ details.
 """
 function solve(solver::VerginiSaracenoSolver,F,Fk, k, dk)
     #F, Fk = construct_matrices(solver, basis, pts, k)
-    @blas_multi_then_1 MAX_BLAS_THREADS mu = generalized_eigvals(Symmetric(F),Symmetric(Fk);eps=solver.eps)
+    @blas_multi_then_1 MAX_BLAS_THREADS mu = generalized_eigvals(Symmetric(F),Symmetric(Fk); eig_tol = solver.eig_tol)
     ks, ten = sm_results(mu,k)
     idx = abs.(ks.-k) .< dk
     ks = ks[idx]
@@ -458,7 +458,7 @@ eigenvectors (expressed in the original basis) for all candidates within `dk` of
 ## Description
 The matrices `F` and `Fk` are built with [`construct_matrices`](@ref), the
 generalized eigenproblem is solved with [`generalized_eigen`](@ref) (truncated
-using `solver.eps`) to obtain eigenvalues `mu`, eigenvectors `Z` in the reduced
+using `solver.eig_tol`) to obtain eigenvalues `mu`, eigenvectors `Z` in the reduced
 space and the change-of-basis matrix `C`. Wavenumbers and tensions are computed
 with [`sm_results`](@ref), candidates with `abs(ks - k) < dk` are kept, and the
 eigenvectors are transformed back into the original basis as `X = C * Z`,
@@ -481,7 +481,7 @@ rescaled by `sqrt.(ten)`.
 """
 function solve_vectors(solver::VerginiSaracenoSolver, basis::Ba, pts::BoundaryPoints, k, dk; multithreaded = true) where {Ba<:AbsBasis}
     F, Fk = construct_matrices(solver, basis, pts, k; multithreaded)
-    @blas_multi_then_1 MAX_BLAS_THREADS mu, Z, C = generalized_eigen(Symmetric(F),Symmetric(Fk);eps=solver.eps)
+    @blas_multi_then_1 MAX_BLAS_THREADS mu, Z, C = generalized_eigen(Symmetric(F),Symmetric(Fk); eig_tol = solver.eig_tol)
     ks, ten = sm_results(mu,k)
     idx = abs.(ks.-k) .< dk
     ks = ks[idx]
@@ -504,7 +504,7 @@ for all candidates within `dk` of `k`, sorted by wavenumber.
 The matrices `F` and `Fk` are constructed with the cached
 [`construct_matrices`](@ref) method, which evaluates the basis matrix and its
 wavenumber derivative from `cache`. The generalized eigenproblem is solved with
-[`generalized_eigen`](@ref), truncated using `solver.eps`, to obtain the
+[`generalized_eigen`](@ref), truncated using `solver.eig_tol`, to obtain the
 generalized eigenvalues `mu`, reduced eigenvectors `Z` and change-of-basis
 matrix `C`.
 
@@ -531,7 +531,7 @@ original basis as `X = C * Z` and rescaled by `sqrt.(ten)`.
 """
 function solve_vectors(solver::VerginiSaracenoSolver, basis::Ba, pts::BoundaryPoints, cache::Ca, k, dk; multithreaded::Bool = true) where {Ba<:AbsBasis,Ca<:BasisCache}
     F, Fk = construct_matrices(solver, basis, pts, cache, k; multithreaded)
-    @blas_multi_then_1 MAX_BLAS_THREADS mu, Z, C = generalized_eigen(Symmetric(F), Symmetric(Fk); eps = solver.eps)
+    @blas_multi_then_1 MAX_BLAS_THREADS mu, Z, C = generalized_eigen(Symmetric(F), Symmetric(Fk); eig_tol = solver.eig_tol)
     ks, ten = sm_results(mu, k)
     idx = abs.(ks .- k) .< dk
     ks = ks[idx]

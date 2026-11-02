@@ -233,7 +233,7 @@ end
     end
 
     @testset "full domain of the rectangle" begin
-        xg, yg, pts, idx, nx, ny = _wavefunction_grid(1.0, WF_RECT, b; fundamental_domain=false)
+        xg, yg, pts, idx, nx, ny = _wavefunction_grid(1.0, WF_RECT, b; fundamental_only=false)
         @test xg[1] ≈ -WF_A - 0.01 && xg[end] ≈ WF_A + 0.01
         @test yg[1] ≈ -WF_B - 0.01 && yg[end] ≈ WF_B + 0.01
         @test all(abs(pts[i][1]) < WF_A && abs(pts[i][2]) < WF_B for i in idx)
@@ -243,7 +243,7 @@ end
 
     @testset "inside_only = false keeps every grid point" begin
         for fd in (true, false)
-            xg, yg, pts, idx, nx, ny = _wavefunction_grid(1.0, WF_RECT, b; inside_only=false, fundamental_domain=fd)
+            xg, yg, pts, idx, nx, ny = _wavefunction_grid(1.0, WF_RECT, b; inside_only=false, fundamental_only=fd)
             @test idx == 1:(nx * ny)
         end
     end
@@ -260,7 +260,7 @@ end
     @testset "circle: area of the masked region" begin
         xg, yg, _, idx, _, _ = _wavefunction_grid(1.0, WF_CIRCLE, b)
         @test length(idx) * (xg[2] - xg[1]) * (yg[2] - yg[1]) ≈ pi / 4 rtol = 0.02
-        xg, yg, _, idx, _, _ = _wavefunction_grid(1.0, WF_CIRCLE, b; fundamental_domain=false)
+        xg, yg, _, idx, _, _ = _wavefunction_grid(1.0, WF_CIRCLE, b; fundamental_only=false)
         @test length(idx) * (xg[2] - xg[1]) * (yg[2] - yg[1]) ≈ pi rtol = 0.02
     end
 end
@@ -349,7 +349,7 @@ end
     end
 
     @testset "full frame gives the same region" begin
-        xg, yg, pts, idx, _, _ = _wavefunction_grid(1.0, WF_ANNULUS, b; fundamental_domain=false)
+        xg, yg, pts, idx, _, _ = _wavefunction_grid(1.0, WF_ANNULUS, b; fundamental_only=false)
         @test !any(in_hole(pts[i]) for i in idx)
         @test length(idx) * (xg[2] - xg[1]) * (yg[2] - yg[1]) ≈ ring_area rtol = 0.02
     end
@@ -361,7 +361,7 @@ end
 
     @testset "D2 billiard with an asymmetric hole, unfolded region" begin
         hb = wf_hole_billiard()
-        xg, yg, pts, idx, _, _ = _wavefunction_grid(1.0, hb, b; fundamental_domain=false)
+        xg, yg, pts, idx, _, _ = _wavefunction_grid(1.0, hb, b; fundamental_only=false)
         in_asym_hole(p) = hypot(p[1] - 0.3, p[2] - 0.4) < 0.2
         @test !any(in_asym_hole(pts[i]) for i in idx)
         @test any(p -> in_asym_hole(p) && abs(p[1]) < 1 && abs(p[2]) < 1, pts)       # the hole lies in the grid box
@@ -437,13 +437,13 @@ end
         @test all(psi[outside] .== 0)
     end
 
-    @testset "use_NaN_mask fills the excluded points with NaN" begin
-        psi = reshape(compute_psi(st, WF_RECT, xg, yg; use_NaN_mask=true), length(xg), length(yg))
+    @testset "nan_mask fills the excluded points with NaN" begin
+        psi = reshape(compute_psi(st, WF_RECT, xg, yg; nan_mask=true), length(xg), length(yg))
         outside = [xx < -1e-9 || yy < -1e-9 || xx > WF_A + 1e-9 || yy > WF_B + 1e-9 for xx in xg, yy in yg]
         @test all(isnan, psi[outside])
         @test !any(isnan, psi[.!outside])
-        # no mask requested, use_NaN_mask has no effect
-        psi_all = compute_psi(st, WF_RECT, xg, yg; inside_only=false, use_NaN_mask=true)
+        # no mask requested, nan_mask has no effect
+        psi_all = compute_psi(st, WF_RECT, xg, yg; inside_only=false, nan_mask=true)
         @test !any(isnan, psi_all)
     end
 
@@ -479,8 +479,8 @@ end
         @test all(psi[wf_rect_exterior(x, y)] .== 0)
     end
 
-    @testset "fundamental_domain = false unfolds onto the full rectangle" begin
-        psi, x, y = wavefunction(st, WF_RECT; fundamental_domain=false)
+    @testset "fundamental_only = false unfolds onto the full rectangle" begin
+        psi, x, y = wavefunction(st, WF_RECT; fundamental_only=false)
         @test size(psi) == (length(x), length(y))
         @test x ≈ -reverse(x) && y ≈ -reverse(y)                # symmetric grids
         inside = wf_rect_interior(x, y)
@@ -495,17 +495,17 @@ end
     @testset "inside_only = false gives the analytic mode on the whole grid box" begin
         psi_f, xf, yf = wavefunction(st, WF_RECT; inside_only=false)
         @test psi_f ≈ wf_analytic(f, xf, yf) atol = 1e-12
-        psi_u, xu, yu = wavefunction(st, WF_RECT; inside_only=false, fundamental_domain=false)
+        psi_u, xu, yu = wavefunction(st, WF_RECT; inside_only=false, fundamental_only=false)
         @test psi_u ≈ wf_analytic(f, xu, yu) atol = 1e-12
         @test size(psi_u) == (2 * length(xf), 2 * length(yf))
     end
 
-    @testset "use_NaN_mask" begin
-        psi, x, y = wavefunction(st, WF_RECT; use_NaN_mask=true)
+    @testset "nan_mask" begin
+        psi, x, y = wavefunction(st, WF_RECT; nan_mask=true)
         outside = wf_rect_exterior(x, y)
         @test all(isnan, psi[outside])
         @test !any(isnan, psi[wf_rect_interior(x, y)])
-        psi_u, xu, yu = wavefunction(st, WF_RECT; use_NaN_mask=true, fundamental_domain=false)
+        psi_u, xu, yu = wavefunction(st, WF_RECT; nan_mask=true, fundamental_only=false)
         @test all(isnan, psi_u[wf_rect_exterior(xu, yu)])
         @test !any(isnan, psi_u[wf_rect_interior(xu, yu)])
     end
@@ -521,13 +521,13 @@ end
 
 @testset "wavefunction - rectangle odd-odd mode (sin x sin y)" begin
     st, f = wf_rect_mode(2, 2)
-    @test st.basis.sym_qnumbers == [-1.0, 1.0, -1.0]
+    @test st.basis.sym_characters == [-1.0, 1.0, -1.0]
 
     psi, x, y = wavefunction(st, WF_RECT)
     inside = wf_rect_interior(x, y)
     @test psi[inside] ≈ wf_analytic(f, x, y)[inside] atol = 1e-12
 
-    psi_u, xu, yu = wavefunction(st, WF_RECT; fundamental_domain=false)
+    psi_u, xu, yu = wavefunction(st, WF_RECT; fundamental_only=false)
     @test size(psi_u) == (length(xu), length(yu))
     inside_u = wf_rect_interior(xu, yu)
     @test psi_u[inside_u] ≈ wf_analytic(f, xu, yu)[inside_u] atol = 1e-12
@@ -540,9 +540,9 @@ end
 
 @testset "wavefunction - rectangle mixed-parity mode (cos x sin y)" begin
     st, f = wf_rect_mode(1, 2)
-    @test st.basis.sym_qnumbers == [1.0, -1.0, -1.0]
+    @test st.basis.sym_characters == [1.0, -1.0, -1.0]
 
-    psi_u, xu, yu = wavefunction(st, WF_RECT; fundamental_domain=false)
+    psi_u, xu, yu = wavefunction(st, WF_RECT; fundamental_only=false)
     inside = wf_rect_interior(xu, yu)
     @test psi_u[inside] ≈ wf_analytic(f, xu, yu)[inside] atol = 1e-12
     @test psi_u ≈ reverse(psi_u; dims=1) atol = 1e-12               # even in x
@@ -564,8 +564,8 @@ end
         @test all(psi[wf_disc_exterior(x, y)] .== 0)
     end
 
-    @testset "fundamental_domain = false" begin
-        psi, x, y = wavefunction(st, WF_CIRCLE; fundamental_domain=false)
+    @testset "fundamental_only = false" begin
+        psi, x, y = wavefunction(st, WF_CIRCLE; fundamental_only=false)
         @test size(psi) == (length(x), length(y))
         inside = wf_disc_interior(x, y, 1 - 1e-9)
         @test count(inside) > 4e5
@@ -575,7 +575,7 @@ end
     end
 
     @testset "inside_only = false evaluates the analytic function outside the disc as well" begin
-        psi, x, y = wavefunction(st, WF_CIRCLE; inside_only=false, fundamental_domain=false)
+        psi, x, y = wavefunction(st, WF_CIRCLE; inside_only=false, fundamental_only=false)
         @test psi ≈ wf_j0(x, y) atol = 1e-12
         @test any(!iszero, psi[wf_disc_exterior(x, y)])
     end
@@ -599,8 +599,8 @@ end
     @test all(psi[wf_disc_exterior(x, y)] .== 0)
     @test all(psi[[xx < -1e-9 || yy < -1e-9 for xx in x, yy in y]] .== 0)       # outside the quadrant
 
-    @testset "nothing to unfold: fundamental_domain = false returns the same field" begin
-        psi_u, x_u, y_u = wavefunction(st, WF_CIRCLE; fundamental_domain=false)
+    @testset "nothing to unfold: fundamental_only = false returns the same field" begin
+        psi_u, x_u, y_u = wavefunction(st, WF_CIRCLE; fundamental_only=false)
         @test psi_u == psi && x_u == x && y_u == y
     end
 end
@@ -618,7 +618,7 @@ end
     @test minimum(x) < -0.5          # the grid covers the whole fundamental domain in x
     @test minimum(y) > 0             # the y grid is rectified, since y is the reflected direction
 
-    psi_u, xu, yu = wavefunction(st, lim; fundamental_domain=false)
+    psi_u, xu, yu = wavefunction(st, lim; fundamental_only=false)
     @test size(psi_u) == (length(xu), length(yu))
 end
 
@@ -643,7 +643,7 @@ end
 
     @testset "grid limits and resolution" begin
         st = BasisState(basis, k, 1)
-        psi, x, y = wavefunction(st; xlim=(-1.0, 1.0), ylim=(-3.0, 3.0), b=400.0)
+        psi, x, y = wavefunction(st; xlim=(-1.0, 1.0), ylim=(-3.0, 3.0), ppw=400.0)
         @test (x[1], x[end]) == (-1.0, 1.0) && (y[1], y[end]) == (-3.0, 3.0)
         @test length(x) == _debroglie_grid_size(k, 2.0, 400.0)
         @test length(y) == _debroglie_grid_size(k, 6.0, 400.0)
@@ -674,8 +674,8 @@ end
         @test all(psi[[xx < -1e-9 || yy < -1e-9 for xx in x, yy in y]] .== 0)
     end
 
-    @testset "fundamental_domain = false covers the whole disc" begin
-        psi, x, y = wavefunction(st, WF_CIRCLE, solver; use_chebyshev=false, fundamental_domain=false)
+    @testset "fundamental_only = false covers the whole disc" begin
+        psi, x, y = wavefunction(st, WF_CIRCLE, solver; use_chebyshev=false, fundamental_only=false)
         @test x[1] ≈ -1.01 && x[end] ≈ 1.01
         inside = wf_disc_interior(x, y, 0.6)
         @test psi[inside] ≈ -wf_j0(x, y)[inside] atol = 1e-10
@@ -688,8 +688,8 @@ end
         @test psi[inside] ≈ -wf_j0(x, y)[inside] atol = 1e-6
     end
 
-    @testset "use_NaN_mask" begin
-        psi, x, y = wavefunction(st, WF_CIRCLE, solver; use_chebyshev=false, use_NaN_mask=true)
+    @testset "nan_mask" begin
+        psi, x, y = wavefunction(st, WF_CIRCLE, solver; use_chebyshev=false, nan_mask=true)
         @test all(isnan, psi[wf_disc_exterior(x, y)])
         @test !any(isnan, psi[wf_quadrant_interior(x, y, 0.5)])
     end
@@ -759,10 +759,10 @@ end
         @test psi[inside] ≈ wf_analytic(f2, x, y)[inside] atol = 1e-12
 
         @testset "keywords are forwarded" begin
-            psi_u, x_u, y_u = wavefunction(data, 1; fundamental_domain=false)
+            psi_u, x_u, y_u = wavefunction(data, 1; fundamental_only=false)
             @test size(psi_u) == (length(x_u), length(y_u))
             @test length(x_u) == 2 * length(xs[1])
-            Psi_u, _, _ = wavefunction(data; fundamental_domain=false)
+            Psi_u, _, _ = wavefunction(data; fundamental_only=false)
             @test Psi_u[1] == psi_u
         end
     end
@@ -783,5 +783,47 @@ end
         data = SpectralData(WF_RECT, nothing, [3.0], [1e-12], [false])
         @test_throws ArgumentError wavefunction(data)
         @test_throws ArgumentError wavefunction(data, 1)
+    end
+end
+
+using QuantumBilliards: _drop_kwargs, _BIM_ONLY_WAVEFUNCTION_KWARGS, _BASIS_ONLY_WAVEFUNCTION_KWARGS, _BASIS_ONLY_BOUNDARY_KWARGS
+
+@testset "SpectralData keyword filtering (_drop_kwargs)" begin
+    @testset "removes only the listed keywords and keeps order and values" begin
+        kw = (; ppw=3.0, memory_limit=1e9, multithreaded=false, inside_only=true)
+        @test _drop_kwargs(kw, (:memory_limit, :multithreaded)) === (; ppw=3.0, inside_only=true)
+        @test _drop_kwargs(kw, ()) === kw
+        @test _drop_kwargs(kw, (:ppw, :memory_limit, :multithreaded, :inside_only)) === NamedTuple()
+        @test _drop_kwargs(kw, (:absent,)) === kw                                   # unlisted names are not an error
+        @test _drop_kwargs(NamedTuple(), (:ppw,)) === NamedTuple()
+    end
+
+    @testset "unknown keywords are kept, so typos still raise" begin
+        kw = (; ppw=3.0, ppww=1.0)
+        @test haskey(_drop_kwargs(kw, _BASIS_ONLY_WAVEFUNCTION_KWARGS), :ppww)
+        @test haskey(_drop_kwargs(kw, _BIM_ONLY_WAVEFUNCTION_KWARGS), :ppww)
+    end
+
+    @testset "works on pairs-iterable keyword collections" begin
+        f(; kwargs...) = _drop_kwargs(kwargs, (:b,))
+        @test f(a=1, b=2) === (; a=1)
+        @test f() === NamedTuple()
+    end
+
+    @testset "per-type keyword sets" begin
+        @test Set(_BIM_ONLY_WAVEFUNCTION_KWARGS) == Set((:min_chunk, :use_chebyshev, :show_progress, :cheb_config))
+        @test Set(_BASIS_ONLY_WAVEFUNCTION_KWARGS) == Set((:memory_limit, :multithreaded))
+        @test Set(_BASIS_ONLY_BOUNDARY_KWARGS) == Set((:ppw, :multithreaded))
+        @test isempty(intersect(_BIM_ONLY_WAVEFUNCTION_KWARGS, _BASIS_ONLY_WAVEFUNCTION_KWARGS))
+        shared = (; ppw=4.0, inside_only=false, fundamental_only=false)               # valid for both state types
+        @test _drop_kwargs(shared, _BIM_ONLY_WAVEFUNCTION_KWARGS) === shared
+        @test _drop_kwargs(shared, _BASIS_ONLY_WAVEFUNCTION_KWARGS) === shared
+    end
+
+    @testset "old wavefunction keywords raise MethodError" begin
+        basis = FourierBessel(5)
+        st = BasisState(basis, 3.0, 1)
+        @test_throws MethodError wavefunction(st; b=10.0)                              # now ppw
+        @test_throws MethodError wavefunction(st; xlim=(-1.0, 1.0), ylim=(-1.0, 1.0), b=10.0)
     end
 end

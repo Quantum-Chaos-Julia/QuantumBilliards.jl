@@ -309,9 +309,9 @@ end
 
     @testset "degenerate numerical rank gives Inf" begin
         basis = pm_ToyBasis(1)
-        @test solve_with_rank_reduction(solver, basis, pts, k; tol=10.0) == Inf
-        @test solve(solver, basis, pts, k; tol=10.0) == Inf
-        t, x = solve_vect(solver, basis, pts, k; tol=10.0)
+        @test solve_with_rank_reduction(solver, basis, pts, k; rank_tol=10.0) == Inf
+        @test solve(solver, basis, pts, k; rank_tol=10.0) == Inf
+        t, x = solve_vect(solver, basis, pts, k; rank_tol=10.0)
         @test t == Inf
         @test x == zeros(1)
     end

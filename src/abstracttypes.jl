@@ -163,7 +163,7 @@ discretization by expanding the solution in a basis.
 ## Description
 Concrete solvers hold the parameters controlling boundary sampling and basis
 dimension scaling (e.g. `dim_scaling_factor`, `pts_scaling_factor`, `sampler`,
-`min_dim`, `min_pts`) as well as the numerical tolerance `eps` used when
+`min_dim`, `min_pts`) as well as the numerical tolerance `eig_tol` used when
 filtering the generalized eigenvalue problem. `AbsBasisSolver` has two direct
 concrete-algorithm branches, [`SweepBasisSolver`](@ref) and
 [`AcceleratedBasisSolver`](@ref), distinguished by whether the spectrum is

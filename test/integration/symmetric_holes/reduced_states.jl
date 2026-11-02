@@ -60,15 +60,15 @@ end
 # billiard: Sinai (SinaiBilliard(1.0, 0.25))
 # symmetry: D2 sector (chi_X, chi_Y) = (+1, +1) of D4
 # reference: symmetry of the unfolded wavefunction (even in x and in y), mask of the geometry (zero inside the hole and outside the square)
-# functions to test: wavefunction (fundamental_domain = false and true)
+# functions to test: wavefunction (fundamental_only = false and true)
 @testset "States after reduced Beyn - Sinai sector (+1, +1) - wavefunction" begin
     b = sh_sinai()
     data = _rs_sinai_data()
     state = data.states[1]
     solver = data.solver
 
-    @testset "unfolded (fundamental_domain = false)" begin
-        Psi, xg, yg = wavefunction(state, b, solver; b=3.0, use_chebyshev=false, fundamental_domain=false)
+    @testset "unfolded (fundamental_only = false)" begin
+        Psi, xg, yg = wavefunction(state, b, solver; ppw=3.0, use_chebyshev=false, fundamental_only=false)
         @test size(Psi) == (length(xg), length(yg))
         @test all(isfinite, Psi)
         scale = maximum(abs, Psi)
@@ -84,8 +84,8 @@ end
         @test count(!iszero, Psi[interior]) > 0.99 * count(interior)         # the mask keeps the interior
     end
 
-    @testset "fundamental domain (fundamental_domain = true)" begin
-        Psi, xg, yg = wavefunction(state, b, solver; b=3.0, use_chebyshev=false, fundamental_domain=true)
+    @testset "fundamental domain (fundamental_only = true)" begin
+        Psi, xg, yg = wavefunction(state, b, solver; ppw=3.0, use_chebyshev=false, fundamental_only=true)
         @test size(Psi) == (length(xg), length(yg))
         @test all(isfinite, Psi)
         @test xg[1] <= 0.05 && xg[end] >= 0.95       # grid covers the fundamental triangle, not just its physical edge x = 1

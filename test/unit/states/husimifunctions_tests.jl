@@ -4,7 +4,7 @@
 #                                    husimi_function(k, s, ds, u, L[, qs, ps]), the BoundaryPoints form, the eigenstate forms
 #                                    for basis states and BIM states, the batched forms and the SpectralData wrappers)
 # The Poincare-Husimi amplitude is h(q, p) = sum_j u_j exp(-k (s_j - q)^2 / 2) exp(-i k p (s_j - q)) ds_j and the returned
-# density is H = |h|^2 / sum |h|^2. This file has no `fundamental_domain` or `inside_only` keyword to test: the
+# density is H = |h|^2 / sum |h|^2. This file has no `fundamental_only` or `inside_only` keyword to test: the
 # state-based forms always use the boundary returned by boundary_function (unfolded when the basis has reflection symmetries).
 #
 # All references are analytic Gaussian integrals (sigma = 1/sqrt(k), truncation w = 7 gives a relative error of e^{-24}):
@@ -416,10 +416,10 @@ end
         @test q2 ≈ qs && p2 ≈ ps
     end
 
-    @testset "full_p, b, w, multithreaded" begin
+    @testset "full_p, ppw, w, multithreaded" begin
         @test husimi_function(st, HU_CIRCLE; full_p=true)[1] ≈ H atol = 1e-12 * maximum(H)
         @test husimi_function(st, HU_CIRCLE; multithreaded=false)[1] ≈ H atol = 1e-12 * maximum(H)
-        Hb, qb, _ = husimi_function(st, HU_CIRCLE; b=3000.0)
+        Hb, qb, _ = husimi_function(st, HU_CIRCLE; ppw=3000.0)
         hu_check_constant(Hb, qb, ps, k; var=false)
         Hw, _, pw = husimi_function(st, HU_CIRCLE; w=1.0)
         @test hu_err(Hw, H) > 1e-3                                    # a narrow window truncates the Gaussian

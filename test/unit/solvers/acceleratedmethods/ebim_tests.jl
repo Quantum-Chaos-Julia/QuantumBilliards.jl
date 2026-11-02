@@ -571,7 +571,7 @@ end
         1.5 => (ComplexF64[1.4500002, 1.75], [2e-4, 1e-3]))
     f = (k0, nl) -> (push!(centers, k0); push!(nls, nl); candidates[k0])
     solver = eb_scripted(f; use_taylor=false)
-    data = compute_spectrum(solver, eb_circle, 1.0, 1.5; dk=k -> dk, ten_tol=nothing, multithreaded=false, show_progress=false)
+    data = compute_spectrum(solver, eb_circle, 1.0, 1.5; dk=k -> dk, accept_tol=nothing, multithreaded=false, show_progress=false)
 
     @testset "expansion centers are k1, k1 + dk, ... up to k2 with the Weyl local level count" begin
         @test centers == [1.0, 1.25, 1.5]
@@ -594,8 +594,8 @@ end
         @test issorted(data.k)
     end
 
-    @testset "ten_tol drops candidates with a larger correction before merging" begin
-        filtered = compute_spectrum(solver, eb_circle, 1.0, 1.5; dk=k -> dk, ten_tol=2.5e-3, multithreaded=false, show_progress=false)
+    @testset "accept_tol drops candidates with a larger correction before merging" begin
+        filtered = compute_spectrum(solver, eb_circle, 1.0, 1.5; dk=k -> dk, accept_tol=2.5e-3, multithreaded=false, show_progress=false)
         @test all(filtered.ten .<= 2.5e-3)
         @test filtered.k == [1.1000004, 1.24, 1.4500002]                     # 1.2 (3e-3) is discarded
         default = compute_spectrum(solver, eb_circle, 1.0, 1.5; dk=k -> dk, multithreaded=false, show_progress=false)

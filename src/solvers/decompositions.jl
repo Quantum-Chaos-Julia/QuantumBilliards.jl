@@ -1,8 +1,8 @@
 """
-    generalized_eigen(A::Symmetric, B::Symmetric; eps::Real = 1e-15) → (mu::Vector, Z::Matrix, C_scaled::Matrix)
+    generalized_eigen(A::Symmetric, B::Symmetric; eig_tol::Real = 1e-15) → (mu::Vector, Z::Matrix, C_scaled::Matrix)
 
 Computes the generalized eigenvalues and eigenvectors of the system `A * x = λ * B * x`
-using a truncated basis where eigenvalues of `A` smaller than `eps * max(eigenvalues(A))` 
+using a truncated basis where eigenvalues of `A` smaller than `eig_tol * max(eigenvalues(A))` 
 are ignored. This optimized implementation minimizes memory allocations.
 
 ## Description
@@ -11,7 +11,7 @@ Reference: https://users.flatironinstitute.org/~ahb/thesis_html/node60.html
 | Step                                      | Code Line                                                                                     | Explanation                                                                                                      |
 |-------------------------------------------|-----------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------|
 | Diagonalize A                             | `d, S = eigen(Symmetric(A))`                                                                  | Compute the eigenvalues (`d`) and eigenvectors (`S`) of `A`.                                                    |
-| Truncate eigenvectors                     | `idx = d .> eps * maximum(d)`                                                                | Identify eigenvalues greater than `eps * max(eigenvalues(A))`.                                                  |
+| Truncate eigenvectors                     | `idx = d .> eig_tol * maximum(d)`                                                                | Identify eigenvalues greater than `eig_tol * max(eigenvalues(A))`.                                                  |
 | Construct truncated eigenvector matrix C  | `C = @view S[:, idx]`                                                                         | Extract eigenvectors corresponding to retained eigenvalues.                                                     |
 | Scale eigenvectors by Λ^(-1/2)            | `q = 1.0 ./ sqrt.(d[idx]); C_scaled = C .* q'`                                                | Scale selected eigenvectors by the inverse square root of the retained eigenvalues.                             |
 | Form reduced matrix E                     | `mul!(tmp, B, C_scaled); mul!(E, C_scaled', tmp); E = Symmetric(E)`                            | Compute the reduced matrix `E = Λ^(-1/2) * C' * B * C * Λ^(-1/2)`.                                              |
@@ -22,21 +22,21 @@ Reference: https://users.flatironinstitute.org/~ahb/thesis_html/node60.html
 * `B`: Symmetric matrix `B` in the generalized eigenproblem.
 
 ## Keyword arguments
-* `eps::Real = 1e-15`: Relative tolerance for filtering small eigenvalues of `A`.
+* `eig_tol::Real = 1e-15`: Relative tolerance for filtering small eigenvalues of `A`.
 
 ## Returns
 * `mu`: Vector of generalized eigenvalues.
 * `Z`: Matrix of eigenvectors in the reduced space.
 * `C_scaled`: Scaled eigenvector matrix corresponding to the truncated basis.
 """
-function generalized_eigen(A,B;eps=1e-15)
+function generalized_eigen(A,B;eig_tol=1e-15)
     @debug "Generalized eigen decomposition started." 
     @timeit_debug "generalized_eigen" begin
         @debug "First decomposition matrix size." size=size(A)
         @timeit_debug "First decomposition" begin
             d,S=eigen(Symmetric(A))
         end
-        idx=d.>eps*maximum(d)
+        idx=d.>eig_tol*maximum(d)
         q=1.0./sqrt.(d[idx])
         C=@view S[:,idx]
         C_scaled=similar(C,size(C)...)
@@ -55,10 +55,10 @@ function generalized_eigen(A,B;eps=1e-15)
 end
 
 """
-    generalized_eigvals(A::Symmetric, B::Symmetric; eps::Real = 1e-15) → mu::Vector
+    generalized_eigvals(A::Symmetric, B::Symmetric; eig_tol::Real = 1e-15) → mu::Vector
 
 Computes the generalized eigenvalues of the system `A * x = λ * B * x`
-using a truncated basis where eigenvalues of `A` smaller than `eps * max(eigenvalues(A))` 
+using a truncated basis where eigenvalues of `A` smaller than `eig_tol * max(eigenvalues(A))` 
 are ignored.
 
 ## Description
@@ -67,7 +67,7 @@ Reference: https://users.flatironinstitute.org/~ahb/thesis_html/node60.html
 | Step                                      | Code Line                                                                                     | Explanation                                                                                                      |
 |-------------------------------------------|-----------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------|
 | Diagonalize A                             | `d, S = eigen(A)`                                                                             | Compute the eigenvalues (`d`) and eigenvectors (`S`) of `A`.                                                    |
-| Truncate eigenvectors                     | `idx = d .> eps * maxd`                                                                       | Identify eigenvalues greater than `eps * maxd`.                                                                 |
+| Truncate eigenvectors                     | `idx = d .> eig_tol * maxd`                                                                       | Identify eigenvalues greater than `eig_tol * maxd`.                                                                 |
 | Construct truncated eigenvector matrix C  | `C = @view S[:, idx]` or `C = S[:, idx]`                                                     | Extract eigenvectors corresponding to retained eigenvalues.                                                     |
 | Scale eigenvectors by Lambda_r^(-1/2)     | `q = 1.0 ./ sqrt.(d[idx]); C_scaled = C .* q'`                                                | Scale selected eigenvectors by the inverse square root of the retained eigenvalues.                             |
 | Form reduced matrix G'_r                  | `mul!(tmp, B, C_scaled); mul!(E, C_scaled', tmp); E = Symmetric(E)`                            | Compute the reduced matrix `G'_r = Lambda_r^(-1/2) * V_r^T * G * V_r * Lambda_r^(-1/2)`.                        |
@@ -78,12 +78,12 @@ Reference: https://users.flatironinstitute.org/~ahb/thesis_html/node60.html
 * `B`: Symmetric matrix `B` in the generalized eigenproblem.
 
 ## Keyword arguments
-* `eps::Real = 1e-15`: Relative tolerance for filtering small eigenvalues of `A`.
+* `eig_tol::Real = 1e-15`: Relative tolerance for filtering small eigenvalues of `A`.
 
 ## Returns
 * `mu`: Vector of generalized eigenvalues.
 """
-function generalized_eigvals(A,B;eps=1e-15)
+function generalized_eigvals(A,B;eig_tol=1e-15)
     @debug "Generalized eigenvals decomposition started." 
     @timeit_debug "generalized_eigenvals" begin
         @debug "First decomposition matrix size." size=size(A)
@@ -91,7 +91,7 @@ function generalized_eigvals(A,B;eps=1e-15)
             d,S=eigen(Symmetric(A))
         end
         maxd=maximum(d)
-        idx=d.>eps*maxd 
+        idx=d.>eig_tol*maxd 
         q=1.0./sqrt.(d[idx])
         C=@view S[:,idx]
         C_scaled=similar(C,size(C)...)

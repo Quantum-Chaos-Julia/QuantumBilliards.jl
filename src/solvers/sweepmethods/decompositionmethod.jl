@@ -64,7 +64,7 @@ billiard.
 * `dim_scaling_factor`: Scaling factor used to determine the basis dimension from the boundary length and wavenumber.
 * `pts_scaling_factor`: Vector of scaling factors, one per fundamental boundary curve, used to determine the number of boundary sampling points.
 * `sampler`: Vector of samplers, one per fundamental boundary curve, used to generate boundary points.
-* `eps`: Relative tolerance used to filter small eigenvalues in the generalized eigenvalue decomposition.
+* `eig_tol`: Relative tolerance used to filter small eigenvalues in the generalized eigenvalue decomposition.
 * `min_dim`: Minimum basis dimension.
 * `min_pts`: Minimum number of boundary sampling points.
 * `rellich_origin`: Origin `c₀` used in the Rellich boundary weight `w_dm = ds*((x-c₀)⋅n)/(2k²)`.
@@ -82,7 +82,7 @@ struct DecompositionMethodSolver{T} <: SweepBasisSolver where {T<:Real}
     dim_scaling_factor::T
     pts_scaling_factor::Vector{T}
     sampler::Vector
-    eps::T
+    eig_tol::T
     min_dim::Int64
     min_pts::Int64
     rellich_origin::SVector{2,T}
@@ -107,7 +107,7 @@ sampler shared by every fundamental boundary curve.
 ## Returns
 * `solver`: A [`DecompositionMethodSolver{T}`](@ref) instance.
 """
-function DecompositionMethodSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}; min_dim = 100, min_pts = 500, rellich_origin::SVector{2,T}=SVector{2,T}(zero(T),zero(T))) where T<:Real 
+function DecompositionMethodSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}; min_dim::Int = 100, min_pts::Int = 500, rellich_origin::SVector{2,T}=SVector{2,T}(zero(T),zero(T))) where T<:Real 
     d = dim_scaling_factor
     bs = typeof(pts_scaling_factor) == T ? [pts_scaling_factor] : pts_scaling_factor
     sampler = [GaussLegendreNodes()]
@@ -133,7 +133,7 @@ each fundamental boundary curve.
 ## Returns
 * `solver`: A [`DecompositionMethodSolver{T}`](@ref) instance.
 """
-function DecompositionMethodSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}, samplers::Vector{AbsSampler}; min_dim = 100, min_pts = 500, rellich_origin::SVector{2,T}=SVector{2,T}(zero(T),zero(T))) where {T<:Real} 
+function DecompositionMethodSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}, samplers::Vector{AbsSampler}; min_dim::Int = 100, min_pts::Int = 500, rellich_origin::SVector{2,T}=SVector{2,T}(zero(T),zero(T))) where {T<:Real} 
     d = dim_scaling_factor
     bs = typeof(pts_scaling_factor) == T ? [pts_scaling_factor] : pts_scaling_factor
     return DecompositionMethodSolver(d, bs, samplers, eps(T), min_dim, min_pts, rellich_origin)
@@ -253,7 +253,7 @@ Computes the boundary decomposition method tension `t` at wavenumber `k` for
 ## Description
 The matrices `F` and `G` are built with [`construct_matrices`](@ref), and the
 generalized eigenvalues `mu` of `F * x = λ * G * x` are computed with
-[`generalized_eigvals`](@ref) (truncated using `solver.eps`). The tension is
+[`generalized_eigvals`](@ref) (truncated using `solver.eig_tol`). The tension is
 `t = 1 / mu[end]`, where `mu[end]` is the largest generalized eigenvalue.
 
 ## Arguments
@@ -270,7 +270,7 @@ generalized eigenvalues `mu` of `F * x = λ * G * x` are computed with
 """
 function solve(solver::DecompositionMethodSolver,basis::Ba,pts::BoundaryPoints,k;multithreaded::Bool=true) where {Ba<:AbsBasis}
     F,G=construct_matrices(solver,basis,pts,k;multithreaded=multithreaded)
-    @blas_multi_then_1 MAX_BLAS_THREADS mu=generalized_eigvals(Symmetric(F),Symmetric(G);eps=solver.eps)
+    @blas_multi_then_1 MAX_BLAS_THREADS mu=generalized_eigvals(Symmetric(F),Symmetric(G); eig_tol = solver.eig_tol)
     lam0=mu[end]
     t=1.0/lam0
     return t
@@ -292,7 +292,7 @@ them from a basis and boundary points. See [`solve`](@ref) for details.
 * `t`: The tension, `t = 1 / mu[end]`, where `mu` are the generalized eigenvalues of `F * x = λ * G * x`.
 """
 function solve(solver::DecompositionMethodSolver,F,G)
-    @blas_multi_then_1 MAX_BLAS_THREADS mu=generalized_eigvals(Symmetric(F),Symmetric(G);eps=solver.eps)
+    @blas_multi_then_1 MAX_BLAS_THREADS mu=generalized_eigvals(Symmetric(F),Symmetric(G); eig_tol = solver.eig_tol)
     lam0=mu[end]
     t=1.0/lam0
     return t
@@ -307,7 +307,7 @@ eigenvector `x` (expressed in the original basis) at wavenumber `k`.
 ## Description
 The matrices `F` and `G` are built with [`construct_matrices`](@ref), and the
 generalized eigenproblem `F * x = λ * G * x` is solved with
-[`generalized_eigen`](@ref) (truncated using `solver.eps`) to obtain the largest
+[`generalized_eigen`](@ref) (truncated using `solver.eig_tol`) to obtain the largest
 eigenvalue `mu[end]`, its eigenvector `Z[:,end]` in the reduced space, and the
 change-of-basis matrix `C`. The eigenvector is transformed back into the original
 basis as `x = C * Z[:,end]`, normalized by `sqrt(mu[end])`, and the tension is
@@ -328,7 +328,7 @@ basis as `x = C * Z[:,end]`, normalized by `sqrt(mu[end])`, and the tension is
 """
 function solve_vect(solver::DecompositionMethodSolver,basis::AbsBasis,pts::BoundaryPoints,k;multithreaded::Bool=true)
     F,G=construct_matrices(solver,basis,pts,k;multithreaded=multithreaded)
-    @blas_multi MAX_BLAS_THREADS mu,Z,C=generalized_eigen(Symmetric(F),Symmetric(G);eps=solver.eps)
+    @blas_multi MAX_BLAS_THREADS mu,Z,C=generalized_eigen(Symmetric(F),Symmetric(G); eig_tol = solver.eig_tol)
     x=Z[:,end]
     @blas_multi_then_1 MAX_BLAS_THREADS x=C*x #transform into original basis, BLAS mul
     lam0=mu[end]

@@ -1,7 +1,7 @@
 # Unit tests for
 #   src/basis/fourierbessel/fourierbessel.jl   (FourierBessel, fb_modes, fb_term, fb_term_dk, _fb_Jvp,
 #                                               _fb_axis_characters, the constructors (dim; sym_x, sym_y),
-#                                               (dim, symmetries, sym_qnumbers) and (dim, billiard, sector),
+#                                               (dim, symmetries, sym_characters) and (dim, billiard, sector),
 #                                               resize_basis, basis_fun, dk_fun, gradient, basis_and_gradient)
 #   src/basis/fourierbessel/corneradapted.jl   (Jv and Jvp, only as the Bessel helpers used by the basis)
 #   src/solvers/matrixconstructors.jl          (the generic basis_matrix, dk_matrix, gradient_matrices and
@@ -17,7 +17,7 @@
 using StaticArrays: SVector
 using LinearAlgebra: norm
 using SpecialFunctions: besselj
-using QuantumBilliards: fb_modes, fb_term, fb_term_dk, Jvp, _fb_Jvp, _fb_axis_characters, infer_quantum_numbers,
+using QuantumBilliards: fb_modes, fb_term, fb_term_dk, Jvp, _fb_Jvp, _fb_axis_characters, infer_sym_characters,
                         uses_taylor, filter_matrix!, gradient_matrices, basis_and_gradient_matrices
 
 # Fixed deterministic evaluation points, away from the origin and from the symmetry axes.
@@ -67,7 +67,7 @@ end
 
 # Field-by-field equality of two bases (symmetries are compared by type).
 function fb_same_basis(a, b)
-    return a.dim == b.dim && a.orders == b.orders && a.trig == b.trig && a.sym_qnumbers == b.sym_qnumbers &&
+    return a.dim == b.dim && a.orders == b.orders && a.trig == b.trig && a.sym_characters == b.sym_characters &&
            typeof.(something(a.symmetries, [])) == typeof.(something(b.symmetries, [])) &&
            a.origin == b.origin && a.rot_angle == b.rot_angle &&
            (a.use_taylor, a.taylor_degree, a.taylor_radius, a.taylor_tol, a.gradients) ==
@@ -77,7 +77,7 @@ end
 @testset "FourierBessel type" begin
     @test FourierBessel <: AbsBasis
     @test !isabstracttype(FourierBessel)
-    @test fieldnames(FourierBessel) == (:origin, :rot_angle, :dim, :symmetries, :sym_qnumbers, :orders, :trig,
+    @test fieldnames(FourierBessel) == (:origin, :rot_angle, :dim, :symmetries, :sym_characters, :orders, :trig,
                                         :use_taylor, :taylor_degree, :taylor_radius, :taylor_tol, :gradients)
     basis = FourierBessel(3)
     @test basis isa FourierBessel{Float64}
@@ -156,7 +156,7 @@ end
     @testset "no symmetry" begin
         b = FourierBessel(4)
         @test b.dim == 4
-        @test isnothing(b.symmetries) && isnothing(b.sym_qnumbers)
+        @test isnothing(b.symmetries) && isnothing(b.sym_characters)
         @test (b.orders, b.trig) == fb_modes(nothing, nothing, 4)
         @test b.origin == SVector(0.0, 0.0) && b.rot_angle == 0.0
         @test b.use_taylor === true
@@ -168,22 +168,22 @@ end
         @test (b.orders, b.trig) == fb_modes(1, -1, 5)
         @test b.symmetries isa Vector{BilliardGeometry.AbsReflection}
         @test typeof.(b.symmetries) == [YAxisReflection, XYAxisReflection, XAxisReflection]
-        @test b.sym_qnumbers == [1.0, -1.0, -1.0]
-        @test FourierBessel(5; sym_x=-1, sym_y=-1).sym_qnumbers == [-1.0, 1.0, -1.0]
-        @test FourierBessel(5; sym_x=-1, sym_y=1).sym_qnumbers == [-1.0, -1.0, 1.0]
+        @test b.sym_characters == [1.0, -1.0, -1.0]
+        @test FourierBessel(5; sym_x=-1, sym_y=-1).sym_characters == [-1.0, 1.0, -1.0]
+        @test FourierBessel(5; sym_x=-1, sym_y=1).sym_characters == [-1.0, -1.0, 1.0]
     end
 
     @testset "y-axis reflection only (sym_x)" begin
         b = FourierBessel(4; sym_x=-1)
         @test typeof.(b.symmetries) == [YAxisReflection]
-        @test b.sym_qnumbers == [-1.0]
+        @test b.sym_characters == [-1.0]
         @test (b.orders, b.trig) == fb_modes(-1, nothing, 4)
     end
 
     @testset "x-axis reflection only (sym_y)" begin
         b = FourierBessel(4; sym_y=1)
         @test typeof.(b.symmetries) == [XAxisReflection]
-        @test b.sym_qnumbers == [1.0]
+        @test b.sym_characters == [1.0]
         @test (b.orders, b.trig) == fb_modes(nothing, 1, 4)
     end
 
@@ -283,21 +283,21 @@ end
     @testset "round trip with the stored symmetries of a constructed basis" begin
         for (sx, sy) in ((1, 1), (1, -1), (-1, 1), (-1, -1), (1, nothing), (-1, nothing), (nothing, 1), (nothing, -1), (nothing, nothing))
             b = FourierBessel(3; sym_x=sx, sym_y=sy)
-            @test _fb_axis_characters(b.symmetries, b.sym_qnumbers) == (sx, sy)
+            @test _fb_axis_characters(b.symmetries, b.sym_characters) == (sx, sy)
         end
     end
 end
 
-@testset "FourierBessel(dim, symmetries, sym_qnumbers)" begin
+@testset "FourierBessel(dim, symmetries, sym_characters)" begin
     abs_refl = BilliardGeometry.AbsReflection
 
     @testset "rebuilds the basis the symmetries came from" begin
         for (sx, sy) in ((1, -1), (-1, -1), (1, nothing), (nothing, -1), (nothing, nothing))
             b = FourierBessel(4; sym_x=sx, sym_y=sy)
-            @test fb_same_basis(FourierBessel(4, b.symmetries, b.sym_qnumbers), b)
+            @test fb_same_basis(FourierBessel(4, b.symmetries, b.sym_characters), b)
         end
         b = FourierBessel(4; sym_x=1, sym_y=-1)
-        @test (FourierBessel(7, b.symmetries, b.sym_qnumbers).orders, FourierBessel(7, b.symmetries, b.sym_qnumbers).trig) == fb_modes(1, -1, 7)
+        @test (FourierBessel(7, b.symmetries, b.sym_characters).orders, FourierBessel(7, b.symmetries, b.sym_characters).trig) == fb_modes(1, -1, 7)
     end
 
     @testset "nothing means unrestricted" begin
@@ -306,7 +306,7 @@ end
 
     @testset "the XY quantum number is recomputed as sym_x * sym_y" begin
         b = FourierBessel(4, abs_refl[YAxisReflection(), XYAxisReflection(), XAxisReflection()], [1.0, 1.0, -1.0])
-        @test b.sym_qnumbers == [1.0, -1.0, -1.0]
+        @test b.sym_characters == [1.0, -1.0, -1.0]
     end
 
     @testset "keywords are forwarded" begin
@@ -380,7 +380,7 @@ end
     @testset "origin and rotation of an unrestricted basis are kept" begin
         b = FourierBessel(3; origin=SVector(0.3, -0.2), rot_angle=0.4)
         b2 = resize_basis(b, billiard, 5, 7.3)
-        @test isnothing(b2.symmetries) && isnothing(b2.sym_qnumbers)
+        @test isnothing(b2.symmetries) && isnothing(b2.sym_characters)
         @test b2.origin == SVector(0.3, -0.2) && b2.rot_angle == 0.4
         @test (b2.orders, b2.trig) == fb_modes(nothing, nothing, 5)
     end
@@ -926,7 +926,7 @@ end
     @testset "construction keeps the element type" begin
         @test b32 isa FourierBessel{Float32}
         @test b32.origin isa SVector{2,Float32}
-        @test b32.sym_qnumbers isa Vector{Float32} && b32.sym_qnumbers == [-1.0f0]
+        @test b32.sym_characters isa Vector{Float32} && b32.sym_characters == [-1.0f0]
         @test b32.orders == b64.orders && b32.trig == b64.trig
         @test resize_basis(b32, StadiumBilliard(0.5), 8, k32) isa FourierBessel{Float32}
         @test FourierBessel(4; kw32...) isa FourierBessel{Float32}
@@ -949,15 +949,15 @@ end
     end
 end
 
-@testset "infer_quantum_numbers on FourierBessel symmetries" begin
+@testset "infer_sym_characters on FourierBessel symmetries" begin
     # The helper defaults every quantum number to +1, which is the even-even FourierBessel sector.
     even = FourierBessel(4; sym_x=1, sym_y=1)
-    @test infer_quantum_numbers(even.symmetries) == even.sym_qnumbers
-    @test infer_quantum_numbers(even.symmetries) isa Vector{Float64}
-    @test fb_same_basis(FourierBessel(4, even.symmetries, infer_quantum_numbers(even.symmetries)), even)
+    @test infer_sym_characters(even.symmetries) == even.sym_characters
+    @test infer_sym_characters(even.symmetries) isa Vector{Float64}
+    @test fb_same_basis(FourierBessel(4, even.symmetries, infer_sym_characters(even.symmetries)), even)
 
     # For the other sectors the stored quantum numbers differ from the +1 defaults.
     odd = FourierBessel(4; sym_x=-1, sym_y=-1)
-    @test infer_quantum_numbers(odd.symmetries) != odd.sym_qnumbers
-    @test infer_quantum_numbers(FourierBessel(4).symmetries) === nothing
+    @test infer_sym_characters(odd.symmetries) != odd.sym_characters
+    @test infer_sym_characters(FourierBessel(4).symmetries) === nothing
 end

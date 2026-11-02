@@ -28,7 +28,7 @@ function _ss_rectangle_spectrum()
         billiard = RectangleBilliard(1.0, 0.7)
         basis = RealPlaneWaves(20; sym_x=1, sym_y=1)
         solver = VerginiSaracenoSolver(5.0, 10.0; eigenvectors=true)
-        compute_spectrum(solver, basis, billiard, 20.0, 23.0, 0.2; ten_tol=nothing, multithreaded=true, show_progress=false)
+        compute_spectrum(solver, basis, billiard, 20.0, 23.0, 0.2; accept_tol=nothing, multithreaded=true, show_progress=false)
     end
 end
 
@@ -84,7 +84,7 @@ end
     @test pss[i0] ≈ ps && qss[i0] ≈ qs
 
     # wavefunction proportional to besselj(0, k r) on interior points
-    Psi, xg, yg = wavefunction(data, i0; fundamental_domain=false, use_chebyshev=false)
+    Psi, xg, yg = wavefunction(data, i0; fundamental_only=false, use_chebyshev=false)
     @test size(Psi) == (length(xg), length(yg))
     k = data.k[i0]
     idx = [(ix, iy) for ix in 1:length(xg), iy in 1:length(yg) if xg[ix]^2 + yg[iy]^2 < 0.8^2]
@@ -117,7 +117,7 @@ end
 # symmetry: even-even
 # reference: analytic; psi = cos(m*pi*x/2) * cos(n*pi*y/1.4) for odd m, n (the even-even sin*sin modes of the box [-1,1]x[-0.7,0.7]),
 #   with (m, n) identified from the computed k; window [20, 23] holds 8 levels
-# functions to test: wavefunction (SpectralData methods / BasisEigenstate, fundamental_domain = false)
+# functions to test: wavefunction (SpectralData methods / BasisEigenstate, fundamental_only = false)
 @testset "States in SpectralData - Rectangle VS - wavefunction proportional to sin*sin" begin
     data = _ss_rectangle_spectrum()
     @test length(data) == 8
@@ -126,7 +126,7 @@ end
         modes = [(m, n) for m in 1:2:15, n in 1:2:15 if abs(pi * sqrt((m / 2)^2 + (n / 1.4)^2) - k) < SPECTRUM_ATOL_VS]
         @test length(modes) == 1
         m, n = only(modes)
-        Psi, xg, yg = wavefunction(data, i; fundamental_domain=false, multithreaded=true)
+        Psi, xg, yg = wavefunction(data, i; fundamental_only=false, multithreaded=true)
         @test size(Psi) == (length(xg), length(yg))
         idx = [(ix, iy) for ix in 1:length(xg), iy in 1:length(yg) if abs(xg[ix]) < 0.95 && abs(yg[iy]) < 0.65]
         psi = [Psi[ix, iy] for (ix, iy) in idx]

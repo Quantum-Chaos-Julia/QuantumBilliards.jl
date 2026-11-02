@@ -4,11 +4,11 @@
 _reflection_case(symmetries) = (any(s -> s isa BilliardGeometry.XAxisReflection, symmetries), any(s -> s isa BilliardGeometry.YAxisReflection, symmetries))
 
 # Index into `symmetries` (or a same-length parallel array, e.g.
-# `sym_qnumbers`) of the entry associated with reflection type `S`.
+# `sym_characters`) of the entry associated with reflection type `S`.
 _reflection_index(::Type{S}, symmetries) where {S<:BilliardGeometry.AbsReflection} = findfirst(s -> s isa S, symmetries)
 
 """
-    apply_symmetries_to_wavefunction(Psi, x_grid::AbstractVector, y_grid::AbstractVector, symmetries::Vector{<:BilliardGeometry.AbsReflection}, sym_qnumbers::Vector{T}) where {T<:Real} → (full_Psi, full_x, full_y)
+    apply_symmetries_to_wavefunction(Psi, x_grid::AbstractVector, y_grid::AbstractVector, symmetries::Vector{<:BilliardGeometry.AbsReflection}, sym_characters::Vector{T}) where {T<:Real} → (full_Psi, full_x, full_y)
 
 Unfold a wavefunction from a reflection-reduced fundamental-domain grid onto
 the corresponding full billiard grid.
@@ -17,7 +17,7 @@ the corresponding full billiard grid.
 with its first dimension corresponding to `x_grid` and its second dimension to
 `y_grid`. Each registered `XAxisReflection` or `YAxisReflection` generates the
 corresponding reflected copy, multiplied by its parity `±1` from
-`sym_qnumbers`. With both axis reflections present, the four quadrants are
+`sym_characters`. With both axis reflections present, the four quadrants are
 assembled in the order implied by
 
     Q1:  x > 0, y > 0    base
@@ -34,16 +34,16 @@ are returned unchanged.
 * `x_grid::AbstractVector`: Coordinates associated with the first dimension of `Psi`.
 * `y_grid::AbstractVector`: Coordinates associated with the second dimension of `Psi`.
 * `symmetries::Vector{<:BilliardGeometry.AbsReflection}`: Reflection symmetries used for unfolding.
-* `sym_qnumbers::Vector{T}`: Parities `±1` associated with the entries of `symmetries`.
+* `sym_characters::Vector{T}`: Parities `±1` associated with the entries of `symmetries`.
 
 ## Returns
 * `full_Psi`: Wavefunction values on the unfolded grid.
 * `full_x::Vector`: Unfolded `x` coordinates.
 * `full_y::Vector`: Unfolded `y` coordinates.
 """
-function apply_symmetries_to_wavefunction(Psi, x_grid, y_grid, symmetries::Vector{<:BilliardGeometry.AbsReflection}, sym_qnumbers::Vector{T}) where T<:Real
+function apply_symmetries_to_wavefunction(Psi, x_grid, y_grid, symmetries::Vector{<:BilliardGeometry.AbsReflection}, sym_characters::Vector{T}) where T<:Real
     has_x, has_y = _reflection_case(symmetries)
-    get_qnum(::Type{S}) where S = sym_qnumbers[_reflection_index(S, symmetries)]
+    get_qnum(::Type{S}) where S = sym_characters[_reflection_index(S, symmetries)]
     if has_x && has_y
         pX = get_qnum(BilliardGeometry.XAxisReflection)
         pY = get_qnum(BilliardGeometry.YAxisReflection)
@@ -76,7 +76,7 @@ end
 
 
 """
-    apply_symmetries_to_boundary_function(u::AbstractVector{U}, symmetries::Vector{<:BilliardGeometry.AbsReflection}, sym_qnumbers::Vector{T}) where {U<:Number,T<:Real} → full_u
+    apply_symmetries_to_boundary_function(u::AbstractVector{U}, symmetries::Vector{<:BilliardGeometry.AbsReflection}, sym_characters::Vector{T}) where {U<:Number,T<:Real} → full_u
 
 Unfold a boundary function from a reflection-reduced fundamental boundary
 onto the corresponding full physical boundary.
@@ -96,17 +96,17 @@ returned unchanged.
 ## Arguments
 * `u::AbstractVector{U}`: Boundary-function values on the fundamental boundary.
 * `symmetries::Vector{<:BilliardGeometry.AbsReflection}`: Reflection symmetries used for unfolding.
-* `sym_qnumbers::Vector{T}`: Parities `±1` associated with the entries of `symmetries`.
+* `sym_characters::Vector{T}`: Parities `±1` associated with the entries of `symmetries`.
 
 ## Returns
 * `full_u::Vector{U}`: Boundary function unfolded onto the full physical boundary.
 """
-function apply_symmetries_to_boundary_function(u::AbstractVector{U}, symmetries::Vector{<:BilliardGeometry.AbsReflection}, sym_qnumbers::Vector{T}) where {U<:Number, T<:Real}
+function apply_symmetries_to_boundary_function(u::AbstractVector{U}, symmetries::Vector{<:BilliardGeometry.AbsReflection}, sym_characters::Vector{T}) where {U<:Number, T<:Real}
     isempty(symmetries) && return u
     base_u = copy(u)
     full_u = copy(u)
     has_x, has_y = _reflection_case(symmetries)
-    get_qnum(::Type{S}) where S = sym_qnumbers[_reflection_index(S, symmetries)]
+    get_qnum(::Type{S}) where S = sym_characters[_reflection_index(S, symmetries)]
     # Reversed exactly when the generator itself reverses boundary traversal
     # orientation (see BilliardGeometry.orientation_reversing); a fresh
     # `S(0)` instance is equivalent to any registered instance of `S` since

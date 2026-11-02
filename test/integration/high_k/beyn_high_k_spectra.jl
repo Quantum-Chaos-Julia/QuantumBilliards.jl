@@ -14,7 +14,7 @@ using StaticArrays: SVector
 
 # Beyn spectrum of `kernel` on `[k1, k2]` with the speed settings of the high-k tier.
 function high_k_beyn_spectrum(kernel, billiard, k1, k2; r=8)
-    solver = BeynSolver(kernel; use_taylor=true, use_chebyshev=false, m=6, nq=16, r=r, taylor_degree=6,
+    solver = BeynSolver(kernel; use_taylor=true, use_chebyshev=false, nlevels=6, nq=16, r=r, taylor_degree=6,
         Rmax=(k2 - k1) / 2 + 0.01, res_tol=2e-5, svd_tol=1e-10, eigenvectors=false, imag_k_check=false)
     return compute_spectrum(solver, billiard, k1, k2; multithreaded=true, show_progress=false)
 end
@@ -34,7 +34,7 @@ end
 # functions to test: compute_spectrum
 @testset "Beyn high k (CFIE, SmoothPeriodicGrading, Taylor) - Circle - k near 100" begin
     billiard = CircleBilliard(1.0)
-    kernel = CombinedFieldIntegralEquationSolver(4.0, billiard; grading=SmoothPeriodicGrading(), eps=1e-10)
+    kernel = CombinedFieldIntegralEquationSolver(4.0, billiard; grading=SmoothPeriodicGrading())
     k1, k2 = 100.19, 100.25
     data = high_k_beyn_spectrum(kernel, billiard, k1, k2; r=16)
     ks_ref = circle_spectrum(1.0, k1, k2)
@@ -55,8 +55,8 @@ end
 @testset "Beyn high k (CFIE, SmoothPeriodicGrading, Taylor) - Ellipse - k near 100" begin
     billiard = EllipseBilliard(1.0, 0.8)
     k1, k2 = high_k_window(area(billiard))
-    kernel = CombinedFieldIntegralEquationSolver(5.0, billiard; grading=SmoothPeriodicGrading(), eps=1e-10)
-    kernel_fine = CombinedFieldIntegralEquationSolver(7.5, billiard; grading=SmoothPeriodicGrading(), eps=1e-10)
+    kernel = CombinedFieldIntegralEquationSolver(5.0, billiard; grading=SmoothPeriodicGrading())
+    kernel_fine = CombinedFieldIntegralEquationSolver(7.5, billiard; grading=SmoothPeriodicGrading())
     data = high_k_beyn_spectrum(kernel, billiard, k1, k2)
     data_fine = high_k_beyn_spectrum(kernel_fine, billiard, k1, k2)
     ks = sort(real.(data.k))
@@ -78,7 +78,7 @@ end
 # functions to test: compute_spectrum
 @testset "Beyn high k (CFIE, GlobalCornerGrading, Taylor) - Rectangle - k near 100" begin
     billiard = RectangleBilliard(1.0, 0.8)
-    kernel = CombinedFieldIntegralEquationSolver(8.0, billiard; grading=GlobalCornerGrading(kressq=2), eps=1e-10)
+    kernel = CombinedFieldIntegralEquationSolver(8.0, billiard; grading=GlobalCornerGrading(kressq=2))
     k1, k2 = 100.015, 100.17
     data = high_k_beyn_spectrum(kernel, billiard, k1, k2)
     ks_ref = rectangle_spectrum(2.0, 1.6, k1, k2)
@@ -99,7 +99,7 @@ end
 # functions to test: compute_spectrum
 @testset "Beyn high k (CFIE, GlobalCornerGrading, Taylor) - Triangle - k near 100" begin
     billiard = TriangleBilliard(pi / 2, 1.0; x0=1 / 3, y0=1 / 3)
-    kernel = CombinedFieldIntegralEquationSolver(8.0, billiard; grading=GlobalCornerGrading(kressq=2), eps=1e-10)
+    kernel = CombinedFieldIntegralEquationSolver(8.0, billiard; grading=GlobalCornerGrading(kressq=2))
     k1, k2 = 100.1, 100.45
     data = high_k_beyn_spectrum(kernel, billiard, k1, k2)
     ks_ref = right_triangle_spectrum(1.0, k1, k2)
@@ -121,8 +121,8 @@ end
     vertices = [SVector{2,Float64}(cos(t), sin(t)) for t in range(0, 2pi; length=6)[1:5]]
     billiard = PolygonBilliard(vertices)
     k1, k2 = high_k_window(area(billiard))
-    kernel = CombinedFieldIntegralEquationSolver(8.0, billiard; grading=GlobalCornerGrading(kressq=2), eps=1e-10)
-    kernel_fine = CombinedFieldIntegralEquationSolver(10.0, billiard; grading=GlobalCornerGrading(kressq=2), eps=1e-10)
+    kernel = CombinedFieldIntegralEquationSolver(8.0, billiard; grading=GlobalCornerGrading(kressq=2))
+    kernel_fine = CombinedFieldIntegralEquationSolver(10.0, billiard; grading=GlobalCornerGrading(kressq=2))
     data = high_k_beyn_spectrum(kernel, billiard, k1, k2)
     data_fine = high_k_beyn_spectrum(kernel_fine, billiard, k1, k2)
     ks = sort(real.(data.k))
@@ -144,8 +144,8 @@ end
 @testset "Beyn high k (CFIE, SmoothPeriodicGrading, Taylor) - Stadium - k near 100" begin
     billiard = StadiumBilliard(0.3)
     k1, k2 = high_k_window(area(billiard))
-    kernel = CombinedFieldIntegralEquationSolver(6.0, billiard; grading=SmoothPeriodicGrading(), eps=1e-10)
-    kernel_fine = CombinedFieldIntegralEquationSolver(9.0, billiard; grading=SmoothPeriodicGrading(), eps=1e-10)
+    kernel = CombinedFieldIntegralEquationSolver(6.0, billiard; grading=SmoothPeriodicGrading())
+    kernel_fine = CombinedFieldIntegralEquationSolver(9.0, billiard; grading=SmoothPeriodicGrading())
     data = high_k_beyn_spectrum(kernel, billiard, k1, k2)
     data_fine = high_k_beyn_spectrum(kernel_fine, billiard, k1, k2)
     ks = sort(real.(data.k))
@@ -168,8 +168,8 @@ end
 @testset "Beyn high k (CFIE, SmoothPeriodicGrading, Taylor) - Limacon - k near 100" begin
     billiard = LimaconBilliard(0.1)
     k1, k2 = 100.09, 100.12
-    kernel = CombinedFieldIntegralEquationSolver(5.0, billiard; grading=SmoothPeriodicGrading(), eps=1e-10)
-    kernel_fine = CombinedFieldIntegralEquationSolver(7.5, billiard; grading=SmoothPeriodicGrading(), eps=1e-10)
+    kernel = CombinedFieldIntegralEquationSolver(5.0, billiard; grading=SmoothPeriodicGrading())
+    kernel_fine = CombinedFieldIntegralEquationSolver(7.5, billiard; grading=SmoothPeriodicGrading())
     data = high_k_beyn_spectrum(kernel, billiard, k1, k2)
     data_fine = high_k_beyn_spectrum(kernel_fine, billiard, k1, k2)
     ks = sort(real.(data.k))
@@ -191,8 +191,8 @@ end
 @testset "Beyn high k (CFIE, SmoothPeriodicGrading, Taylor) - Polar - k near 100" begin
     billiard = PolarBilliard([0.0, 0.0, 0.0, 0.05])
     k1, k2 = high_k_window(area(billiard))
-    kernel = CombinedFieldIntegralEquationSolver(5.0, billiard; grading=SmoothPeriodicGrading(), eps=1e-10)
-    kernel_fine = CombinedFieldIntegralEquationSolver(7.5, billiard; grading=SmoothPeriodicGrading(), eps=1e-10)
+    kernel = CombinedFieldIntegralEquationSolver(5.0, billiard; grading=SmoothPeriodicGrading())
+    kernel_fine = CombinedFieldIntegralEquationSolver(7.5, billiard; grading=SmoothPeriodicGrading())
     data = high_k_beyn_spectrum(kernel, billiard, k1, k2)
     data_fine = high_k_beyn_spectrum(kernel_fine, billiard, k1, k2)
     ks = sort(real.(data.k))
@@ -214,8 +214,8 @@ end
 @testset "Beyn high k (CFIE, SmoothPeriodicGrading, Taylor) - Star - k near 100" begin
     billiard = StarBilliard(1.0, 0.05, 3)
     k1, k2 = high_k_window(area(billiard))
-    kernel = CombinedFieldIntegralEquationSolver(5.0, billiard; grading=SmoothPeriodicGrading(), eps=1e-10)
-    kernel_fine = CombinedFieldIntegralEquationSolver(7.5, billiard; grading=SmoothPeriodicGrading(), eps=1e-10)
+    kernel = CombinedFieldIntegralEquationSolver(5.0, billiard; grading=SmoothPeriodicGrading())
+    kernel_fine = CombinedFieldIntegralEquationSolver(7.5, billiard; grading=SmoothPeriodicGrading())
     data = high_k_beyn_spectrum(kernel, billiard, k1, k2)
     data_fine = high_k_beyn_spectrum(kernel_fine, billiard, k1, k2)
     ks = sort(real.(data.k))
@@ -237,8 +237,8 @@ end
 @testset "Beyn high k (CFIE, SmoothPeriodicGrading, Taylor) - C3 - k near 100" begin
     billiard = C3Billiard(0.02)
     k1, k2 = high_k_window(area(billiard))
-    kernel = CombinedFieldIntegralEquationSolver(5.0, billiard; grading=SmoothPeriodicGrading(), eps=1e-10)
-    kernel_fine = CombinedFieldIntegralEquationSolver(7.5, billiard; grading=SmoothPeriodicGrading(), eps=1e-10)
+    kernel = CombinedFieldIntegralEquationSolver(5.0, billiard; grading=SmoothPeriodicGrading())
+    kernel_fine = CombinedFieldIntegralEquationSolver(7.5, billiard; grading=SmoothPeriodicGrading())
     data = high_k_beyn_spectrum(kernel, billiard, k1, k2)
     data_fine = high_k_beyn_spectrum(kernel_fine, billiard, k1, k2)
     ks = sort(real.(data.k))
@@ -260,8 +260,8 @@ end
 @testset "Beyn high k (CFIE, SmoothPeriodicGrading, Taylor) - Prosen - k near 100" begin
     billiard = ProsenBilliard(0.02)
     k1, k2 = high_k_window(area(billiard))
-    kernel = CombinedFieldIntegralEquationSolver(5.0, billiard; grading=SmoothPeriodicGrading(), eps=1e-10)
-    kernel_fine = CombinedFieldIntegralEquationSolver(7.5, billiard; grading=SmoothPeriodicGrading(), eps=1e-10)
+    kernel = CombinedFieldIntegralEquationSolver(5.0, billiard; grading=SmoothPeriodicGrading())
+    kernel_fine = CombinedFieldIntegralEquationSolver(7.5, billiard; grading=SmoothPeriodicGrading())
     data = high_k_beyn_spectrum(kernel, billiard, k1, k2)
     data_fine = high_k_beyn_spectrum(kernel_fine, billiard, k1, k2)
     ks = sort(real.(data.k))
@@ -285,8 +285,8 @@ end
 @testset "Beyn high k (CFIE, GlobalCornerGrading, Taylor) - Mushroom - k near 100" begin
     billiard = MushroomBilliard(0.5, 0.7)
     k1, k2 = high_k_window(area(billiard))
-    kernel = CombinedFieldIntegralEquationSolver(8.0, billiard; grading=GlobalCornerGrading(kressq=2), eps=1e-10)
-    kernel_fine = CombinedFieldIntegralEquationSolver(10.0, billiard; grading=GlobalCornerGrading(kressq=2), eps=1e-10)
+    kernel = CombinedFieldIntegralEquationSolver(8.0, billiard; grading=GlobalCornerGrading(kressq=2))
+    kernel_fine = CombinedFieldIntegralEquationSolver(10.0, billiard; grading=GlobalCornerGrading(kressq=2))
     data = high_k_beyn_spectrum(kernel, billiard, k1, k2)
     data_fine = high_k_beyn_spectrum(kernel_fine, billiard, k1, k2)
     ks = sort(real.(data.k))
@@ -309,7 +309,7 @@ end
 # functions to test: compute_spectrum
 @testset "Beyn high k (CFIE, SmoothPeriodicGrading, Taylor) - Annular - k near 100" begin
     billiard = AnnularBilliard(0.3, 0.0; center=[0.2, 0.1])
-    component() = CombinedFieldIntegralEquationSolver(5.0, billiard; grading=SmoothPeriodicGrading(), eps=1e-10, min_pts=64)
+    component() = CombinedFieldIntegralEquationSolver(5.0, billiard; grading=SmoothPeriodicGrading(), min_pts=64)
     kernel = CompositeBIMSolver(component(), component())
     k1, k2 = high_k_window(pi * (1 - 0.3^2))
     data = high_k_beyn_spectrum(kernel, billiard, k1, k2)
@@ -333,7 +333,7 @@ end
 HIGH_K_SLOW && @testset "Beyn high k (CFIE, GlobalCornerGrading, Taylor) - Sinai - k near 100" begin
     billiard = SinaiBilliard(1.0, 0.25; center=[0.2, 0.1])
     ncomponents = 1 + length(billiard.fundamental_domain.holes)
-    component(ppw) = CombinedFieldIntegralEquationSolver(ppw, billiard; grading=GlobalCornerGrading(kressq=2), eps=1e-10, min_pts=80)
+    component(ppw) = CombinedFieldIntegralEquationSolver(ppw, billiard; grading=GlobalCornerGrading(kressq=2), min_pts=80)
     kernel = CompositeBIMSolver((component(8.0) for _ in 1:ncomponents)...)
     kernel_fine = CompositeBIMSolver((component(10.0) for _ in 1:ncomponents)...)
     k1, k2 = high_k_window(high_k_hole_area(billiard))
@@ -361,7 +361,7 @@ end
 HIGH_K_SLOW && @testset "Beyn high k (CFIE, GlobalCornerGrading, Taylor) - SquareWithinSquare - k near 100" begin
     billiard = SquareWithinSquareBilliard(1.0)
     ncomponents = 1 + length(billiard.fundamental_domain.holes)
-    component(ppw) = CombinedFieldIntegralEquationSolver(ppw, billiard; grading=GlobalCornerGrading(kressq=2), eps=1e-10, min_pts=64)
+    component(ppw) = CombinedFieldIntegralEquationSolver(ppw, billiard; grading=GlobalCornerGrading(kressq=2), min_pts=64)
     kernel = CompositeBIMSolver((component(8.0) for _ in 1:ncomponents)...)
     kernel_fine = CompositeBIMSolver((component(10.0) for _ in 1:ncomponents)...)
     k1, k2 = high_k_window(high_k_hole_area(billiard))

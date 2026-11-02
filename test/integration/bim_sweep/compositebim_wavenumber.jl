@@ -32,10 +32,10 @@ end
 @testset "Composite CFIE - SquareWithinSquare - Ground State" begin
     billiard = SquareWithinSquareBilliard(1.0)
     ncomponents = 1 + length(billiard.fundamental_domain.holes)
-    solver = CompositeBIMSolver((CombinedFieldIntegralEquationSolver(10.0, billiard; grading=GlobalCornerGrading(kressq=6), min_pts=192, eps=1e-10) for _ in 1:ncomponents)...)
+    solver = CompositeBIMSolver((CombinedFieldIntegralEquationSolver(10.0, billiard; grading=GlobalCornerGrading(kressq=6), min_pts=192) for _ in 1:ncomponents)...)
     k_ref = get!(COMPOSITE_SWEEP_REFERENCES, :squarewithinsquare_ground) do
         k1, k2 = 2.5, 3.0
-        beyn = BeynSolver(solver; m=6, nq=24, r=12, Rmax=(k2 - k1) / 2 + 0.02, svd_tol=1e-10, res_tol=2e-5,
+        beyn = BeynSolver(solver; nlevels=6, nq=24, r=12, Rmax=(k2 - k1) / 2 + 0.02, svd_tol=1e-10, res_tol=2e-5,
             taylor_degree=6, use_chebyshev=false, imag_k_check=false, eigenvectors=false)
         data = compute_spectrum(beyn, billiard, k1, k2; multithreaded=true, show_progress=false)
         @test length(data.k) == 1

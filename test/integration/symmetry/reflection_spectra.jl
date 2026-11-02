@@ -15,7 +15,7 @@
 const REFLECTION_SPECTRA_CACHE = Dict{Tuple,Any}()
 
 # Beyn solver with the cheap settings of verginisaraceno_spectra.jl (calibrated: tensions below 1e-9 for CFIE kernels at these ppw).
-_refl_beyn_light(kernel) = BeynSolver(kernel; m=6, nq=16, r=16, Rmax=0.5, svd_tol=1e-10, res_tol=2e-5,
+_refl_beyn_light(kernel) = BeynSolver(kernel; nlevels=6, nq=16, r=16, Rmax=0.5, svd_tol=1e-10, res_tol=2e-5,
     taylor_degree=6, use_chebyshev=false, imag_k_check=false, eigenvectors=false)
 
 # Rectangle (RectangleBilliard(1.0, 0.7), the full 2.0 x 1.4 rectangle) Beyn CFIE spectrum in [3, 10], default settings of
@@ -34,7 +34,7 @@ function _refl_stadium_spectrum(chars::Tuple)
     return get!(REFLECTION_SPECTRA_CACHE, (:stadium, chars)) do
         billiard = StadiumBilliard(0.5)
         kernel = CombinedFieldIntegralEquationSolver(8.0, billiard; grading=GlobalCornerGrading(kressq=2), sym_characters=chars)
-        compute_spectrum(_refl_beyn_light(kernel), billiard, 3.0, 7.0; ten_tol=nothing, multithreaded=true, show_progress=false)
+        compute_spectrum(_refl_beyn_light(kernel), billiard, 3.0, 7.0; accept_tol=nothing, multithreaded=true, show_progress=false)
     end
 end
 
