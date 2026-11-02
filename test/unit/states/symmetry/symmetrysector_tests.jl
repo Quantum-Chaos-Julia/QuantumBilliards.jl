@@ -370,13 +370,6 @@ end
         @test a.degeneracy == b.degeneracy
         @test a.billiard === b.billiard
     end
-
-    @testset "tuple of tuples: vector of sectors" begin
-        secs = symmetry_sector(sinai, ((1, 1), (1, -1), (1,)))
-        @test secs isa Vector{<:SymmetrySector}
-        @test length(secs) == 3
-        @test [s.degeneracy for s in secs] == [1, 1, 2]
-    end
 end
 
 @testset "_check_sector_billiard" begin

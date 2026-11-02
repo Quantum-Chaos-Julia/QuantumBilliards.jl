@@ -598,13 +598,9 @@ end
         @test sol.sym_characters == (1,)
     end
 
-    @testset "one inner tuple: composite reflection, characters in generator order" begin
-        sol = CombinedFieldIntegralEquationSolver(20.0, sinai; sym_characters=((1, -1),))
-        @test sol.symmetry isa CompositeReflection
-        @test sol.sym_characters == (-1, 1)
-    end
-
-    @testset "two inner tuples are rejected" begin
-        @test_throws ArgumentError CombinedFieldIntegralEquationSolver(20.0, sinai; sym_characters=((1, 1), (1, -1)))
+    @testset "sym_characters = nothing: full boundary" begin
+        sol = CombinedFieldIntegralEquationSolver(20.0, sinai; sym_characters=nothing)
+        @test sol.symmetry === nothing
+        @test sol.sym_characters == ()
     end
 end

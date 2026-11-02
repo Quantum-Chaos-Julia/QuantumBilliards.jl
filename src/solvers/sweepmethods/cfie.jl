@@ -84,7 +84,7 @@ struct CombinedFieldIntegralEquationSolver{T<:Real,G<:BoundaryGrading,Sy<:Union{
 end
 
 """
-    CombinedFieldIntegralEquationSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::Bi; min_pts::Int=200, grading::BoundaryGrading=SmoothPeriodicGrading(), symmetry::Union{Nothing,AbsSymmetry}=nothing, sym_characters::Tuple=(), eps::T=T(1e-15)) where {T<:Real, Bi<:AbsBilliard}
+    CombinedFieldIntegralEquationSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::Bi; min_pts::Int=200, grading::BoundaryGrading=SmoothPeriodicGrading(), symmetry::Union{Nothing,AbsSymmetry}=nothing, sym_characters::Union{Nothing,Tuple}=(), eps::T=T(1e-15)) where {T<:Real, Bi<:AbsBilliard}
 
 Construct a combined-field boundary-integral solver.
 All boundary discretizations use the Kress quadrature scheme for the
@@ -105,14 +105,15 @@ different (e.g. non-minimal) symmetry representation instead.
 * `min_pts::Int = 200`: Minimum number of boundary sampling points.
 * `grading::BoundaryGrading = SmoothPeriodicGrading()`: Boundary parametrization strategy used with the Kress quadrature scheme.
 * `symmetry::Union{Nothing,AbsSymmetry} = nothing`: Optional discrete symmetry used to reduce the full-boundary Fredholm operator. When `nothing`, it is inferred from `billiard` and `sym_characters`.
-* `sym_characters::Tuple = ()`: Character tuple selecting the requested representation of `symmetry`, or of the symmetry inferred from `billiard` when `symmetry` is `nothing`.
+* `sym_characters::Union{Nothing,Tuple} = ()`: Character tuple selecting the requested representation of `symmetry`, or of the symmetry inferred from `billiard` when `symmetry` is `nothing`. `nothing` or `()` disables the reduction: the full boundary is used and all levels are found. One entry per generator of `get_symmetries(billiard)`: `±1` for a mirror, the sector `s` for a rotation, `(k,)` for a 2D irrep `E_k`. Call [`log_symmetries`](@ref) to list the valid tuples.
 * `eps::T = T(1e-15)`: Relative numerical tolerance associated with the solver.
 
 ## Returns
 * `solver::CombinedFieldIntegralEquationSolver`: Configured CFIE solver in the requested symmetry sector.
 """
-function CombinedFieldIntegralEquationSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::Bi; min_pts::Int=200, grading::BoundaryGrading=SmoothPeriodicGrading(), symmetry::Union{Nothing,AbsSymmetry}=nothing, sym_characters::Tuple=(), eps::T=T(1e-15)) where {T<:Real,Bi<:AbsBilliard}
+function CombinedFieldIntegralEquationSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::Bi; min_pts::Int=200, grading::BoundaryGrading=SmoothPeriodicGrading(), symmetry::Union{Nothing,AbsSymmetry}=nothing, sym_characters::Union{Nothing,Tuple}=(), eps::T=T(1e-15)) where {T<:Real,Bi<:AbsBilliard}
     bs = pts_scaling_factor isa T ? [pts_scaling_factor] : pts_scaling_factor
+    sym_characters = something(sym_characters, ())
     if symmetry === nothing
         symmetry, sym_characters = _infer_bim_symmetry(billiard, sym_characters)
     end

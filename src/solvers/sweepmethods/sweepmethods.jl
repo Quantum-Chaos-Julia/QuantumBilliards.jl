@@ -195,10 +195,6 @@ _bim_solver_node_multiple(solver) = isnothing(solver.symmetry) ? 1 : lcm(_bim_no
 # `sym_characters` is empty, `(nothing, sym_characters)` is returned unchanged.
 function _infer_bim_symmetry(billiard::Bi, sym_characters::Tuple) where {Bi<:AbsBilliard}
     isempty(sym_characters) && return nothing, sym_characters
-    if first(sym_characters) isa Tuple
-        length(sym_characters) == 1 || throw(ArgumentError("a BIM solver takes a single irrep; received $(length(sym_characters)) character tuples. Build one solver per irrep."))
-        sym_characters = only(sym_characters)
-    end
     sector = symmetry_sector(billiard, sym_characters...)
     return _resolve_bim_symmetry(billiard, sector)
 end

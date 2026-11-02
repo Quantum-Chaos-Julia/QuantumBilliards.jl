@@ -205,8 +205,20 @@ end
 """
     log_symmetries(billiard::BilliardGeometry.AbsBilliard) → nothing
 
-Log with `@info` the symmetry group `G'` of `billiard`, its irreps and the
-character values accepted by [`symmetry_sector`](@ref) for each generator.
+Log with `@info` the symmetry group `G'` of `billiard`, its irreps and, for each
+irrep, the character tuple to pass to [`symmetry_sector`](@ref), e.g.
+`symmetry_sector(billiard, (1, -1))`. Each generator's meaning is on its own line.
+
+## Character tuples
+A character tuple has one entry per generator in `info.generators` (the order of
+[`get_symmetries`](@ref BilliardGeometry.get_symmetries)) and selects one irrep.
+It is accepted by `symmetry_sector(billiard, tuple)` and by the `sym_characters`
+keyword of the BIM solvers.
+
+* Mirror generator: `+1` (Neumann on the mirror) or `-1` (Dirichlet on the mirror).
+* Rotation group `C_d`: a single entry, the cyclic sector `s ∈ 0:d-1`, meaning the rotation by `2π/d` acts on the wavefunction as the phase `exp(2πi s/d)`. Sectors `s` and `d-s` are complex conjugates and degenerate.
+* Dihedral group `D_d`, one-dimensional irreps: one `±1` per mirror generator. For odd `d` both mirrors must carry the same sign.
+* Dihedral group `D_d`, two-dimensional irrep `E_k`: a single entry `k ∈ 1:⌊(d-1)/2⌋`, which is solved in the cyclic sector `s = k`. Every level is twofold degenerate in the full problem.
 """
 function log_symmetries(billiard::BilliardGeometry.AbsBilliard)
     name = nameof(typeof(billiard))
@@ -217,18 +229,25 @@ function log_symmetries(billiard::BilliardGeometry.AbsBilliard)
     end
     gens = info.generators
     d = _rotation_subgroup_order(BilliardGeometry.get_symmetry_group(billiard))
-    lines = String[]
+    lines1d = String[]
     for c in info.characters
         parts = [_symmetry_label(gens[i]) * " => " * (gens[i] isa BilliardGeometry.NFoldRotation ? _irrep_description(gens[i], c[i], d) : _irrep_description(gens[i], c[i])) for i in eachindex(gens)]
-        push!(lines, "  symmetry_sector(billiard, " * join(c, ", ") * "):  " * join(parts, ", "))
+        push!(lines1d, "    " * string(c) * " :\n        " * join(parts, "\n        "))
     end
-    n1 = length(info.characters)
+    lines2d = String[]
     for k in info.irreps_2d
-        push!(lines, "  symmetry_sector(billiard; irrep2d = $k):  E_$k (2D, twofold degenerate; solved in the cyclic sector s=$k)")
+        parts = ["Rotation(2π/$d) => two eigenvalues exp(+2πi*$k/$d) and exp(-2πi*$k/$d) (cyclic sectors s=$k and s=$(d - k))"]
+        append!(parts, _symmetry_label(g) * " => swaps the two rotation eigenvalues; no single ±1 character" for g in gens)
+        push!(lines2d, "    " * string((k,)) * " :  irrep E_$k, every level twofold degenerate\n        " * join(parts, "\n        ") * "\n        (solved once in cyclic sector s=$k, which contains each E_$k level once)")
     end
-    msg = "$name: symmetry group $(info.group) of order $(info.order); generators $(join(_symmetry_label.(gens), ", ")); $n1 one-dimensional irrep(s)" *
-          (info.n_2d > 0 ? " and $(info.n_2d) two-dimensional irrep(s)" : "") *
-          "\n" * join(lines, "\n")
+    irreps_text = "  $(length(lines1d)) one-dimensional irrep(s):\n" * join(lines1d, "\n")
+    isempty(lines2d) || (irreps_text *= "\n  $(length(lines2d)) two-dimensional irrep(s):\n" * join(lines2d, "\n"))
+    msg = "$name:\n" *
+          "  Symmetry group:\n" *
+          "    $(info.group) of order $(info.order)\n" *
+          "  Generators:\n" *
+          join(("    " * _symmetry_label(g) for g in gens), "\n") * "\n" *
+          irreps_text
     @info msg
     return nothing
 end
@@ -291,17 +310,15 @@ end
 
 """
     symmetry_sector(billiard, characters::Tuple{Vararg{Integer}}) → sector::SymmetrySector
-    symmetry_sector(billiard, characters::Tuple{Vararg{Tuple}}) → sectors::Vector{SymmetrySector}
 
-Tuple forms of the positional method. A tuple of integers is equivalent to
-`symmetry_sector(billiard, characters...)`; a tuple of tuples returns one sector
-per inner tuple. The irrep dimension is inferred from the number of entries: as
-many entries as generators of `get_symmetries(billiard)` is a one-dimensional
-irrep, and a single entry `k` on a dihedral group `D_d` with `d ≥ 3` (two mirror
-generators) is the two-dimensional irrep `E_k`, i.e. `irrep2d = k`.
+Tuple form of the positional method, equivalent to
+`symmetry_sector(billiard, characters...)`. The irrep dimension is inferred from
+the number of entries: as many entries as generators of
+`get_symmetries(billiard)` is a one-dimensional irrep, and a single entry `k` on
+a dihedral group `D_d` with `d ≥ 3` (two mirror generators) is the
+two-dimensional irrep `E_k`, i.e. `irrep2d = k`.
 """
 symmetry_sector(billiard::BilliardGeometry.AbsBilliard, characters::Tuple{Integer,Vararg{Integer}}) = symmetry_sector(billiard, characters...)
-symmetry_sector(billiard::BilliardGeometry.AbsBilliard, characters::Tuple{Tuple,Vararg{Tuple}}) = SymmetrySector[symmetry_sector(billiard, c) for c in characters]
 
 # Verify that a sector is being resolved against the exact billiard instance
 # from which it was constructed. Symmetry IDs are assigned locally by each
