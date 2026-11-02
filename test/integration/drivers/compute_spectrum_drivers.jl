@@ -21,7 +21,7 @@ _drv_rectangle_levels(k1, k2) = rectangle_spectrum(2.0, 1.4, k1, k2)
 # billiard: Rectangle (RectangleBilliard(1.0, 0.7)), fundamental domain
 # symmetry: even-even
 # reference: analytic, rectangle_spectrum(2.0, 1.4, ...; parity_x=1, parity_y=1); window [20, 23] holds 8 levels
-#   (dk = 0.2), Weyl states (20, 26) give [20.083, 22.749] with 7 levels (nlevels = 0.35 gives dk about 0.2)
+#   (dk = 0.2), Weyl states (20, 26) give [21.414, 24.066] with 6 levels (nlevels = 0.35 gives dk about 0.2)
 # functions to test: compute_spectrum (k-range with dk, N-range)
 @testset "VS (RealPlaneWaves) - Rectangle - compute_spectrum k-range vs N-range" begin
     billiard = RectangleBilliard(1.0, 0.7)
@@ -41,7 +41,7 @@ _drv_rectangle_levels(k1, k2) = rectangle_spectrum(2.0, 1.4, k1, k2)
     ref_N = rectangle_spectrum(2.0, 1.4, kN1, kN2; parity_x=1, parity_y=1)
     ks_N = sort(real.(data_N.k))
     @test all(k -> kN1 <= k <= kN2, ks_N)
-    @test length(ref_N) == 7
+    @test length(ref_N) == 6
     @test length(ks_N) == length(ref_N)
     @test all(isapprox.(ks_N, ref_N; atol=SPECTRUM_ATOL_VS))
     @test all(data_N.ten .< TENSION_TOL_VS)
