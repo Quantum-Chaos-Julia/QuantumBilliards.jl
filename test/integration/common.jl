@@ -20,6 +20,8 @@ const IMAG_TOL = 1e-7                 # |Im k| of Beyn levels (worst observed 7e
 const SECTOR_UNION_ATOL = 1e-10       # eigenvalues of reduced vs unreduced composite matrices, symmetric holes (worst observed 1.1e-14)
 const SPECTRUM_ATOL_SECTOR = 1e-5     # Beyn levels, symmetry sector spectra vs unreduced or Phase 1 reference, billiards with holes (worst observed 3.1e-7)
 const IMAG_TOL_HOLES = 1e-5           # |Im k| of Beyn levels, composite CFIE on billiards with holes (worst observed 2.1e-7)
+const SPECTRUM_ATOL_ISOSPECTRAL = 5e-3  # Beyn DLP levels, Gordon-Webb-Wolpert polygon A vs B at ppw = 16 (worst observed 5.3e-4)
+const IMAG_TOL_POLYGON = 5e-3         # |Im k| of Beyn DLP levels, reflex-corner polygons at ppw = 16 (worst observed 4.1e-4)
 
 # High-wavenumber tier.
 const HIGH_K = 100.0

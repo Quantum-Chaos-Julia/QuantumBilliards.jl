@@ -20,6 +20,7 @@ end
 
 @group "accelerated" begin
     include("accelerated/beyn_spectra.jl")
+    include("accelerated/beyn_isospectral_spectra.jl")
     include("accelerated/ebim_spectra.jl")
     include("accelerated/cork_spectra.jl")
 end
