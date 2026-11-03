@@ -594,13 +594,13 @@ end
         @test issorted(data.k)
     end
 
-    @testset "accept_tol drops candidates with a larger correction before merging" begin
-        filtered = compute_spectrum(solver, eb_circle, 1.0, 1.5; dk=k -> dk, accept_tol=2.5e-3, multithreaded=false, show_progress=false)
-        @test all(filtered.ten .<= 2.5e-3)
-        @test filtered.k == [1.1000004, 1.24, 1.4500002]                     # 1.2 (3e-3) is discarded
-        default = compute_spectrum(solver, eb_circle, 1.0, 1.5; dk=k -> dk, multithreaded=false, show_progress=false)
-        @test all(default.ten .<= 5e-4)
-        @test default.k == [1.1000004, 1.4500002]
+    @testset "accept_tol marks candidates with a larger correction unverified instead of dropping them" begin
+        marked = @test_logs (:warn, r"marked unverified") compute_spectrum(solver, eb_circle, 1.0, 1.5; dk=k -> dk, accept_tol=2.5e-3, multithreaded=false, show_progress=false)
+        @test marked.k == data.k                                             # nothing is dropped
+        @test marked.control == [true, false, true, true]                    # 1.2 (3e-3) is unverified
+        default = @test_logs (:warn, r"marked unverified") compute_spectrum(solver, eb_circle, 1.0, 1.5; dk=k -> dk, multithreaded=false, show_progress=false)
+        @test default.k == data.k
+        @test default.control == [true, false, false, true]                  # 1.2 (3e-3) and 1.24 (2e-3) exceed 5e-4
     end
 
     @testset "invalid arguments" begin

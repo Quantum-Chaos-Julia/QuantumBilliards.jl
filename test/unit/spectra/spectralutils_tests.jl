@@ -1,6 +1,6 @@
 # Unit tests for
 #   src/spectra/spectralutils.jl   (SpectralData, k_range, filter, append!/vcat, match_wavenumbers,
-#                                   _ten_ok, _ten_keep, _vs_max_halfwidth, _clamp_dk, _finalize_spectrum,
+#                                   _ten_ok, _finalize_spectrum, _vs_refine_window,
 #                                   overlap_and_merge!, overlap_and_merge_ebim!, _local_gap,
 #                                   sweep_windows, weyl_window_count)
 #   src/solvers/acceleratedmethods/beyn.jl   (weyl_window_width, plan_weyl_windows,
@@ -574,7 +574,7 @@ end
 end
 
 # accept_tol helpers (src/spectra/spectralutils.jl, INTERNAL HELPERS)
-using QuantumBilliards: _ten_ok, _ten_keep, _vs_max_halfwidth, _clamp_dk, _finalize_spectrum
+using QuantumBilliards: _ten_ok, _finalize_spectrum, _vs_refine_window, _VS_MAX_REFINEMENTS
 
 # Solver stand-in: _finalize_spectrum only uses nameof(typeof(solver)) in its warnings.
 struct SpectraFinalizeStub end
@@ -587,38 +587,6 @@ struct SpectraFinalizeStub end
     @test !_ten_ok(0.1, 0.1 + 1e-12)
     @test !_ten_ok(0.1, 5.0)
     @test _ten_ok(1, 1)                 # integer tolerance
-end
-
-@testset "_ten_keep" begin
-    @test _ten_keep(0.1, [0.05, 0.2, 0.1]) == [1, 3]
-    @test _ten_keep(nothing, [1.0, 2.0]) == [1, 2]
-    @test _ten_keep(nothing, Float64[]) == Int[]
-    @test _ten_keep(0.1, Float64[]) == Int[]
-    @test _ten_keep(0.01, [0.05, 0.2]) == Int[]
-    @test _ten_keep(1.0, [0.05, 0.2]) == [1, 2]
-end
-
-@testset "_vs_max_halfwidth" begin
-    @test _vs_max_halfwidth(nothing) == Inf
-    @test _vs_max_halfwidth(0.2) ≈ sqrt(0.1)
-    @test _vs_max_halfwidth(0.2) ≈ 0.316227766016838
-    @test _vs_max_halfwidth(8.0) == 2.0
-    # edge of the window satisfies ten = 2 (ks-k)^2 = accept_tol
-    @test 2 * _vs_max_halfwidth(0.37)^2 ≈ 0.37
-    @test _vs_max_halfwidth(0.0) == 0.0
-end
-
-@testset "_clamp_dk" begin
-    @test _clamp_dk(0.5, 0.3) == 0.3
-    @test _clamp_dk(0.2, 0.3) == 0.2
-    @test _clamp_dk(0.5, Inf) == 0.5
-    f = _clamp_dk(k -> 0.5, 0.3)
-    @test f isa Function
-    @test f(1.0) == 0.3
-    g = _clamp_dk(k -> 0.1k, 0.3)
-    @test g(1.0) ≈ 0.1
-    @test g(10.0) == 0.3                # clamp active only for large k
-    @test _clamp_dk(k -> 0.5, Inf)(2.0) == 0.5
 end
 
 @testset "_finalize_spectrum" begin
@@ -651,54 +619,52 @@ end
         @test data.ten == [2e-3, 3e-3, 1e-3]
     end
 
-    @testset "accept_tol filters and warns" begin
-        data = @test_logs (:warn, r"SpectraFinalizeStub: discarded 1 eigenvalue candidate\(s\) with tension above accept_tol=0\.1") begin
-            _finalize_spectrum(b, solver, copy(ks), copy(ts), copy(ctrl); states=copy(states), accept_tol=0.1)
+    @testset "accept_tol marks suspect levels unverified (keeps all) and warns" begin
+        ctrl1 = fill(true, 4)
+        data = @test_logs (:warn, r"SpectraFinalizeStub: 1 eigenvalue candidate\(s\) with tension or imaginary part above accept_tol=0\.1 marked unverified") begin
+            _finalize_spectrum(b, solver, copy(ks), copy(ts), copy(ctrl1); states=copy(states), accept_tol=0.1)
         end
-        @test data.k == [1.0, 2.0, 3.0]
-        @test data.ten == [5e-3, 2e-3, 1e-3]
-        @test data.control == [true, false, false]
-        @test [s.id for s in data.states] == [2, 3, 1]
+        @test data.k == [1.0, 2.0, 3.0, 4.0]
+        @test data.ten == [5e-3, 2e-3, 1e-3, 0.5]
+        @test data.control == [true, true, true, false]     # only ts > accept_tol unverified
+        @test [s.id for s in data.states] == [2, 3, 1, 4]
     end
 
-    @testset "accept_tol boundary kept, no warning when nothing dropped" begin
-        data = @test_logs _finalize_spectrum(b, solver, copy(ks), copy(ts), copy(ctrl); accept_tol=0.5)
+    @testset "large imaginary part marks level unverified" begin
+        kc = [1.0 + 0.2im, 2.0 + 1e-6im]
+        data = @test_logs (:warn, r"marked unverified") _finalize_spectrum(b, solver, kc, [1e-3, 1e-3], [true, true]; accept_tol=0.1)
+        @test data.control == [false, true]
+        @test length(data) == 2
+    end
+
+    @testset "verified levels within tolerance keep control=true" begin
+        data = @test_logs (:warn, r"unverified") _finalize_spectrum(b, solver, copy(ks), copy(ts), copy(ctrl); accept_tol=0.1)
+        @test data.control == [true, false, false, false]
+    end
+
+    @testset "input control is not mutated" begin
+        ctrl1 = fill(true, 4)
+        @test_logs (:warn, r"unverified") _finalize_spectrum(b, solver, copy(ks), copy(ts), ctrl1; accept_tol=0.1)
+        @test ctrl1 == fill(true, 4)
+    end
+
+    @testset "accept_tol boundary verified, no warning when none suspect" begin
+        data = @test_logs _finalize_spectrum(b, solver, copy(ks), copy(ts), fill(true, 4); accept_tol=0.5)
         @test length(data) == 4
-        data = @test_logs (:warn, r"discarded 1 ") _finalize_spectrum(b, solver, copy(ks), copy(ts), copy(ctrl); accept_tol=0.4999)
-        @test length(data) == 3
+        @test all(data.control)
+        data = @test_logs (:warn, r"1 eigenvalue candidate") _finalize_spectrum(b, solver, copy(ks), copy(ts), fill(true, 4); accept_tol=0.4999)
+        @test length(data) == 4
+        @test data.control == [true, true, true, false]
     end
 
-    @testset "ndropped from earlier stages is reported" begin
-        data = @test_logs (:warn, r"discarded 2 eigenvalue candidate") begin
-            _finalize_spectrum(b, solver, copy(ks), copy(ts), copy(ctrl); accept_tol=1.0, ndropped=2)
+    @testset "everything above accept_tol: all kept and unverified" begin
+        data = @test_logs (:warn, r"4 eigenvalue candidate") begin
+            _finalize_spectrum(b, solver, copy(ks), copy(ts), fill(true, 4); states=copy(states), accept_tol=1e-6)
         end
         @test length(data) == 4
-        # passed count adds to the count dropped here
-        data = @test_logs (:warn, r"discarded 3 eigenvalue candidate") begin
-            _finalize_spectrum(b, solver, copy(ks), copy(ts), copy(ctrl); accept_tol=0.1, ndropped=2)
-        end
-        @test length(data) == 3
-        # also with accept_tol=nothing
-        @test_logs (:warn, r"discarded 2 .*accept_tol=nothing") _finalize_spectrum(b, solver, copy(ks), copy(ts), copy(ctrl); ndropped=2)
-    end
-
-    @testset "everything filtered: empty SpectralData, no throw" begin
-        local data
-        @test_logs (:warn, r"discarded 4 eigenvalue candidate") (:warn, r"no eigenvalues found") begin
-            data = _finalize_spectrum(b, solver, copy(ks), copy(ts), copy(ctrl); states=copy(states), accept_tol=1e-6)
-        end
-        @test data isa SpectralData
-        @test length(data) == 0
-        @test isempty(data.k) && isempty(data.ten) && isempty(data.control)
-        # states passed in: empty Vector is kept, not coerced to nothing
-        @test data.states isa Vector && isempty(data.states)
-        @test eltype(data.states) == SpectraTestState
-    end
-
-    @testset "everything filtered without states: states stays nothing" begin
-        data = @test_logs (:warn, r"discarded 4 ") (:warn, r"no eigenvalues found") _finalize_spectrum(b, solver, copy(ks), copy(ts), copy(ctrl); accept_tol=1e-6)
-        @test length(data) == 0
-        @test data.states === nothing
+        @test !any(data.control)
+        @test data.k == [1.0, 2.0, 3.0, 4.0]
+        @test [s.id for s in data.states] == [2, 3, 1, 4]
     end
 
     @testset "empty input: only the empty warning" begin
@@ -712,7 +678,82 @@ end
         d_empty = @test_logs (:warn, r"no eigenvalues found") _finalize_spectrum(b, solver, Float64[], Float64[], Bool[]; states=SpectraTestState[])
         @test d_empty.states isa Vector{SpectraTestState} && isempty(d_empty.states)
         @test_logs (:warn, r"no eigenvalues found") _finalize_spectrum(b, solver, Float64[], Float64[], Bool[]; accept_tol=0.1)
-        # ndropped alone on empty input gives both warnings
-        @test_logs (:warn, r"discarded 1 ") (:warn, r"no eigenvalues found") _finalize_spectrum(b, solver, Float64[], Float64[], Bool[]; ndropped=1)
+    end
+end
+
+# Stub solver for _vs_refine_window: roots `roots`; a solve at center k0 with half-width w returns every root r
+# with |r-k0| <= w, with tension 2(k0-r)^2 (tension grows with distance from the window center, as in the
+# Vergini-Saraceno method). `ncalls` counts solves.
+struct SpectraRefineStub
+    roots::Vector{Float64}
+    eigenvectors::Bool
+    ncalls::Base.RefValue{Int}
+end
+SpectraRefineStub(roots) = SpectraRefineStub(roots, false, Ref(0))
+
+function QuantumBilliards.solve(s::SpectraRefineStub, basis, pts, k0::Real, w::Real; multithreaded::Bool=true)
+    s.ncalls[] += 1
+    sel = [r for r in s.roots if abs(r - k0) <= w]
+    return sel, [2 * (k0 - r)^2 for r in sel]
+end
+
+@testset "_vs_refine_window" begin
+    roots = [0.31, 0.5, 0.78, 1.0, 1.23, 1.6]
+    k0, Δk, merge_tol = 1.0, 0.8, 1e-6
+    args = (:basis, :pts)
+    inwindow = [r for r in roots if abs(r - k0) <= Δk + merge_tol]
+
+    @testset "_VS_MAX_REFINEMENTS" begin
+        @test _VS_MAX_REFINEMENTS == 4
+    end
+
+    @testset "tension within accept_tol: single solve" begin
+        s = SpectraRefineStub(roots)
+        ki, ti, si = _vs_refine_window(s, args, k0, Δk, 10.0, _VS_MAX_REFINEMENTS; multithreaded=false, merge_tol)
+        @test s.ncalls[] == 1
+        @test ki == inwindow
+        @test si === nothing
+    end
+
+    @testset "accept_tol=nothing: single solve" begin
+        s = SpectraRefineStub(roots)
+        ki, ti, si = _vs_refine_window(s, args, k0, Δk, nothing, _VS_MAX_REFINEMENTS; multithreaded=false, merge_tol)
+        @test s.ncalls[] == 1
+        @test ki == inwindow
+        @test maximum(ti) > 0.03                 # high tensions are left alone
+    end
+
+    @testset "depth=0: single solve even if tension too high" begin
+        s = SpectraRefineStub(roots)
+        ki, ti, si = _vs_refine_window(s, args, k0, Δk, 0.03, 0; multithreaded=false, merge_tol)
+        @test s.ncalls[] == 1
+        @test maximum(ti) > 0.03
+    end
+
+    @testset "halving reaches accept_tol, no duplicates" begin
+        s = SpectraRefineStub(roots)
+        accept_tol = 0.03
+        ki, ti, si = _vs_refine_window(s, args, k0, Δk, accept_tol, _VS_MAX_REFINEMENTS; multithreaded=false, merge_tol)
+        @test s.ncalls[] > 1
+        @test all(t -> t <= accept_tol, ti)
+        @test length(ki) == length(ti)
+        @test sort(ki) == inwindow               # every root found exactly once
+        @test allunique(ki)
+        @test si === nothing
+    end
+
+    @testset "depth=1 splits once" begin
+        s = SpectraRefineStub(roots)
+        ki, ti, _ = _vs_refine_window(s, args, k0, Δk, 0.03, 1; multithreaded=false, merge_tol)
+        @test s.ncalls[] == 3                    # parent + two depth-0 halves
+        @test sort(ki) == inwindow
+        @test allunique(ki)
+    end
+
+    @testset "root on the split boundary is not duplicated" begin
+        s = SpectraRefineStub([0.2, 1.0, 1.8])
+        ki, ti, _ = _vs_refine_window(s, args, k0, Δk, 0.03, _VS_MAX_REFINEMENTS; multithreaded=false, merge_tol)
+        @test sort(ki) == [0.2, 1.0, 1.8]
+        @test all(t -> t <= 0.03, ti)
     end
 end
