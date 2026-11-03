@@ -144,12 +144,12 @@ end
         @test solver.pts_scaling_factor isa Vector{Float64}
         @test length(solver.sampler) == 1
         @test solver.sampler[1] isa GaussLegendreNodes{Float64}
-        @test solver.eps == eps(Float64)
+        @test solver.eig_tol == eps(Float64)
         @test solver.min_dim == 100
         @test solver.min_pts == 500
         @test solver.rellich_origin === SVector(0.0, 0.0)
         @test fieldnames(DecompositionMethodSolver) ==
-              (:dim_scaling_factor, :pts_scaling_factor, :sampler, :eps, :min_dim, :min_pts, :rellich_origin)
+              (:dim_scaling_factor, :pts_scaling_factor, :sampler, :eig_tol, :min_dim, :min_pts, :rellich_origin)
         @test !ismutabletype(DecompositionMethodSolver)
     end
 
@@ -169,7 +169,7 @@ end
     @testset "Float32 parameters" begin
         solver = DecompositionMethodSolver(2f0, 3f0; rellich_origin=SVector(1f0, 2f0))
         @test solver isa DecompositionMethodSolver{Float32}
-        @test solver.eps == eps(Float32)
+        @test solver.eig_tol == eps(Float32)
         @test solver.pts_scaling_factor isa Vector{Float32}
         @test solver.rellich_origin isa SVector{2,Float32}
         @test DecompositionMethodSolver(2f0, 3f0).rellich_origin === SVector(0f0, 0f0)
@@ -274,12 +274,12 @@ end
         @test solver.dim_scaling_factor == 2.0
         @test solver.pts_scaling_factor == [5.0]
         @test length(solver.sampler) == 1 && solver.sampler[1] isa GaussLegendreNodes{Float64}
-        @test solver.eps == eps(Float64)
+        @test solver.eig_tol == eps(Float64)
         @test solver.min_dim == 100
         @test solver.min_pts == 500
         @test solver.eigenvectors === true
         @test fieldnames(VerginiSaracenoSolver) ==
-              (:dim_scaling_factor, :pts_scaling_factor, :sampler, :eps, :min_dim, :min_pts, :eigenvectors)
+              (:dim_scaling_factor, :pts_scaling_factor, :sampler, :eig_tol, :min_dim, :min_pts, :eigenvectors)
     end
 
     @testset "vector scaling factors, samplers and keywords" begin
@@ -306,7 +306,7 @@ end
     @testset "Float32 parameters" begin
         solver = VerginiSaracenoSolver(2f0, 5f0)
         @test solver isa VerginiSaracenoSolver{Float32}
-        @test solver.eps == eps(Float32)
+        @test solver.eig_tol == eps(Float32)
         @test solver.pts_scaling_factor isa Vector{Float32}
     end
 
@@ -333,8 +333,8 @@ end
         @test sc_has(solve_spectrum, S, sc_BASIS_T, sc_RECT_T, Float64, Float64)
         @test sc_has(compute_eigenstate, S, sc_BASIS_T, sc_RECT_T, Float64)
         @test sc_has(compute_spectrum, S, sc_BASIS_T, sc_RECT_T, Float64, Float64, Float64)
-        @test sc_has_kw(compute_spectrum, :ten_tol, S, sc_BASIS_T, sc_RECT_T, Float64, Float64, Float64)   # k1, k2, dk form
-        @test sc_has_kw(compute_spectrum, :ten_tol, S, sc_BASIS_T, sc_RECT_T, Int, Int)                    # N1, N2 form
+        @test sc_has_kw(compute_spectrum, :accept_tol, S, sc_BASIS_T, sc_RECT_T, Float64, Float64, Float64)   # k1, k2, dk form
+        @test sc_has_kw(compute_spectrum, :accept_tol, S, sc_BASIS_T, sc_RECT_T, Int, Int)                    # N1, N2 form
         @test !sc_has(k_sweep, S, sc_BASIS_T, sc_RECT_T, Vector{Float64})              # no sweep for accelerated solvers
         @test !sc_has(solve, S, sc_BASIS_T, sc_PTS_T, Float64)                          # needs the window half-width dk
     end
@@ -354,18 +354,16 @@ end
         @test solver.grading isa SmoothPeriodicGrading
         @test solver.symmetry === nothing
         @test solver.sym_characters == ()
-        @test solver.eps == 1e-15
         @test fieldnames(DoubleLayerPotentialSolver) ==
-              (:pts_scaling_factor, :billiard, :min_pts, :grading, :symmetry, :sym_characters, :eps)
+              (:pts_scaling_factor, :billiard, :min_pts, :grading, :symmetry, :sym_characters)
         @test _bim_numeric_type(solver) === Float64
         @test !ismutabletype(DoubleLayerPotentialSolver)
     end
 
     @testset "vector scaling factors, keywords and grading" begin
-        solver = DoubleLayerPotentialSolver([10.0, 12.0], rect; min_pts=64, eps=1e-12, grading=GlobalCornerGrading())
+        solver = DoubleLayerPotentialSolver([10.0, 12.0], rect; min_pts=64, grading=GlobalCornerGrading())
         @test solver.pts_scaling_factor == [10.0, 12.0]
         @test solver.min_pts == 64
-        @test solver.eps == 1e-12
         @test solver.grading isa GlobalCornerGrading{Float64}
         @test solver isa DoubleLayerPotentialSolver{Float64,GlobalCornerGrading{Float64},Nothing,typeof(rect),Tuple{}}
     end
@@ -373,7 +371,6 @@ end
     @testset "Float32 scaling factor" begin
         solver = DoubleLayerPotentialSolver(10f0, circle)
         @test solver isa DoubleLayerPotentialSolver{Float32}
-        @test solver.eps === 1f-15
         @test _bim_numeric_type(solver) === Float32
         @test solver.billiard === circle                                   # the billiard keeps its own element type
     end
@@ -403,9 +400,8 @@ end
         @test_throws ArgumentError DoubleLayerPotentialSolver(10.0, rect; sym_characters=(1, 1, 1))
         @test_throws ArgumentError DoubleLayerPotentialSolver(10.0, rect; sym_characters=(2, 1))      # reflection characters are +-1
         @test_throws TypeError DoubleLayerPotentialSolver(10.0, rect; grading=3)
-        @test_throws TypeError DoubleLayerPotentialSolver(10f0, circle; eps=1e-15)                    # eps must have the solver type
+        @test_throws MethodError DoubleLayerPotentialSolver(10f0, circle; eps=1e-15)                    # the eps keyword was removed
         @test_throws TypeError DoubleLayerPotentialSolver(10.0, circle; min_pts=2.5)
-        @test_throws InexactError DoubleLayerPotentialSolver(10, circle)                               # eps default 1e-15 is not an Int
         @test_throws MethodError DoubleLayerPotentialSolver(10.0)                                      # the billiard is required
         @test_throws MethodError DoubleLayerPotentialSolver(circle)
         @test_throws MethodError DoubleLayerPotentialSolver(10.0, 1.0)
@@ -442,9 +438,8 @@ end
         @test solver.grading isa SmoothPeriodicGrading
         @test solver.symmetry === nothing
         @test solver.sym_characters == ()
-        @test solver.eps == 1e-15
         @test fieldnames(CombinedFieldIntegralEquationSolver) ==
-              (:pts_scaling_factor, :billiard, :min_pts, :grading, :symmetry, :sym_characters, :eps)
+              (:pts_scaling_factor, :billiard, :min_pts, :grading, :symmetry, :sym_characters)
         @test _bim_numeric_type(solver) === Float64
     end
 
@@ -466,7 +461,7 @@ end
         @test_throws ArgumentError CombinedFieldIntegralEquationSolver(10.0, rect; sym_characters=(1,))
         @test_throws ArgumentError CombinedFieldIntegralEquationSolver(10.0, rect; sym_characters=(0, 1))
         @test_throws TypeError CombinedFieldIntegralEquationSolver(10.0, rect; grading="corner")
-        @test_throws TypeError CombinedFieldIntegralEquationSolver(10f0, circle; eps=1e-15)
+        @test_throws MethodError CombinedFieldIntegralEquationSolver(10f0, circle; eps=1e-15)
         @test_throws MethodError CombinedFieldIntegralEquationSolver(10.0)
     end
 
@@ -498,8 +493,19 @@ end
         @test solver.component_solvers === (outer, inner)                   # stored in the given order, DLP and CFIE may be mixed
         @test solver.symmetry === nothing
         @test solver.sym_characters == ()
-        @test fieldnames(CompositeBIMSolver) == (:component_solvers, :symmetry, :sym_characters)
+        @test fieldnames(CompositeBIMSolver) == (:component_solvers, :symmetry, :sym_characters, :loop_solver)
+        @test solver.loop_solver isa Vector{Int}
+        @test solver.loop_solver == [1, 2]                                  # annulus: outer loop, one hole loop
         @test _bim_numeric_type(solver) === Float64
+    end
+
+    @testset "loop_solver: solver index of every boundary loop" begin
+        @test CompositeBIMSolver(DoubleLayerPotentialSolver(10.0, rect)).loop_solver == [1]         # no hole: the single outer loop
+        @test CompositeBIMSolver(DoubleLayerPotentialSolver(10.0, annulus)).loop_solver == [1, 2]   # annulus: outer loop and hole loop
+        sinai = SinaiBilliard(1.0, 0.25)
+        @test CompositeBIMSolver(DoubleLayerPotentialSolver(10.0, sinai), DoubleLayerPotentialSolver(10.0, sinai)).loop_solver == [1, 2]
+        sws = SquareWithinSquareBilliard(1.0)
+        @test CompositeBIMSolver(DoubleLayerPotentialSolver(10.0, sws)).loop_solver == [1, 2, 2]    # one mirrored hole object: its two loops share solver 2
     end
 
     @testset "single component and common symmetry" begin
@@ -564,7 +570,7 @@ end
         @test solver isa BeynSolver{Float64,typeof(kernel)}
         @test solver isa AcceleratedBIMSolver
         @test solver.kernel === kernel
-        @test solver.m == 100
+        @test solver.nlevels == 100
         @test solver.nq == 40
         @test solver.r == 200
         @test solver.Rmax == 0.5
@@ -589,19 +595,17 @@ end
         @test (solver.cheb_config.n_panels_h, solver.cheb_config.M_h) == (10000, 5)
         @test (solver.cheb_config.n_panels_j, solver.cheb_config.M_j) == (5000, 5)
 
-        solver = BeynSolver(kernel; n_panels_h=100, M_h=4, n_panels_j=50, M_j=3)
-        @test (solver.cheb_config.n_panels_h, solver.cheb_config.M_h, solver.cheb_config.n_panels_j, solver.cheb_config.M_j) ==
-              (100, 4, 50, 3)
-
-        cfg = ChebyshevConfig(Float64; n_panels_h=7)
-        solver = BeynSolver(kernel; cheb_config=cfg, n_panels_h=100)         # an explicit configuration wins over the panel keywords
+        cfg = ChebyshevConfig(Float64; n_panels_h=100, M_h=4, n_panels_j=50, M_j=3)
+        solver = BeynSolver(kernel; cheb_config=cfg)
         @test solver.cheb_config === cfg
+
+        @test_throws MethodError BeynSolver(kernel; n_panels_h=100)           # the panel keywords live on ChebyshevConfig only
     end
 
     @testset "keywords are converted to the kernel type" begin
-        solver = BeynSolver(kernel; m=10, nq=16, r=8, Rmax=1, svd_tol=1e-10, res_tol=1e-6, use_taylor=false, use_chebyshev=true,
+        solver = BeynSolver(kernel; nlevels=10, nq=16, r=8, Rmax=1, svd_tol=1e-10, res_tol=1e-6, use_taylor=false, use_chebyshev=true,
                             taylor_degree=8, imag_k_check=false, eigenvectors=false)
-        @test (solver.m, solver.nq, solver.r) == (10, 16, 8)
+        @test (solver.nlevels, solver.nq, solver.r) == (10, 16, 8)
         @test solver.Rmax === 1.0
         @test solver.svd_tol === 1e-10 && solver.res_tol === 1e-6
         @test solver.use_taylor === false && solver.use_chebyshev === true
@@ -627,7 +631,7 @@ end
         @test_throws MethodError BeynSolver(DecompositionMethodSolver(2.0, 3.0))
         @test_throws MethodError BeynSolver(BeynSolver(kernel))                               # no nesting of accelerated solvers
         @test_throws MethodError BeynSolver()
-        @test_throws TypeError BeynSolver(kernel; m=2.5)
+        @test_throws TypeError BeynSolver(kernel; nlevels=2.5)
         @test_throws TypeError BeynSolver(kernel; nq=2.5)
         @test_throws TypeError BeynSolver(kernel; use_taylor=1)
         @test_throws MethodError BeynSolver(kernel; cheb_config=ChebyshevConfig(Float32))   # wrong element type of the configuration
@@ -645,8 +649,8 @@ end
         @test sc_has(solve_spectrum, S, typeof(circle), Float64, Float64)
         @test sc_has(compute_spectrum, S, typeof(circle), Float64, Float64)
         @test sc_has(compute_spectrum, S, typeof(circle), Int, Int)
-        @test sc_has_kw(compute_spectrum, :ten_tol, S, typeof(circle), Float64, Float64)
-        @test sc_has_kw(compute_spectrum, :ten_tol, S, typeof(circle), Int, Int)
+        @test sc_has_kw(compute_spectrum, :accept_tol, S, typeof(circle), Float64, Float64)
+        @test sc_has_kw(compute_spectrum, :accept_tol, S, typeof(circle), Int, Int)
         @test sc_has(compute_eigenstate, S, typeof(circle), Float64)
         @test !sc_has(k_sweep, S, typeof(circle), Vector{Float64})
     end
@@ -665,27 +669,27 @@ end
         @test solver.taylor_degree == 16
         @test solver.taylor_radius == 0.5
         @test solver.taylor_tol == 1e-11
-        @test solver.tol == 1e-12
+        @test solver.krylov_tol == 1e-12
         @test solver.maxiter == 5000
         @test solver.krylovdim == 40
         @test fieldnames(ExpandedBIMSolver) ==
-              (:kernel, :use_taylor, :taylor_degree, :taylor_radius, :taylor_tol, :tol, :maxiter, :krylovdim)
+              (:kernel, :use_taylor, :taylor_degree, :taylor_radius, :taylor_tol, :krylov_tol, :maxiter, :krylovdim)
         @test _bim_numeric_type(solver) === Float64
         @test !ismutabletype(ExpandedBIMSolver)
     end
 
     @testset "keywords are converted to the kernel type" begin
-        solver = ExpandedBIMSolver(kernel; use_taylor=false, taylor_degree=8, taylor_radius=1, taylor_tol=1e-9, tol=1e-8, maxiter=10, krylovdim=2)
+        solver = ExpandedBIMSolver(kernel; use_taylor=false, taylor_degree=8, taylor_radius=1, taylor_tol=1e-9, krylov_tol=1e-8, maxiter=10, krylovdim=2)
         @test solver.use_taylor === false
         @test solver.taylor_degree == 8
         @test solver.taylor_radius === 1.0
-        @test solver.taylor_tol === 1e-9 && solver.tol === 1e-8
+        @test solver.taylor_tol === 1e-9 && solver.krylov_tol === 1e-8
         @test (solver.maxiter, solver.krylovdim) == (10, 2)
 
         solver32 = ExpandedBIMSolver(DoubleLayerPotentialSolver(10f0, circle))
         @test solver32 isa ExpandedBIMSolver{Float32}
         @test solver32.taylor_radius === 0.5f0
-        @test solver32.tol === 1f-12
+        @test solver32.krylov_tol === 1f-12
     end
 
     @testset "argument validation" begin
@@ -711,8 +715,8 @@ end
         @test sc_has(solve_spectrum, S, typeof(circle), Float64, Float64)
         @test sc_has(compute_spectrum, S, typeof(circle), Float64, Float64)
         @test sc_has(compute_spectrum, S, typeof(circle), Int, Int)
-        @test sc_has_kw(compute_spectrum, :ten_tol, S, typeof(circle), Float64, Float64)
-        @test sc_has_kw(compute_spectrum, :ten_tol, S, typeof(circle), Int, Int)
+        @test sc_has_kw(compute_spectrum, :accept_tol, S, typeof(circle), Float64, Float64)
+        @test sc_has_kw(compute_spectrum, :accept_tol, S, typeof(circle), Int, Int)
         @test sc_has(compute_eigenstate, S, typeof(circle), Float64)
         @test !sc_has(solve_vectors, S, sc_PTS_T, Float64, Float64)                         # EBIM returns no eigenvectors
     end
@@ -731,7 +735,7 @@ end
         @test solver.guard == 0.05
         @test solver.nlevels == 100
         @test solver.Rmax == 0.6
-        @test solver.b == 10
+        @test solver.block_size == 10
         @test solver.mstart == 500                                          # b*ceil(5 nlevels/b)
         @test solver.mstep == 50                                            # b*ceil(50/b)
         @test solver.stable_checks == 1
@@ -741,33 +745,32 @@ end
         @test solver.stable_tol == 1e-9
         @test solver.imag_search_tol == 1e-4
         @test solver.eigenvectors === false
-        @test solver.validate === false
         @test solver.verbose === false
         @test solver.taylor_tol == 3e-10
         @test _bim_numeric_type(solver) === Float64
         @test ismutabletype(CORKSolver)
     end
 
-    @testset "Krylov dimensions follow nlevels and b" begin
+    @testset "Krylov dimensions follow nlevels and block_size" begin
         solver = CORKSolver(kernel; nlevels=20)
         @test solver.mstart == 100
         solver = CORKSolver(kernel; nlevels=21)
-        @test solver.mstart == 110                                          # rounded up to a multiple of b
-        solver = CORKSolver(kernel; b=5, nlevels=10)
-        @test (solver.b, solver.mstart, solver.mstep) == (5, 50, 50)
+        @test solver.mstart == 110                                          # rounded up to a multiple of block_size
+        solver = CORKSolver(kernel; block_size=5, nlevels=10)
+        @test (solver.block_size, solver.mstart, solver.mstep) == (5, 50, 50)
         solver = CORKSolver(kernel; mstart=30, mstep=20)
         @test (solver.mstart, solver.mstep) == (30, 20)
     end
 
     @testset "argument validation" begin
-        @test_throws ArgumentError CORKSolver(kernel; mstart=15)                             # not divisible by b = 10
+        @test_throws ArgumentError CORKSolver(kernel; mstart=15)                             # not divisible by block_size = 10
         @test_throws ArgumentError CORKSolver(kernel; mstep=15)
-        @test_throws ArgumentError CORKSolver(kernel; b=4, mstart=30)
+        @test_throws ArgumentError CORKSolver(kernel; block_size=4, mstart=30)
         @test_throws ArgumentError CORKSolver(DoubleLayerPotentialSolver(10f0, circle))      # Float64 kernels only
         @test_throws MethodError CORKSolver(1.0)
         @test_throws MethodError CORKSolver(BeynSolver(kernel))
         @test_throws TypeError CORKSolver(kernel; p=2.5)
-        @test_throws TypeError CORKSolver(kernel; validate=1)
+        @test_throws MethodError CORKSolver(kernel; validate=true)
         @test_throws MethodError CORKSolver(kernel; krylov=3)
     end
 
@@ -781,10 +784,77 @@ end
         @test sc_has(solve_spectrum, S, typeof(circle), Float64, Float64)
         @test sc_has(compute_spectrum, S, typeof(circle), Float64, Float64)
         @test sc_has(compute_spectrum, S, typeof(circle), Int, Int)
-        @test sc_has_kw(compute_spectrum, :ten_tol, S, typeof(circle), Float64, Float64)
-        @test sc_has_kw(compute_spectrum, :ten_tol, S, typeof(circle), Int, Int)
+        @test sc_has_kw(compute_spectrum, :accept_tol, S, typeof(circle), Float64, Float64)
+        @test sc_has_kw(compute_spectrum, :accept_tol, S, typeof(circle), Int, Int)
         @test sc_has(compute_eigenstate, S, typeof(circle), Float64)
         # CORK assembles its Chebyshev polynomial internally and does not define `construct_matrices`.
         @test !sc_has(construct_matrices, S, sc_PTS_T, Float64)
+    end
+end
+
+@testset "keyword unification: renamed and removed keywords" begin
+    circle = CircleBilliard(1.0)
+    kernel = DoubleLayerPotentialSolver(10.0, circle)
+    pts_T = sc_PTS_T
+
+    @testset "old constructor keywords raise MethodError" begin
+        @test_throws MethodError BeynSolver(kernel; m=5)                                      # now nlevels
+        @test_throws MethodError BeynSolver(kernel; n_panels_h=100, M_h=4, n_panels_j=50, M_j=3)
+        @test_throws MethodError CORKSolver(kernel; b=5)                                      # now block_size
+        @test_throws MethodError CORKSolver(kernel; validate=true)
+        @test_throws MethodError ExpandedBIMSolver(kernel; tol=1e-8)                          # now krylov_tol
+        @test_throws MethodError DoubleLayerPotentialSolver(10.0, circle; eps=1e-15)
+        @test_throws MethodError CombinedFieldIntegralEquationSolver(10.0, circle; eps=1e-15)
+        @test_throws MethodError VerginiSaracenoSolver(2.0, 5.0; eps=1e-12)                   # now eig_tol
+        @test_throws MethodError DecompositionMethodSolver(2.0, 3.0; eps=1e-12)
+    end
+
+    @testset "new constructor keywords are stored" begin
+        @test BeynSolver(kernel; nlevels=7).nlevels == 7
+        @test CORKSolver(kernel; block_size=5, nlevels=10).block_size == 5
+        @test ExpandedBIMSolver(kernel; krylov_tol=1e-6).krylov_tol == 1e-6
+        @test :eig_tol in fieldnames(VerginiSaracenoSolver) && :eps ∉ fieldnames(VerginiSaracenoSolver)     # a field, not a constructor keyword
+        @test :eig_tol in fieldnames(DecompositionMethodSolver) && :eps ∉ fieldnames(DecompositionMethodSolver)
+    end
+
+    @testset "BeynSolver cheb_config: nothing selects the default, a given config is kept" begin
+        default = ChebyshevConfig(Float64)
+        solver = BeynSolver(kernel; cheb_config=nothing)
+        @test solver.cheb_config isa ChebyshevConfig{Float64}
+        @test all(getfield(solver.cheb_config, f) == getfield(default, f) for f in fieldnames(ChebyshevConfig))
+        @test BeynSolver(kernel; cheb_config=nothing).cheb_config == BeynSolver(kernel).cheb_config
+        cfg = ChebyshevConfig(Float64; n_panels_h=123, M_h=3)
+        @test BeynSolver(kernel; cheb_config=cfg).cheb_config === cfg
+        solver32 = BeynSolver(DoubleLayerPotentialSolver(10f0, circle); cheb_config=nothing)
+        @test solver32.cheb_config isa ChebyshevConfig{Float32}
+    end
+
+    @testset "compute_spectrum and solve signatures use the unified keyword names" begin
+        B = BeynSolver(kernel); C = CORKSolver(kernel); E = ExpandedBIMSolver(kernel)
+        V = VerginiSaracenoSolver(2.0, 5.0)
+        for S in (typeof(B), typeof(C), typeof(E)), (a, b) in ((Float64, Float64), (Int, Int))
+            @test sc_has_kw(compute_spectrum, :accept_tol, S, typeof(circle), a, b)
+            @test sc_has_kw(compute_spectrum, :multithreaded, S, typeof(circle), a, b)
+            @test sc_has_kw(compute_spectrum, :show_progress, S, typeof(circle), a, b)
+            @test !sc_has_kw(compute_spectrum, :ten_tol, S, typeof(circle), a, b)
+            @test !sc_has_kw(compute_spectrum, :tol, S, typeof(circle), a, b)
+        end
+        for (a, b) in ((Float64, Float64), (Int, Int))
+            @test sc_has_kw(compute_spectrum, :merge_tol, typeof(E), typeof(circle), a, b)
+        end
+        for args in ((Float64, Float64, Float64), (Int, Int))
+            @test sc_has_kw(compute_spectrum, :merge_tol, typeof(V), sc_BASIS_T, sc_RECT_T, args...)
+            @test sc_has_kw(compute_spectrum, :accept_tol, typeof(V), sc_BASIS_T, sc_RECT_T, args...)
+            @test !sc_has_kw(compute_spectrum, :ten_tol, typeof(V), sc_BASIS_T, sc_RECT_T, args...)
+            @test !sc_has_kw(compute_spectrum, :tol, typeof(V), sc_BASIS_T, sc_RECT_T, args...)
+        end
+        @test sc_has_kw(compute_spectrum, :nlevels, typeof(V), sc_BASIS_T, sc_RECT_T, Int, Int)
+        @test !sc_has_kw(compute_spectrum, :N_expect, typeof(V), sc_BASIS_T, sc_RECT_T, Int, Int)
+
+        P = ParticularSolutionsMethodSolver(2.0, 3.0, 4.0)
+        for f in (solve, QuantumBilliards.solve_with_rank_reduction)
+            @test sc_has_kw(f, :rank_tol, typeof(P), sc_BASIS_T, pts_T, Float64)
+            @test !sc_has_kw(f, :tol, typeof(P), sc_BASIS_T, pts_T, Float64)
+        end
     end
 end

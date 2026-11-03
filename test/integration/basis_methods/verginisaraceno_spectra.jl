@@ -13,7 +13,7 @@ function _veech_beyn_levels(k0, dk)
     return get!(_VS_BEYN_CACHE, (:veech, k0, dk)) do
         billiard = QuantumBilliards.make_veech_right_triangle(5)
         kernel = CombinedFieldIntegralEquationSolver(10.0, billiard; grading=GlobalCornerGrading(kressq=2))
-        beyn = BeynSolver(kernel; m=6, nq=16, r=16, Rmax=dk + 0.05, svd_tol=1e-10, res_tol=2e-5,
+        beyn = BeynSolver(kernel; nlevels=6, nq=16, r=16, Rmax=dk + 0.05, svd_tol=1e-10, res_tol=2e-5,
             taylor_degree=6, use_chebyshev=false, imag_k_check=false, eigenvectors=false)
         data = compute_spectrum(beyn, billiard, k0 - dk, k0 + dk + 0.05; multithreaded=true, show_progress=false)
         ks = sort(data.k[(data.k .>= k0 - dk) .& (data.k .<= k0 + dk)])
@@ -70,7 +70,7 @@ end
 
 function _stadium_oddodd_beyn_compute(billiard, k0, dk)
     kernel = CombinedFieldIntegralEquationSolver(8.0, billiard; grading=GlobalCornerGrading(kressq=2), sym_characters=(-1, -1))
-    beyn = BeynSolver(kernel; m=6, nq=16, r=16, Rmax=dk + 0.05, svd_tol=1e-10, res_tol=2e-5,
+    beyn = BeynSolver(kernel; nlevels=6, nq=16, r=16, Rmax=dk + 0.05, svd_tol=1e-10, res_tol=2e-5,
         taylor_degree=6, use_chebyshev=false, imag_k_check=false, eigenvectors=false)
     data = compute_spectrum(beyn, billiard, k0 - dk, k0 + dk + 0.05; multithreaded=true, show_progress=false)
     ks = sort(data.k[(data.k .>= k0 - dk) .& (data.k .<= k0 + dk)])

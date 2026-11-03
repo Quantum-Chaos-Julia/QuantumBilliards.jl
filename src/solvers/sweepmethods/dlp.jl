@@ -70,7 +70,6 @@ full-boundary Fredholm operator to a selected symmetry sector.
 * `grading::G`: [`BoundaryGrading`](@ref) strategy controlling the periodic boundary parametrization used by the Kress quadrature scheme.
 * `symmetry::Sy`: Optional discrete symmetry used to reduce the Fredholm operator.
 * `sym_characters::Ch`: Character tuple selecting the representation of `symmetry`.
-* `eps::T`: Relative numerical tolerance associated with the solver.
 
 ## API
 [`evaluate_points`](@ref),
@@ -84,11 +83,10 @@ struct DoubleLayerPotentialSolver{T<:Real,G<:BoundaryGrading,Sy<:Union{AbsSymmet
     grading::G
     symmetry::Sy
     sym_characters::Ch
-    eps::T
 end
 
 """
-    DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::Bi; min_pts::Int=200, grading::BoundaryGrading=SmoothPeriodicGrading(), symmetry::Union{Nothing,AbsSymmetry}=nothing, sym_characters::Tuple=(), eps::T=T(1e-15)) where {T<:Real,Bi<:AbsBilliard}
+    DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::Bi; min_pts::Int=200, grading::BoundaryGrading=SmoothPeriodicGrading(), symmetry::Union{Nothing,AbsSymmetry}=nothing, sym_characters::Union{Nothing,Tuple}=()) where {T<:Real,Bi<:AbsBilliard}
 
 Construct a double-layer potential boundary-integral solver.
 
@@ -112,18 +110,18 @@ different (e.g. non-minimal) symmetry representation instead.
 * `min_pts::Int = 200`: Minimum number of boundary sampling points.
 * `grading::BoundaryGrading = SmoothPeriodicGrading()`: Boundary parametrization strategy used with the Kress quadrature scheme.
 * `symmetry::Union{Nothing,AbsSymmetry} = nothing`: Optional discrete symmetry used to reduce the full-boundary Fredholm operator. When `nothing`, it is inferred from `billiard` and `sym_characters`.
-* `sym_characters::Tuple = ()`: Character tuple selecting the requested representation of `symmetry`, or of the symmetry inferred from `billiard` when `symmetry` is `nothing`.
-* `eps::T = T(1e-15)`: Relative numerical tolerance associated with the solver.
+* `sym_characters::Union{Nothing,Tuple} = ()`: Character tuple selecting the requested representation of `symmetry`, or of the symmetry inferred from `billiard` when `symmetry` is `nothing`. `nothing` or `()` disables the reduction: the full boundary is used and all levels are found. One entry per generator of `get_symmetries(billiard)`: `±1` for a mirror, the sector `s` for a rotation, `(k,)` for a 2D irrep `E_k`. Call [`log_symmetries`](@ref) to list the valid tuples.
 
 ## Returns
 * `solver::DoubleLayerPotentialSolver{T,typeof(grading),typeof(symmetry),typeof(billiard),typeof(sym_characters)}`: Configured DLP solver.
 """
-function DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::Bi; min_pts::Int=200, grading::BoundaryGrading=SmoothPeriodicGrading(), symmetry::Union{Nothing,AbsSymmetry}=nothing, sym_characters::Tuple=(), eps::T=T(1e-15)) where {T<:Real,Bi<:AbsBilliard}
+function DoubleLayerPotentialSolver(pts_scaling_factor::Union{T,Vector{T}}, billiard::Bi; min_pts::Int=200, grading::BoundaryGrading=SmoothPeriodicGrading(), symmetry::Union{Nothing,AbsSymmetry}=nothing, sym_characters::Union{Nothing,Tuple}=()) where {T<:Real,Bi<:AbsBilliard}
     bs = pts_scaling_factor isa T ? [pts_scaling_factor] : pts_scaling_factor
+    sym_characters = something(sym_characters, ())
     if symmetry === nothing
         symmetry, sym_characters = _infer_bim_symmetry(billiard, sym_characters)
     end
-    return DoubleLayerPotentialSolver{T,typeof(grading),typeof(symmetry),typeof(billiard),typeof(sym_characters)}(bs, billiard, min_pts, grading, symmetry, sym_characters, eps)
+    return DoubleLayerPotentialSolver{T,typeof(grading),typeof(symmetry),typeof(billiard),typeof(sym_characters)}(bs, billiard, min_pts, grading, symmetry, sym_characters)
 end
 
 """
@@ -196,13 +194,12 @@ function _dlp_composite_arclength(comp::Vector, t::T) where {T<:Real}
 # symmetry reduction is requested.
 # This is the discretization selected by SmoothPeriodicGrading and is also the
 # fallback for GlobalCornerGrading when the boundary contains no true corners (stadium).
-function _dlp_evaluate_points(solver::DoubleLayerPotentialSolver, ::SmoothPeriodicGrading, comp::Vector, k::T) where {T<:Real}
+function _dlp_evaluate_points(solver::DoubleLayerPotentialSolver, ::SmoothPeriodicGrading, comp::Vector, k::T; multiple::Int=1, N_override::Union{Nothing,Int}=nothing) where {T<:Real}
     twopi = 2*T(pi)
     _, _, Ltot = component_lengths(comp)
     scale = solver.pts_scaling_factor[1]
     N = max(solver.min_pts, round(Int, k*Ltot*scale/twopi))
-    needed = solver.symmetry === nothing ? 2 : lcm(2, symmetry_node_multiple(solver.symmetry))
-    N = cld(N, needed)*needed
+    N = _bim_round_nodes(N, lcm(2, _bim_solver_node_multiple(solver), multiple), N_override)
     h = twopi/T(N)
     ts = T[s_mid(j, N) for j in 1:N]
     tphys = copy(ts)
@@ -248,13 +245,12 @@ end
 #
 # with h=2π/N. `ws` stores the uniform σ-space quadrature weights and `ws_der`
 # stores dt/dσ.
-function _dlp_evaluate_points_graded(solver::DoubleLayerPotentialSolver, grading::GlobalCornerGrading, comp::Vector, k::T, corners::Vector{T}) where {T<:Real}
+function _dlp_evaluate_points_graded(solver::DoubleLayerPotentialSolver, grading::GlobalCornerGrading, comp::Vector, k::T, corners::Vector{T}; multiple::Int=1, N_override::Union{Nothing,Int}=nothing) where {T<:Real}
     twopi = 2*T(pi)
     _, _, Ltot = component_lengths(comp)
     scale = solver.pts_scaling_factor[1]
     N = max(solver.min_pts, round(Int, k*Ltot*scale/twopi))
-    needed = solver.symmetry === nothing ? 2 : symmetry_node_multiple(solver.symmetry)
-    N = cld(N, needed)*needed
+    N = _bim_round_nodes(N, lcm(solver.symmetry === nothing ? 2 : _bim_solver_node_multiple(solver), multiple), N_override)
     σ, tmap, jac, jac2, _ = multi_kress_graded_nodes_data(T, N, corners; q=grading.kressq, minsep_tol=T(grading.min_t_spacing))
     tphys = tmap
     xy = Vector{SVector{2,T}}(undef, N)
@@ -285,10 +281,10 @@ end
 # ungraded periodic discretization. Both branches subsequently use the same
 # Kress quadrature scheme for the DLP kernel—the only
 # distinction is whether the periodic boundary parametrization is graded.
-function _dlp_evaluate_points(solver::DoubleLayerPotentialSolver, grading::GlobalCornerGrading, comp::Vector, k::T) where {T<:Real}
+function _dlp_evaluate_points(solver::DoubleLayerPotentialSolver, grading::GlobalCornerGrading, comp::Vector, k::T; multiple::Int=1, N_override::Union{Nothing,Int}=nothing) where {T<:Real}
     corners = BilliardGeometry._component_corner_locations(T, comp)
-    isempty(corners) && return _dlp_evaluate_points(solver, SmoothPeriodicGrading(), comp, k)
-    return _dlp_evaluate_points_graded(solver, grading, comp, k, corners)
+    isempty(corners) && return _dlp_evaluate_points(solver, SmoothPeriodicGrading(), comp, k; multiple, N_override)
+    return _dlp_evaluate_points_graded(solver, grading, comp, k, corners; multiple, N_override)
 end
 
 # Determine whether the boundary discretization carries a nontrivial global

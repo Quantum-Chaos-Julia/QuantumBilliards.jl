@@ -112,7 +112,7 @@ end
     end
 
     @testset "element and grid types are preserved (parities of the same precision)" begin
-        # Float64 parities would promote a Float32 Psi to Float64 (p .* Psi); the basis stores sym_qnumbers as Float64.
+        # Float64 parities would promote a Float32 Psi to Float64 (p .* Psi); the basis stores sym_characters as Float64.
         xg32 = Float32[0.1, 0.25, 0.4]
         yg32 = Float32[0.2, 0.5]
         Psi32 = Float32[x^3 * y^2 for x in xg32, y in yg32]

@@ -280,7 +280,7 @@ cross-component interactions to be selected without rebuilding geometry.
   dimension `N`.
 """
 function _taylor_cache(solver::CompositeBIMSolver, pts)
-    nc = length(solver.component_solvers); offs = _composite_offsets(pts,nc)
+    nc = length(solver.loop_solver); offs = _composite_offsets(pts,nc)
     comp_pts = ntuple(a -> _composite_component_slice(pts,offs[a]:offs[a+1]-1,a),nc)
     Gs = ntuple(a -> boundary_geom_cache(comp_pts[a],_is_nontrivial_dlp_grading(comp_pts[a])),nc)
     Rmats = ntuple(nc) do a
@@ -388,9 +388,9 @@ selects the corresponding direct DLP or CFIE Taylor kernel.
 """
 @inline function _kernel_taylor!(solver::CompositeBIMSolver, w::TaylorWorkspace, cache, pts, k::Float64, p::Int, gi::Int, gj::Int)::Vector{ComplexF64}
     ca = cache.g2c[gi]; cb = cache.g2c[gj]; ia = cache.g2l[gi]; jb = cache.g2l[gj]
-    ca == cb && return _kernel_taylor!(solver.component_solvers[ca],w,cache.comp_pts[ca],cache.Rmats[ca],cache.Gs[ca],k,p,ia,jb)
+    ca == cb && return _kernel_taylor!(_loop_solver(solver,ca),w,cache.comp_pts[ca],cache.Rmats[ca],cache.Gs[ca],k,p,ia,jb)
     xi,yi = cache.comp_pts[ca].xy[ia]
-    return _kernel_taylor!(solver.component_solvers[cb],w,cache.comp_pts[cb],xi,yi,k,p,jb)
+    return _kernel_taylor!(_loop_solver(solver,cb),w,cache.comp_pts[cb],xi,yi,k,p,jb)
 end
 
 ################################################################################

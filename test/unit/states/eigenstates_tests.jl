@@ -297,7 +297,7 @@ end
     @test st.basis.dim == dim
     @test st.vec == collect(1.0:dim)
     @test st.basis.symmetries == ES_BASIS.symmetries
-    @test st.basis.sym_qnumbers == ES_BASIS.sym_qnumbers
+    @test st.basis.sym_characters == ES_BASIS.sym_characters
 
     @testset "minimum dimension floor" begin
         data_low = compute_eigenstate(solver, ES_BASIS, ES_CIRCLE, 1.0)

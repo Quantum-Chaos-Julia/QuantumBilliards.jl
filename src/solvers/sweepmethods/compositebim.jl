@@ -59,21 +59,32 @@ quadrature. A source component using DLP contributes a double-layer
 cross-component kernel, whereas a source component using CFIE contributes the
 combined `D(k)+ikS(k)` kernel.
 
-Hole components are identified from the domain structure: the hole loops of a
-[`MultiplyConnectedDomain`](@ref) (e.g. [`AnnularBilliard`](@ref),
-[`SinaiBilliard`](@ref)) follow the outer boundary, one component per hole
-object (each hole must be a single closed loop). A billiard without a
-`MultiplyConnectedDomain` has a single outer component.
+Hole components are identified from the domain structure, not from curve
+orientation: the hole loops of a [`MultiplyConnectedDomain`](@ref) (e.g.
+[`AnnularBilliard`](@ref), [`SinaiBilliard`](@ref)) follow the outer boundary,
+one component per hole object; every loop of a hole object (all copies of a
+[`SymmetrizedHoles`](@ref)) uses that object's solver. A billiard with `h`
+holes therefore needs `1 + h` component solvers, ordered as the outer boundary
+followed by the holes in the order of the `holes` of the domain; a billiard
+without a `MultiplyConnectedDomain` has a single outer component and needs one
+solver. A mismatch of the solver count raises an `ArgumentError` when the
+boundary is discretized.
 Holes are discretized in the canonical boundary ordering and their tangent
 orientation is subsequently flipped, without changing node ordering, so that
-the resulting normals follow the physical outward-normal convention.
-Symmetry-reduced solvers are not supported for billiards with holes and a
-nonempty symmetry registry.
+the resulting normals follow the physical outward-normal convention of the
+billiard region (pointing into the hole).
+Symmetry reduction acts on the symmetry group `G'` of the billiard
+([`get_symmetry_group`](@ref)): the outer boundary and every hole object are
+folded by the elements of `G'`, loops exchanged by a symmetry being blocks of
+one boundary group. A reduction generator outside `G'` raises an
+`ArgumentError`; use `symmetry = nothing` (all irreps of `G'` together) or a
+subgroup of `G'`.
 
 ## Attributes
-* `component_solvers::CS`: Tuple containing one DLP or CFIE solver for each connected physical boundary component.
+* `component_solvers::CS`: Tuple with one DLP or CFIE solver per boundary component: the outer boundary first, then one per hole object.
 * `symmetry::Sy`: Optional discrete symmetry shared by all component solvers.
 * `sym_characters::Ch`: Character tuple selecting the common representation of `symmetry`.
+* `loop_solver::Vector{Int}`: Index into `component_solvers` of the solver of every boundary loop, in loop order (outer loop first, then the loops of each hole object).
 
 ## API
 [`evaluate_points`](@ref), [`boundary_matrix_size`](@ref),
@@ -84,6 +95,7 @@ struct CompositeBIMSolver{T<:Real,CS<:Tuple,Sy<:Union{AbsSymmetry,Nothing},Ch<:T
     component_solvers::CS
     symmetry::Sy
     sym_characters::Ch
+    loop_solver::Vector{Int}
 end
 
 """
@@ -97,8 +109,17 @@ and their own boundary grading strategies. All component solvers must,
 however, use the same discrete symmetry and character because symmetry
 reduction is applied to the globally coupled full-boundary operator.
 
+A reduced solver acts through the symmetry group `G'` of the billiard (see
+[`get_symmetry_group`](@ref BilliardGeometry.get_symmetry_group)), so a hole
+must be invariant under every generator it uses, otherwise an
+`ArgumentError` naming `G'` is raised. Loops exchanged by the
+symmetry (the copies of a `SymmetrizedHoles`) share one component solver and are
+discretized with equal node counts; the node count of a loop that the symmetry
+splits into blocks is rounded to a multiple of the number of blocks. A solver
+without symmetry keeps the unreduced discretization.
+
 ## Arguments
-* `component_solvers::SweepBIMSolver...`: Component solvers assigned in the same order as the connected boundary components returned during boundary decomposition.
+* `component_solvers::SweepBIMSolver...`: Component solvers assigned in the same order as the connected boundary components returned during boundary decomposition: the outer boundary first, then one per hole object (`1 + number of holes` solvers for a [`MultiplyConnectedDomain`](@ref) billiard).
 
 ## Returns
 * `solver::CompositeBIMSolver`: Configured composite boundary-integral solver.
@@ -109,12 +130,26 @@ function CompositeBIMSolver(component_solvers::Vararg{SweepBIMSolver})
     sym_characters = component_solvers[1].sym_characters
     all(cs -> cs.symmetry == symmetry && cs.sym_characters == sym_characters, component_solvers) || throw(ArgumentError("All component solvers passed to CompositeBIMSolver must share the same symmetry and sym_characters"))
     T = _bim_numeric_type(component_solvers[1])
-    return CompositeBIMSolver{T,typeof(component_solvers),typeof(symmetry),typeof(sym_characters)}(component_solvers, symmetry, sym_characters)
+    loop_solver = _composite_loop_groups(component_solvers[1].billiard) .+ 1
+    return CompositeBIMSolver{T,typeof(component_solvers),typeof(symmetry),typeof(sym_characters)}(component_solvers, symmetry, sym_characters, loop_solver)
 end
 
 _bim_numeric_type(solver::CompositeBIMSolver{T}) where {T} = T
-# for grid size, mostly legacy now
-_bim_grid_scale(solver::CompositeBIMSolver) = solver.component_solvers[1].pts_scaling_factor[1]
+
+# Component solver of boundary loop `a`; every loop of one hole object shares that object's solver.
+@inline _loop_solver(solver::CompositeBIMSolver, a::Int) = solver.component_solvers[solver.loop_solver[a]]
+
+# Boundary group of every loop in loop order: `0` for the outer boundary, `i` for the loops of the `i`-th hole object.
+_composite_loop_groups(billiard::AbsBilliard) = _composite_loop_groups(billiard.fundamental_domain)
+_composite_loop_groups(::AbsDomain) = Int[0]
+
+function _composite_loop_groups(domain::AbsMultiplyConnectedDomain)
+    groups = Int[0]
+    for (i, h) in enumerate(domain.holes)
+        append!(groups, fill(i, hole_loop_count(h)))
+    end
+    return groups
+end
 
 # Closed boundary loops of the complete billiard boundary in solver order,
 # together with their hole flags. For a MultiplyConnectedDomain the loops come
@@ -122,12 +157,8 @@ _bim_grid_scale(solver::CompositeBIMSolver) = solver.component_solvers[1].pts_sc
 # any other billiard has a single outer loop.
 _composite_components(billiard::AbsBilliard) = _composite_components(billiard.fundamental_domain, billiard)
 
-function _composite_components(domain::AbsMultiplyConnectedDomain, billiard::AbsBilliard)
+function _composite_components(::AbsMultiplyConnectedDomain, billiard::AbsBilliard)
     map = full_boundary_components(billiard)
-    for i in eachindex(domain.holes)
-        nloops = count(==(i), map.group)
-        nloops == 1 || throw(ArgumentError("hole $i consists of $nloops boundary loops; CompositeBIMSolver supports exactly one loop per hole"))
-    end
     return map.curves, map.is_hole
 end
 
@@ -141,8 +172,8 @@ end
 # CFIE solver. Each component therefore retains exactly the grading strategy,
 # resolution rule, and Kress-compatible boundary parametrization implemented by
 # its native solver rather than introducing a separate composite discretization.
-_composite_component_points(cs::DoubleLayerPotentialSolver, group::Vector, k::T) where {T<:Real} = _dlp_evaluate_points(cs, cs.grading, group, k)
-_composite_component_points(cs::CombinedFieldIntegralEquationSolver, group::Vector, k::T) where {T<:Real} = _cfie_evaluate_points(cs, cs.grading, group, k)
+_composite_component_points(cs::DoubleLayerPotentialSolver, group::Vector, k::T; multiple::Int=1, N_override::Union{Nothing,Int}=nothing) where {T<:Real} = _dlp_evaluate_points(cs, cs.grading, group, k; multiple, N_override)
+_composite_component_points(cs::CombinedFieldIntegralEquationSolver, group::Vector, k::T; multiple::Int=1, N_override::Union{Nothing,Int}=nothing) where {T<:Real} = _cfie_evaluate_points(cs, cs.grading, group, k; multiple, N_override)
 
 # Merge the independently discretized connected components into one flat
 # BoundaryPoints object representing the complete physical boundary. All
@@ -302,14 +333,14 @@ end
 
 Construct the exact symmetry orbit map of a CompositeBIMSolver boundary.
 
-Each connected physical boundary component is folded independently using its
-own node count and exact construction provenance from the billiard geometry.
-The component-local orbit maps are then shifted into the concatenated
-composite indexing and combined into one global SymmetryOrbitMap.
-
-Every physical boundary component must be individually invariant under the
-selected symmetry. Symmetries exchanging distinct physical components are not
-supported.
+The loops are folded group by group (the outer boundary, then each hole
+object; the loops of a group are consecutive) using its node count and the exact
+construction provenance from the billiard geometry, see
+[`BilliardGeometry.group_symmetry_orbits`](@ref). The group-local orbit maps
+are then shifted into the concatenated composite indexing and combined into one
+global SymmetryOrbitMap. Every generator of the solver symmetry must belong to
+the symmetry group `G'` of the billiard, otherwise an `ArgumentError` is
+thrown.
 
 No geometric point matching or floating-point tolerances are used.
 
@@ -323,13 +354,15 @@ No geometric point matching or floating-point tolerances are used.
 """
 function _composite_symmetry_orbits(::Type{T}, solver::CompositeBIMSolver, pts::BoundaryPoints{T}) where {T<:Real}
     solver.symmetry === nothing && throw(ArgumentError("_composite_symmetry_orbits requires a nontrivial symmetry"))
-    _require_fundamental_frame_support(solver.component_solvers[1].billiard)
-    nc = length(solver.component_solvers)
-    offs = _composite_offsets(pts, nc)
-    local_orbits = Vector{SymmetryOrbitMap{T}}(undef, nc)
-    @inbounds for a in 1:nc
-        N = offs[a+1] - offs[a]
-        local_orbits[a] = _fold_boundary(T, solver.component_solvers[a].billiard, N, solver.symmetry, solver.sym_characters)
+    billiard = solver.component_solvers[1].billiard
+    offs = _composite_offsets(pts, length(solver.loop_solver))
+    groups = solver.loop_solver
+    ngroups = maximum(groups)
+    local_orbits = Vector{SymmetryOrbitMap{T}}(undef, ngroups)
+    @inbounds for g in 1:ngroups
+        loops = findfirst(==(g), groups):findlast(==(g), groups)
+        N = offs[last(loops)+1] - offs[first(loops)]
+        local_orbits[g] = _fold_group(T, billiard, g - 1, N, solver.symmetry, solver.sym_characters)
     end
     return _combine_composite_orbits(T, local_orbits)
 end
@@ -407,7 +440,7 @@ function _composite_fredholm_full!(A::AbstractMatrix{Complex{T}}, solver::Compos
     fill!(A, zero(Complex{T}))
     nc = length(comp_pts)
     @inbounds for a in 1:nc
-        cs = solver.component_solvers[a]
+        cs = _loop_solver(solver, a)
         pa = comp_pts[a]
         Ga = Gs[a]
         Ra = Rmats[a]
@@ -427,7 +460,7 @@ function _composite_fredholm_full!(A::AbstractMatrix{Complex{T}}, solver::Compos
         end
     end
     for b in 1:nc
-        csb = solver.component_solvers[b]
+        csb = _loop_solver(solver, b)
         pb = comp_pts[b]
         offb = offs[b]
         Nb = length(pb)
@@ -487,10 +520,10 @@ function _composite_fredholm_reduced!(A::AbstractMatrix{Complex{T}}, solver::Com
                 jb = g2l[gj]
                 ph = phase[gj]
                 if ca == cb
-                    cs = solver.component_solvers[ca]
+                    cs = _loop_solver(solver, ca)
                     acc += ph*_composite_component_kernel_entry(cs, comp_pts[ca], Rmats[ca], Gs[ca], k, ia, jb)
                 else
-                    csb = solver.component_solvers[cb]
+                    csb = _loop_solver(solver, cb)
                     xi, yi = comp_pts[ca].xy[ia]
                     acc += ph*_composite_cross_kernel_entry(csb, comp_pts[cb], xi, yi, k, jb)
                 end
@@ -556,11 +589,25 @@ connected boundary components.
 function evaluate_points(solver::CompositeBIMSolver, billiard::Bi, k) where {Bi<:AbsBilliard}
     T = _bim_numeric_type(solver); kT = T(k)
     groups, is_hole = _composite_components(billiard)
-    nc = length(solver.component_solvers)
-    length(groups)==nc || throw(ArgumentError("Billiard boundary has $(length(groups)) component group(s) but CompositeBIMSolver has $nc component solver(s)"))
-    comp_pts = Vector{BoundaryPoints{T}}(undef,nc)
-    @inbounds for a in 1:nc
-        p = _composite_component_points(solver.component_solvers[a],groups[a],kT)
+    loop_groups = _composite_loop_groups(billiard)
+    ngroups = maximum(loop_groups) + 1
+    nsol = length(solver.component_solvers)
+    ngroups == nsol || throw(ArgumentError("Billiard boundary has $ngroups component group(s) but CompositeBIMSolver has $nsol component solver(s)"))
+    loop_groups .+ 1 == solver.loop_solver || throw(ArgumentError("Billiard boundary loops $(loop_groups .+ 1) do not match the loop structure $(solver.loop_solver) the CompositeBIMSolver was built for"))
+    nloops = length(groups)
+    reduced = solver.symmetry !== nothing
+    nblocks = reduced ? [length(BilliardGeometry._group_block_keys(billiard.fundamental_domain, billiard, g)) for g in 0:ngroups-1] : ones(Int, ngroups)
+    forced_N = zeros(Int, ngroups)
+    comp_pts = Vector{BoundaryPoints{T}}(undef,nloops)
+    @inbounds for a in 1:nloops
+        g = loop_groups[a] + 1
+        nl = count(==(g - 1), loop_groups)
+        nb = nblocks[g]
+        splits_loops = nl > 1 && nb > 1 && nb % nl == 0
+        multiple = nl == 1 ? nb : splits_loops ? nb ÷ nl : 1
+        N_override = splits_loops && forced_N[g] != 0 ? forced_N[g] : nothing
+        p = _composite_component_points(_loop_solver(solver, a), groups[a], kT; multiple, N_override)
+        forced_N[g] == 0 && (forced_N[g] = length(p))
         comp_pts[a] = is_hole[a] ? _flip_component_orientation(p) : p
     end
     return _merge_composite_points(comp_pts)
@@ -605,7 +652,8 @@ over source symmetry orbits with the prescribed character phases.
 function construct_matrices(solver::CompositeBIMSolver{T}, pts::BoundaryPoints{T}, k; multithreaded::Bool=true) where {T<:Real}
     @timeit_debug "construct_matrices" begin
         kT = _bim_widen_k(T,k)
-        nc = length(solver.component_solvers); N = length(pts)
+        nc = length(solver.loop_solver); N = length(pts)
+        maximum(solver.loop_solver) == length(solver.component_solvers) || error("CompositeBIMSolver has $(length(solver.component_solvers)) component solver(s) but its boundary loops need $(maximum(solver.loop_solver))")
         @debug "Composite BIM matrix construction started" N kT nc symmetry = solver.symmetry sym_characters = solver.sym_characters
         offs = _composite_offsets(pts,nc)
         comp_pts = [_composite_component_slice(pts,offs[a]:offs[a+1]-1,a) for a in 1:nc]

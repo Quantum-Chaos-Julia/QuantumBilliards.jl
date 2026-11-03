@@ -162,7 +162,7 @@ parity under the reflections \$y\\to-y\$ (character `sym_y`) and \$x\\to-x\$
 | none | none | `cos`, `j ≥ 0` and `sin`, `j ≥ 1` |
 
 Each entry of `symmetries` has a corresponding quantum number at the same
-index in `sym_qnumbers`. When both an x- and a y-axis reflection are present,
+index in `sym_characters`. When both an x- and a y-axis reflection are present,
 the symmetry order is `[YAxisReflection, XYAxisReflection, XAxisReflection]`
 with quantum numbers `[sym_x, sym_x*sym_y, sym_y]`. Symmetry-adapted bases
 require the origin at `(0, 0)` and no rotation.
@@ -177,7 +177,7 @@ additionally store the angular data required for Cartesian spatial gradients.
 * `rot_angle`: Rotation angle of the local polar frame.
 * `dim`: Number of basis functions.
 * `symmetries`: Reflection symmetries applied to the basis, or `nothing`.
-* `sym_qnumbers`: Quantum number for each entry of `symmetries`, or `nothing`.
+* `sym_characters`: Quantum number for each entry of `symmetries`, or `nothing`.
 * `orders`: Integer angular order `j` of each basis function.
 * `trig`: Angular factor of each basis function (`+1` = `cos`, `-1` = `sin`).
 * `use_taylor`: Whether compatible accelerated solvers may use the analytic Taylor representation of the basis.
@@ -200,7 +200,7 @@ struct FourierBessel{T<:Real} <: AbsBasis
     rot_angle::T
     dim::Int
     symmetries::Union{Vector{BilliardGeometry.AbsReflection},Nothing}
-    sym_qnumbers::Union{Vector{T},Nothing}
+    sym_characters::Union{Vector{T},Nothing}
     orders::Vector{Int}
     trig::Vector{Int8}
     use_taylor::Bool
@@ -257,34 +257,34 @@ function FourierBessel(dim::Int; sym_x::Union{Int,Nothing}=nothing, sym_y::Union
     end
     if isnothing(sym_x) && isnothing(sym_y)
         symmetries = nothing
-        sym_qnumbers = nothing
+        sym_characters = nothing
     elseif !isnothing(sym_x) && !isnothing(sym_y)
         symmetries = BilliardGeometry.AbsReflection[
             BilliardGeometry.YAxisReflection(),
             BilliardGeometry.XYAxisReflection(),
             BilliardGeometry.XAxisReflection()
         ]
-        sym_qnumbers = T[T(sym_x), T(sym_x * sym_y), T(sym_y)]
+        sym_characters = T[T(sym_x), T(sym_x * sym_y), T(sym_y)]
     elseif !isnothing(sym_y)
         symmetries = BilliardGeometry.AbsReflection[BilliardGeometry.XAxisReflection()]
-        sym_qnumbers = T[T(sym_y)]
+        sym_characters = T[T(sym_y)]
     else
         symmetries = BilliardGeometry.AbsReflection[BilliardGeometry.YAxisReflection()]
-        sym_qnumbers = T[T(sym_x)]
+        sym_characters = T[T(sym_x)]
     end
     orders, trig = fb_modes(sym_x, sym_y, dim)
-    return FourierBessel{T}(SVector{2,T}(origin), T(rot_angle), dim, symmetries, sym_qnumbers, orders, trig, use_taylor, taylor_degree, T(taylor_radius), T(taylor_tol), gradients)
+    return FourierBessel{T}(SVector{2,T}(origin), T(rot_angle), dim, symmetries, sym_characters, orders, trig, use_taylor, taylor_degree, T(taylor_radius), T(taylor_tol), gradients)
 end
 
-# Reflection characters (sym_x, sym_y) encoded by a symmetries/sym_qnumbers pair.
-function _fb_axis_characters(symmetries::Union{Vector{<:BilliardGeometry.AbsReflection},Nothing}, sym_qnumbers::Union{Vector{<:Real},Nothing})
+# Reflection characters (sym_x, sym_y) encoded by a symmetries/sym_characters pair.
+function _fb_axis_characters(symmetries::Union{Vector{<:BilliardGeometry.AbsReflection},Nothing}, sym_characters::Union{Nothing,Tuple,AbstractVector{<:Real}})
     isnothing(symmetries) && return nothing, nothing
-    isnothing(sym_qnumbers) && throw(ArgumentError("sym_qnumbers must be given together with symmetries"))
-    length(symmetries) == length(sym_qnumbers) || throw(ArgumentError("symmetries and sym_qnumbers must have the same length"))
+    isnothing(sym_characters) && throw(ArgumentError("sym_characters must be given together with symmetries"))
+    length(symmetries) == length(sym_characters) || throw(ArgumentError("symmetries and sym_characters must have the same length"))
     sym_x = nothing
     sym_y = nothing
     has_xy = false
-    for (s, q) in zip(symmetries, sym_qnumbers)
+    for (s, q) in zip(symmetries, sym_characters)
         if s isa BilliardGeometry.YAxisReflection
             sym_x = Int(q)
         elseif s isa BilliardGeometry.XAxisReflection
@@ -302,10 +302,10 @@ function _fb_axis_characters(symmetries::Union{Vector{<:BilliardGeometry.AbsRefl
 end
 
 """
-    FourierBessel(dim::Int, symmetries::Union{Vector{<:BilliardGeometry.AbsReflection},Nothing}, sym_qnumbers::Union{Vector{<:Real},Nothing}; kwargs...) → basis::FourierBessel
+    FourierBessel(dim::Int, symmetries::Union{Vector{<:BilliardGeometry.AbsReflection},Nothing}, sym_characters::Union{Vector{<:Real},Nothing}; kwargs...) → basis::FourierBessel
 
 Construct a [`FourierBessel`](@ref) basis from a reflection `symmetries` vector
-and its `sym_qnumbers`, as stored by an existing basis.
+and its `sym_characters`, as stored by an existing basis.
 
 ## Description
 The characters `sym_x` and `sym_y` are read from the `YAxisReflection` and
@@ -315,7 +315,7 @@ Any other symmetry raises an `ArgumentError`.
 ## Arguments
 * `dim`: Number of basis functions.
 * `symmetries`: Reflection symmetries, or `nothing` for no symmetry restriction.
-* `sym_qnumbers`: Quantum number for each entry of `symmetries`, or `nothing`.
+* `sym_characters`: Quantum number for each entry of `symmetries`, or `nothing`.
 
 ## Keyword Arguments
 * `kwargs...`: Forwarded to the keyword constructor (`origin`, `rot_angle`, `use_taylor`, `taylor_degree`, `taylor_radius`, `taylor_tol`, `gradients`).
@@ -323,8 +323,8 @@ Any other symmetry raises an `ArgumentError`.
 ## Returns
 * `basis`: A [`FourierBessel`](@ref) basis with the requested symmetries.
 """
-function FourierBessel(dim::Int, symmetries::Union{Vector{<:BilliardGeometry.AbsReflection},Nothing}, sym_qnumbers::Union{Vector{<:Real},Nothing}; kwargs...)
-    sym_x, sym_y = _fb_axis_characters(symmetries, sym_qnumbers)
+function FourierBessel(dim::Int, symmetries::Union{Vector{<:BilliardGeometry.AbsReflection},Nothing}, sym_characters::Union{Nothing,Tuple,AbstractVector{<:Real}}; kwargs...)
+    sym_x, sym_y = _fb_axis_characters(symmetries, sym_characters)
     return FourierBessel(dim; sym_x, sym_y, kwargs...)
 end
 
@@ -364,7 +364,8 @@ function FourierBessel(dim::Int, billiard::BilliardGeometry.AbsBilliard, sector:
     isempty(unhandled) || throw(ArgumentError(
         "FourierBessel only supports XAxisReflection/YAxisReflection symmetry " *
         "sectors; sector constrains sym_id(s) $(collect(unhandled)) that " *
-        "FourierBessel has no representation for."))
+        "FourierBessel has no representation for (rotation and two-dimensional " *
+        "dihedral irrep sectors are supported by boundary-integral solvers only)."))
     return FourierBessel(dim; sym_x, sym_y, kwargs...)
 end
 
@@ -386,9 +387,9 @@ Return a [`FourierBessel`](@ref) basis resized to dimension `dim`, reusing
 function resize_basis(basis::FourierBessel{T}, billiard::Bi, dim::Int, k) where {T<:Real,Bi<:AbsBilliard}
     basis.dim == dim && return basis
     dim >= 1 || throw(ArgumentError("dim must be at least 1"))
-    sym_x, sym_y = _fb_axis_characters(basis.symmetries, basis.sym_qnumbers)
+    sym_x, sym_y = _fb_axis_characters(basis.symmetries, basis.sym_characters)
     orders, trig = fb_modes(sym_x, sym_y, dim)
-    return FourierBessel{T}(basis.origin, basis.rot_angle, dim, basis.symmetries, basis.sym_qnumbers, orders, trig,
+    return FourierBessel{T}(basis.origin, basis.rot_angle, dim, basis.symmetries, basis.sym_characters, orders, trig,
                             basis.use_taylor, basis.taylor_degree, basis.taylor_radius, basis.taylor_tol, basis.gradients)
 end
 

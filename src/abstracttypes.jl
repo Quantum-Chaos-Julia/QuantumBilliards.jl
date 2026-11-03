@@ -1,6 +1,6 @@
 
 """
-AbsBasis
+    AbsBasis
 
 `AbsBasis` is the abstract supertype for all basis representations used to
 approximate eigenstates and boundary solutions of a quantum billiard.
@@ -26,7 +26,7 @@ abstract type AbsBasis end
 abstract type BasisCache end
 
 """
-AbsSolver
+    AbsSolver
 
 `AbsSolver` is the abstract supertype for all algorithms that determine
 quantum billiard eigenvalues (wavenumbers) and eigenvectors from a boundary
@@ -47,7 +47,7 @@ The following functions can be evaluated for any `AbsSolver`:
 abstract type AbsSolver end
 
 """
-AbsBIMSolver <: AbsSolver
+    AbsBIMSolver <: AbsSolver
 
 `AbsBIMSolver` is the abstract supertype for all algorithms that determine
 quantum billiard eigenvalues (wavenumbers) from a Nyström/boundary-integral
@@ -71,7 +71,7 @@ The following functions can be evaluated for any `AbsBIMSolver`:
 abstract type AbsBIMSolver <: AbsSolver end
 
 """
-SweepBIMSolver <: AbsBIMSolver
+    SweepBIMSolver <: AbsBIMSolver
 
 `SweepBIMSolver` is the abstract supertype for boundary-integral solvers that
 locate quantum billiard eigenvalues by sweeping over a range of individual
@@ -109,7 +109,7 @@ abstract type DLP <: SweepBIMSolver end
 abstract type CFIE <: SweepBIMSolver end
 
 """
-AcceleratedBIMSolver <: AbsBIMSolver
+    AcceleratedBIMSolver <: AbsBIMSolver
 
 `AcceleratedBIMSolver` is the abstract supertype for boundary-integral solvers
 that recover eigenvalues near a target wavenumber `k` from the nonlinear
@@ -127,11 +127,7 @@ second-order local Taylor expansion of `A(k)`. Every concrete
 parameters (Beyn's `m`/`nq`/`r`/`svd_tol`/`res_tol`, EBIM's Taylor
 settings) as fields, so its widest-scope entry point,
 [`compute_spectrum`](@ref), takes only the wavenumber range `[k1,k2]` (plus a
-small number of merge-strategy keyword arguments) — unlike `-develop`'s
-`solve_spectrum_beyn`/`solve_spectrum_ebim`, which scatter these same knobs
-across dozens of call-site keyword arguments because `-develop`'s
-`BeynSolver`/`EBIMSolver` are mere `Union` traits, not parameter-holding
-structs. `BeynSolver`'s [`compute_spectrum`](@ref) covers `[k1,k2]` with
+small number of merge-strategy keyword arguments). `BeynSolver`'s [`compute_spectrum`](@ref) covers `[k1,k2]` with
 consecutive Weyl-balanced contour windows and concatenates each window's
 already-filtered result (no fuzzy overlap merge needed, windows are
 disjoint by construction); `ExpandedBIMSolver`'s corrects a dense adaptive
@@ -154,7 +150,7 @@ abstract type AcceleratedBIMSolver <: AbsBIMSolver end
 abstract type AbsState end
 
 """
-AbsBasisSolver <: AbsSolver
+    AbsBasisSolver <: AbsSolver
 
 `AbsBasisSolver` is the abstract supertype for all algorithms that determine
 quantum billiard eigenvalues (wavenumbers) and eigenvectors from a boundary
@@ -163,7 +159,7 @@ discretization by expanding the solution in a basis.
 ## Description
 Concrete solvers hold the parameters controlling boundary sampling and basis
 dimension scaling (e.g. `dim_scaling_factor`, `pts_scaling_factor`, `sampler`,
-`min_dim`, `min_pts`) as well as the numerical tolerance `eps` used when
+`min_dim`, `min_pts`) as well as the numerical tolerance `eig_tol` used when
 filtering the generalized eigenvalue problem. `AbsBasisSolver` has two direct
 concrete-algorithm branches, [`SweepBasisSolver`](@ref) and
 [`AcceleratedBasisSolver`](@ref), distinguished by whether the spectrum is
@@ -179,7 +175,7 @@ The following functions can be evaluated for any `AbsBasisSolver`:
 abstract type AbsBasisSolver <: AbsSolver end
 
 """
-SweepBasisSolver <: AbsBasisSolver
+    SweepBasisSolver <: AbsBasisSolver
 
 `SweepBasisSolver` is the abstract supertype for solvers that locate quantum
 billiard eigenvalues by sweeping over a range of individual wavenumbers and
@@ -205,7 +201,7 @@ The following functions can be evaluated for any `SweepBasisSolver`:
 abstract type SweepBasisSolver <: AbsBasisSolver end
 
 """
-AcceleratedBasisSolver <: AbsBasisSolver
+    AcceleratedBasisSolver <: AbsBasisSolver
 
 `AcceleratedBasisSolver` is the abstract supertype for solvers that recover
 every eigenvalue within a wavenumber window `dk` of a target wavenumber `k`
@@ -230,7 +226,7 @@ The following functions can be evaluated for any `AcceleratedBasisSolver`:
 abstract type AcceleratedBasisSolver <: AbsBasisSolver end
 
 """
-AbsState
+    AbsState
 
 `AbsState` is the abstract supertype for all representations of a quantum
 billiard state expressed through a coefficient vector `vec` at a wavenumber

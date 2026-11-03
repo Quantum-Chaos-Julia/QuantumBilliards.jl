@@ -103,10 +103,9 @@ function try_MKL!()
     if Sys.ARCH==:x86_64
         try
             @eval using MKL
-            println(BLAS.get_config())
+            @info "BLAS backend: $(BLAS.get_config())"
         catch e
-            println(e)
-            @warn "Install Math Kernel Library (MKL) via MKL.jl"
+            @warn "Install Math Kernel Library (MKL) via MKL.jl" exception=e
             @info "Defaulting to stock BLAS backend: $(BLAS.vendor())"
         end
     else

@@ -54,8 +54,7 @@ end
 
 function make_veech_right_triangle_and_basis(n; edge_i=1)
     if n < 4
-        println("Order must be 4 or above.")
-        print("Setting n to 4.")
+        @warn "Order must be 4 or above, setting n to 4."
         n = 4
     end
     chi = (n-2)/2
@@ -65,8 +64,7 @@ end
 
 function make_veech_right_triangle(n)
     if n < 4
-        println("Order must be 4 or above.")
-        print("Setting n to 4.")
+        @warn "Order must be 4 or above, setting n to 4."
         n = 4
     end
     chi = (n-2)/2

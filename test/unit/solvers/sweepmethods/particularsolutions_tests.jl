@@ -49,7 +49,7 @@ pm_rect() = RectangleBilliard(1.0, 0.7)
     @testset "returned fields" begin
         @test pts isa BoundaryPoints{Float64}
         N = length(pts)
-        @test N == sum(Ns) && N > 40
+        @test N == sum(Ns) && N >= 40
         @test length(pts.xy) == length(pts.normal) == length(pts.s) == length(pts.ds) == N
         @test !isempty(pts.xy_int)
         @test isempty(pts.w_dm)                                             # Rellich weights belong to the decomposition method
@@ -120,12 +120,12 @@ end
 
     @testset "the number of boundary points follows the scaling factors" begin
         solver = ParticularSolutionsMethodSolver(2.0, 3.0, 2.0; min_int_pts=10)
-        small = length(evaluate_points(solver, rect, 20.0))
-        @test small == sum(_determine_bp_sizes(curves, [3.0, 3.0], 20.0))
-        large = length(evaluate_points(solver, rect, 40.0))
+        small = length(evaluate_points(solver, rect, 100.0))
+        @test small == sum(_determine_bp_sizes(curves, [3.0, 3.0], 100.0))
+        large = length(evaluate_points(solver, rect, 200.0))
         @test abs(large - 2small) <= 2                                      # linear in k up to rounding
         double = ParticularSolutionsMethodSolver(2.0, 6.0, 2.0; min_int_pts=10)
-        @test abs(length(evaluate_points(double, rect, 20.0)) - 2small) <= 2
+        @test abs(length(evaluate_points(double, rect, 100.0)) - 2small) <= 2
     end
 
     @testset "per-curve scaling factors" begin
@@ -309,9 +309,9 @@ end
 
     @testset "degenerate numerical rank gives Inf" begin
         basis = pm_ToyBasis(1)
-        @test solve_with_rank_reduction(solver, basis, pts, k; tol=10.0) == Inf
-        @test solve(solver, basis, pts, k; tol=10.0) == Inf
-        t, x = solve_vect(solver, basis, pts, k; tol=10.0)
+        @test solve_with_rank_reduction(solver, basis, pts, k; rank_tol=10.0) == Inf
+        @test solve(solver, basis, pts, k; rank_tol=10.0) == Inf
+        t, x = solve_vect(solver, basis, pts, k; rank_tol=10.0)
         @test t == Inf
         @test x == zeros(1)
     end

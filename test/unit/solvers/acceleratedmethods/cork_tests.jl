@@ -31,7 +31,7 @@ using Random: MersenneTwister
 using QuantumBilliards: construct_matrices, _bim_numeric_type, TaylorWorkspace, power_to_cheb, taylor_to_cheb!, CORKPolynomial,
                         build_cork_polynomial, evaluate_cork_polynomial, validate_polynomial, get_A0, cache_block!,
                         compact_project!, compact_block_qr!, pack!, unpack!, init_cork, compute_tail!, promote_tail!, extend!,
-                        ritz_roots, reconstruct_cork_eigenvectors, adaptive_cork, _cork_solve_core, _cork_kernel_name,
+                        ritz_roots, reconstruct_cork_eigenvectors, adaptive_cork, _cork_solve_core, _cork_solve, _cork_kernel_name,
                         _cork_warn_if_incomplete
 
 # Roots, polynomial strength and orthogonal Q of the synthetic problem; the cache is the token returned by `_taylor_cache`.
@@ -86,7 +86,7 @@ const CK_INSIDE_IDX = 11:14                                                  # c
 const CK_DOUBLE_IDX = 12:13
 
 # Block size 2 resolves the double root; the loose residual tolerance lets the Krylov iteration stop below the matrix size.
-ck_solver(; kwargs...) = CORKSolver(ck_problem(); merge((p=3, b=2, mstart=12, mstep=2, res_tol=1e-6), NamedTuple(kwargs))...)
+ck_solver(; kwargs...) = CORKSolver(ck_problem(); merge((p=3, block_size=2, mstart=12, mstep=2, res_tol=1e-6), NamedTuple(kwargs))...)
 
 # Degree-p Chebyshev polynomial of the synthetic problem about k0 with half-width Δ, and the LU factorization of P(0).
 ck_polynomial(p::Int=3; k0=CK_K0, Δ=CK_DPOLY) = build_cork_polynomial(ck_problem(), CK_PTS, k0, Δ, p; multithreaded=false)[1]
@@ -95,7 +95,7 @@ ck_factor(P::CORKPolynomial) = lu(get_A0(P.B, P.N, P.p))
 # CORK state extended to the compact Krylov dimension m (a normalized tail is pending).
 function ck_state(m::Int; b::Int=2, p::Int=3)
     P = ck_polynomial(p); F = ck_factor(P)
-    S = init_cork(P.B, p, P.N; b=b)
+    S = init_cork(P.B, p, P.N; block_size=b)
     extend!(S, P.B, F, m)
     return P, F, S
 end
@@ -318,13 +318,13 @@ end
 
     @testset "dimension checks" begin
         B = zeros(ComplexF64, 4 * 4, 4)
-        @test_throws "exceeds physical matrix dimension" init_cork(zeros(ComplexF64, 6 * 4, 4), 5, 4; b=2)     # p > N
-        @test_throws "smaller than block size" init_cork(B, 3, 4; b=5)                                       # N < b
-        @test_throws "smaller than block size" init_cork(zeros(ComplexF64, 3 * 12, 12), 2, 12; b=5)           # p^2 < b
+        @test_throws "exceeds physical matrix dimension" init_cork(zeros(ComplexF64, 6 * 4, 4), 5, 4; block_size=2)     # p > N
+        @test_throws "smaller than block size" init_cork(B, 3, 4; block_size=5)                                       # N < b
+        @test_throws "smaller than block size" init_cork(zeros(ComplexF64, 3 * 12, 12), 2, 12; block_size=5)           # p^2 < b
     end
 
     @testset "state layout" begin
-        S = init_cork(P.B, 3, CK_N; b=2)
+        S = init_cork(P.B, 3, CK_N; block_size=2)
         @test S isa QuantumBilliards.CORKState
         @test (S.r, S.n, S.b, S.p, S.N, S.rmax) == (3, 2, 2, 3, CK_N, CK_N)
         @test !S.pending && S.napply == 0
@@ -334,7 +334,7 @@ end
     end
 
     @testset "physical basis, cached actions and starting block" begin
-        S = init_cork(P.B, 3, CK_N; b=2)
+        S = init_cork(P.B, 3, CK_N; block_size=2)
         U = S.U[:, 1:3]
         @test U' * U ≈ Matrix(1.0I, 3, 3) atol = 1e-13
         for j in 0:3
@@ -346,7 +346,7 @@ end
     end
 
     @testset "the start is deterministic" begin
-        S1 = init_cork(P.B, 3, CK_N; b=2); S2 = init_cork(P.B, 3, CK_N; b=2)
+        S1 = init_cork(P.B, 3, CK_N; block_size=2); S2 = init_cork(P.B, 3, CK_N; block_size=2)
         @test S1.U == S2.U && S1.G == S2.G
     end
 end
@@ -354,7 +354,7 @@ end
 @testset "compute_tail! / promote_tail! / extend!: Arnoldi bookkeeping" begin
     @testset "compute_tail! produces one pending orthonormal block and is idempotent" begin
         P = ck_polynomial(3); F = ck_factor(P)
-        S = init_cork(P.B, 3, CK_N; b=2)
+        S = init_cork(P.B, 3, CK_N; block_size=2)
         @test compute_tail!(S, P.B, F) === nothing
         @test S.pending && S.napply == 1 && S.n == 2
         @test S.r > 3                                                        # the inverse action enlarges the physical basis
@@ -368,7 +368,7 @@ end
 
     @testset "promote_tail! increases the active dimension by b" begin
         P = ck_polynomial(3); F = ck_factor(P)
-        S = init_cork(P.B, 3, CK_N; b=2)
+        S = init_cork(P.B, 3, CK_N; block_size=2)
         compute_tail!(S, P.B, F)
         promote_tail!(S)
         @test S.n == 4 && !S.pending
@@ -389,7 +389,7 @@ end
 
     @testset "extend! argument checks" begin
         P = ck_polynomial(3); F = ck_factor(P)
-        S = init_cork(P.B, 3, CK_N; b=2)
+        S = init_cork(P.B, 3, CK_N; block_size=2)
         @test_throws "divisible by block size" extend!(S, P.B, F, 5)
         @test_throws "exceeds available dimension" extend!(S, P.B, F, CK_N + 2)
         extend!(S, P.B, F, 6)
@@ -404,7 +404,7 @@ end
 
     @testset "the Chebyshev action needs p >= 2" begin
         P1 = ck_polynomial(1)
-        S = init_cork(P1.B, 1, CK_N; b=1)
+        S = init_cork(P1.B, 1, CK_N; block_size=1)
         @test_throws "requires p >= 2" compute_tail!(S, P1.B, ck_factor(P1))
     end
 end
@@ -436,7 +436,7 @@ end
 
     @testset "state checks" begin
         @test_throws "State dimension" ritz_roots(S, CK_K0, CK_DPOLY, CK_N - 2)
-        S0 = init_cork(P.B, 3, CK_N; b=2)
+        S0 = init_cork(P.B, 3, CK_N; block_size=2)
         @test_throws "Arnoldi tail missing" ritz_roots(S0, CK_K0, CK_DPOLY, 2)
     end
 end
@@ -479,7 +479,7 @@ end
 
 @testset "adaptive_cork: convergence loop" begin
     P = ck_polynomial(3); F = ck_factor(P)
-    kw = (k0=CK_K0, Δ=CK_DELTA, Δpoly=CK_DPOLY, b=2, mstart=12, mstep=2, stable_checks=1, res_tol=1e-6)
+    kw = (k0=CK_K0, Δ=CK_DELTA, Δpoly=CK_DPOLY, block_size=2, mstart=12, mstep=2, stable_checks=1, res_tol=1e-6)
 
     @testset "accepted roots, requested roots and edges" begin
         S, ks, Ψ, requested, allroots, edges, edge_good, m = adaptive_cork(P.B, F, 3, CK_N; kw...)
@@ -502,7 +502,7 @@ end
 
     @testset "a window without roots converges to an empty spectrum" begin
         Pe = ck_polynomial(3; k0=4.0, Δ=0.2 * (1 + CK_GUARD))
-        _, ks, Ψ, requested, _, edges, edge_good, _ = adaptive_cork(Pe.B, ck_factor(Pe), 3, CK_N; k0=4.0, Δ=0.2, Δpoly=0.2 * (1 + CK_GUARD), b=2, mstart=12, mstep=2, eigenvectors=true)
+        _, ks, Ψ, requested, _, edges, edge_good, _ = adaptive_cork(Pe.B, ck_factor(Pe), 3, CK_N; k0=4.0, Δ=0.2, Δpoly=0.2 * (1 + CK_GUARD), block_size=2, mstart=12, mstep=2, eigenvectors=true)
         @test isempty(ks) && isempty(requested)
         @test size(Ψ) == (CK_N, 0)
         @test edges == (nothing, nothing)
@@ -552,7 +552,7 @@ end
     end
 
     @testset "a larger polynomial degree represents the same operator" begin
-        solver1 = ck_solver(b=1)                                             # block size 1 converges within N also for p = 5
+        solver1 = ck_solver(block_size=1)                                             # block size 1 converges within N also for p = 5
         ks3, _ = solve(solver1, CK_PTS, CK_K0, CK_DK; multithreaded=false)
         ks5, _ = solve(solver1, CK_PTS, CK_K0, CK_DK; multithreaded=false, p=5)
         @test real.(ks5) ≈ [2.85, 3.0, 3.3] atol = 1e-6
@@ -566,22 +566,22 @@ end
     end
 
     @testset "multiplicity is limited by the block size" begin
-        ks1, _ = solve(ck_solver(b=1, mstart=10, res_tol=1e-10), CK_PTS, CK_K0, CK_DK; multithreaded=false)
+        ks1, _ = solve(ck_solver(block_size=1, mstart=10, res_tol=1e-10), CK_PTS, CK_K0, CK_DK; multithreaded=false)
         @test real.(ks1) ≈ [2.85, 3.0, 3.3] atol = 1e-6                      # a single starting vector sees one copy of the double root
     end
 
     @testset "a too small initial Krylov dimension does not yield an empty spectrum when levels are expected" begin
         # mstart = 6 leaves no Ritz root in the window at m = 6 and m = 8; with the expected level count the empty
         # spectrum is not accepted and the Krylov dimension keeps growing until the four roots appear.
-        ks_small, _ = solve(ck_solver(mstart=6), CK_PTS, CK_K0, CK_DK; multithreaded=false, expected=4.0)
+        ks_small, _ = _cork_solve(ck_solver(mstart=6), CK_PTS, CK_K0, CK_DK; multithreaded=false, expected=4.0)
         @test length(ks_small) == 4
         @test real.(ks_small) ≈ [2.85, 3.0, 3.0, 3.3] atol = 1e-6
     end
 
     @testset "an empty window with expected < 0.5 still returns an empty spectrum" begin
-        ks_empty, _ = solve(ck_solver(), CK_PTS, 4.0, 0.4; multithreaded=false, expected=0.1)
+        ks_empty, _ = _cork_solve(ck_solver(), CK_PTS, 4.0, 0.4; multithreaded=false, expected=0.1)
         @test isempty(ks_empty)
-        @test_throws "Reached full CORK Krylov dimension" solve(ck_solver(), CK_PTS, 4.0, 0.4; multithreaded=false, expected=3.0)
+        @test_throws "Reached full CORK Krylov dimension" _cork_solve(ck_solver(), CK_PTS, 4.0, 0.4; multithreaded=false, expected=3.0)
     end
 end
 
@@ -601,10 +601,6 @@ end
         @test size(Ψ) == (CK_N, length(ks))
     end
 
-    @testset "validate = true accepts an exact polynomial and rejects a truncated one" begin
-        @test length(solve(ck_solver(validate=true), CK_PTS, CK_K0, CK_DK; multithreaded=false)[1]) == 4
-        @test_throws ArgumentError solve(ck_solver(validate=true), CK_PTS, CK_K0, CK_DK; multithreaded=false, p=2)
-    end
 end
 
 @testset "solve_wavenumber / solve_spectrum on the synthetic kernel" begin
@@ -642,7 +638,7 @@ end
 
 # The synthetic kernel has no symmetry, so the Weyl count is that of the full unit circle (area/perimeter terms of `state_at_k`).
 # Helper definitions use the prefix `ck_`.
-ck_weyl(k1, k2) = QuantumBilliards.state_at_k(k2, ck_circle; fundamental=false) - QuantumBilliards.state_at_k(k1, ck_circle; fundamental=false)
+ck_weyl(k1, k2) = QuantumBilliards.state_at_k(k2, ck_circle; fundamental_only=false) - QuantumBilliards.state_at_k(k1, ck_circle; fundamental_only=false)
 ck_tolerance(expected) = max(0.3 * expected, 3.0)
 
 @testset "_cork_warn_if_incomplete: Weyl-law completeness warning" begin

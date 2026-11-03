@@ -32,6 +32,12 @@
 # reflection and cyclic sectors separately, but not general dihedral
 # representations.
 #
+# A two-dimensional irrep E_k of a dihedral group D_d restricts to the cyclic
+# subgroup as the sum of the sectors s = k and s = d-k. The BIM solve in the
+# cyclic sector s = k therefore contains every E_k level once; each level is
+# twofold degenerate in the full problem. `symmetry_sector(billiard; irrep2d = k)`
+# selects that cyclic sector and records the degeneracy.
+#
 # Since symmetry IDs are local to a billiard's symmetry registry, a
 # `SymmetrySector` may only be resolved against the exact billiard instance
 # from which it was constructed.
@@ -49,62 +55,201 @@ the sector specifies which representation of that group is selected.
 
 ## Attributes
 * `billiard::Bi`: Billiard against which the symmetry generators were resolved.
-* `characters::Dict{Int,ComplexF64}`: Map from registered symmetry IDs to their selected irreducible-representation characters.
+* `characters::Dict{Int,ComplexF64}`: Map from registered symmetry IDs to their selected irreducible-representation characters. For a two-dimensional irrep `E_k` these are the characters of the cyclic sector `s = k`.
+* `degeneracy::Int`: Dimension of the selected irrep: `1`, or `2` for a dihedral `E_k` sector.
 
 ## API
 * [`symmetry_sector`](@ref)
+* [`symmetry_degeneracy`](@ref)
 """
 struct SymmetrySector{Bi<:BilliardGeometry.AbsBilliard}
     billiard::Bi
     characters::Dict{Int,ComplexF64}
+    degeneracy::Int
 end
+SymmetrySector(billiard::BilliardGeometry.AbsBilliard, characters::Dict{Int,ComplexF64}) = SymmetrySector(billiard, characters, 1)
+
+"""
+    symmetry_degeneracy(sector::SymmetrySector) → n::Int
+
+Dimension of the irrep selected by `sector`; every level of the full problem in
+this sector is `n`-fold degenerate.
+"""
+symmetry_degeneracy(sector::SymmetrySector) = sector.degeneracy
 
 # Validates and converts a requested representation choice for `sym` into its
 # one-dimensional irrep character: `±1` for any reflection generator, or
 # `exp(2πi*sector*m/N)` for the `m`-th image of an `N`-fold rotation.
-function _sector_character(::BilliardGeometry.AbsReflection, val::Integer)
+function _sector_character(::BilliardGeometry.AbsReflection, val::Integer, d::Integer = 0)
     abs(val) == 1 || throw(ArgumentError("Reflection character must be ±1; received $val"))
     return ComplexF64(val)
 end
-function _sector_character(sym::BilliardGeometry.NFoldRotation, sector::Integer)
-    (0 <= sector < sym.order) || throw(ArgumentError("Rotation sector must be in 0:$(sym.order-1); received $sector"))
+function _sector_character(sym::BilliardGeometry.NFoldRotation, sector::Integer, d::Integer = sym.order)
+    (0 <= sector < d) || throw(ArgumentError("Rotation sector must be in 0:$(d-1); received $sector"))
     return cis(2*pi*sector*sym.m/sym.order)
 end
 
+# Order of the rotation subgroup of a symmetry group: the identity and every orientation-preserving element.
+_rotation_subgroup_order(group) = 1 + count(g -> !BilliardGeometry.orientation_reversing(g), group)
+
 """
-    symmetry_sector(billiard::BilliardGeometry.AbsBilliard, choices::Pair...) → sector::SymmetrySector
+    symmetry_sector(billiard::BilliardGeometry.AbsBilliard, choices::Pair...; irrep2d=nothing) → sector::SymmetrySector
 
 Construct a [`SymmetrySector`](@ref) for `billiard` from representation choices
 of the form `GeneratorType => value`.
 
-Every registered symmetry whose type matches `GeneratorType` is assigned the
+Every symmetry of the billiard's symmetry group `G'` (see
+[`get_symmetry_group`](@ref BilliardGeometry.get_symmetry_group); for a billiard
+with holes, the registered elements that leave every hole invariant) whose type
+matches `GeneratorType` is assigned the
 corresponding one-dimensional irreducible-representation character. Reflection
-values must be `±1`. For an `N`-fold rotation, an integer sector `s ∈ 0:N-1`
-assigns
+values must be `±1`. For an `N`-fold rotation, an integer sector `s` in
+`0:d-1`, with `d` the order of the rotation subgroup of `G'`, assigns
 
     χ_s(g^m) = exp(2πi s m/N)
 
-to each registered rotation element `g^m`. Requesting a generator type not
-registered by the billiard raises an `ArgumentError`.
+to each rotation element `g^m` of `G'`. Requesting a generator type that the
+billiard does not register raises an `ArgumentError`; requesting one that is
+registered but broken by a hole raises an `ArgumentError` naming `G'`.
 
 ## Arguments
 * `billiard::BilliardGeometry.AbsBilliard`: Billiard whose registered symmetries define the available generators.
 * `choices::Pair...`: `GeneratorType => value` pairs selecting the representation sector.
 
+## Keyword Arguments
+* `irrep2d::Union{Nothing,Integer} = nothing`: Index `k` of the two-dimensional irrep `E_k` of a dihedral group `D_d`, `1 ≤ k < d/2`. The sector is the cyclic sector `s = k`, which contains every `E_k` level once; each level is twofold degenerate in the full problem (`symmetry_degeneracy(sector) == 2`). Cannot be combined with `choices`.
+
 ## Returns
 * `sector::SymmetrySector`: Representation sector associated with `billiard`.
 """
-function symmetry_sector(billiard::BilliardGeometry.AbsBilliard, choices::Pair...)
+function symmetry_sector(billiard::BilliardGeometry.AbsBilliard, choices::Pair...; irrep2d::Union{Nothing,Integer} = nothing)
+    isnothing(irrep2d) || return _irrep2d_sector(billiard, choices, irrep2d)
     allunique(first.(choices)) || throw(ArgumentError("symmetry_sector received duplicate generator types among choices; each GeneratorType may appear at most once"))
+    group = BilliardGeometry.get_symmetry_group(billiard)
+    d = _rotation_subgroup_order(group)
     characters = Dict{Int,ComplexF64}()
     for (GenType, val) in choices
-        matches = filter(s -> s isa GenType, billiard.symmetries)
-        isempty(matches) && throw(ArgumentError("Billiard has no registered $(GenType) symmetry generator"))
+        matches = filter(s -> s isa GenType, group)
+        if isempty(matches)
+            any(s -> s isa GenType, billiard.symmetries) && throw(ArgumentError("$(GenType) is registered by the billiard but not in its symmetry group G' = $(_group_description(group)); a hole breaks it"))
+            throw(ArgumentError("Billiard has no registered $(GenType) symmetry generator"))
+        end
         for sym in matches
-            characters[sym.sym_id] = _sector_character(sym, val)
+            characters[sym.sym_id] = _sector_character(sym, val, d)
         end
     end
     return SymmetrySector(billiard, characters)
+end
+
+# Number of 2D irreps of a dihedral group with `d` rotations: k = 1, ..., ⌈d/2⌉-1.
+_n_irreps_2d(d::Integer) = (d - 1) ÷ 2
+
+function _irrep2d_sector(billiard::BilliardGeometry.AbsBilliard, choices, k::Integer)
+    isempty(choices) || throw(ArgumentError("irrep2d cannot be combined with generator choices; a two-dimensional irrep is selected by its index alone"))
+    group = BilliardGeometry.get_symmetry_group(billiard)
+    d = _rotation_subgroup_order(group)
+    nmirror = length(group) + 1 - d
+    (nmirror == d && d >= 3) || throw(ArgumentError("irrep2d requires a dihedral symmetry group D_d with d ≥ 3; the billiard's group is $(_group_description(group))"))
+    1 <= k <= _n_irreps_2d(d) || throw(ArgumentError("irrep2d must be in 1:$(_n_irreps_2d(d)) for D_$d; received $k"))
+    characters = Dict{Int,ComplexF64}()
+    for sym in group
+        sym isa BilliardGeometry.NFoldRotation && (characters[sym.sym_id] = _sector_character(sym, k, d))
+    end
+    return SymmetrySector(billiard, characters, 2)
+end
+
+_group_description(group) = isempty(group) ? "{e}" : "{e, " * join(string.(group), ", ") * "}"
+
+"""
+    symmetry_irreps(billiard::BilliardGeometry.AbsBilliard) → info::NamedTuple
+
+Classify the symmetry group `G'` of `billiard` (see
+[`get_symmetry_group`](@ref BilliardGeometry.get_symmetry_group)) and list its
+one-dimensional irreps in the form accepted by
+`symmetry_sector(billiard, characters...)`.
+
+## Returns
+* `info.group`: Group label, `"trivial"`, `"C_d"` (rotations only) or `"D_d"` (`d` rotations and `d` mirrors, `D_1` being a single mirror).
+* `info.order`: Group order `|G'|`.
+* `info.generators`: Minimal generators, in the order the `characters` entries refer to.
+* `info.characters`: One `Tuple{Vararg{Int}}` per 1D irrep: `±1` per mirror generator, or the sector `s ∈ 0:d-1` of a cyclic group.
+* `info.n_2d`: Number of 2D irreps `E_k`.
+* `info.irreps_2d`: Indices `k` accepted by `symmetry_sector(billiard; irrep2d = k)`.
+"""
+function symmetry_irreps(billiard::BilliardGeometry.AbsBilliard)
+    group = BilliardGeometry.get_symmetry_group(billiard)
+    order = length(group) + 1
+    isempty(group) && return (group = "trivial", order = 1, generators = (), characters = [()], n_2d = 0, irreps_2d = Int[])
+    gens = BilliardGeometry.get_symmetries(group)
+    d = _rotation_subgroup_order(group)
+    nmirror = order - d
+    if nmirror == 0
+        return (group = "C_$d", order = order, generators = gens, characters = [(s,) for s in 0:d-1], n_2d = 0, irreps_2d = Int[])
+    end
+    nmirror == d || throw(ArgumentError("symmetry group of order $order with $d rotations and $nmirror mirrors is not dihedral"))
+    all(g -> g isa BilliardGeometry.AbsReflection, gens) || throw(ArgumentError("dihedral group generators are expected to be mirrors; received $(map(typeof, gens))"))
+    ng = length(gens)
+    all_chars = collect(Iterators.product(ntuple(_ -> (1, -1), ng)...))[:]
+    chars = isodd(d) && d > 1 ? filter(allequal, all_chars) : all_chars
+    return (group = "D_$d", order = order, generators = gens, characters = Tuple{Vararg{Int}}[c for c in chars], n_2d = _n_irreps_2d(d), irreps_2d = collect(1:_n_irreps_2d(d)))
+end
+
+_symmetry_label(g::BilliardGeometry.AbsSymmetry) = string(g)
+_symmetry_label(g::BilliardGeometry.NFoldRotation) = "Rotation(2π*$(g.m)/$(g.order))"
+_irrep_description(::BilliardGeometry.AbsReflection, χ::Integer) = χ == 1 ? "+1 (Neumann on the mirror)" : "-1 (Dirichlet on the mirror)"
+function _irrep_description(::BilliardGeometry.NFoldRotation, s::Integer, d::Integer)
+    d1 = s == 0 || 2s == d
+    return d1 ? "s=$s (real)" : "s=$s (complex, degenerate with s=$(d - s))"
+end
+
+"""
+    log_symmetries(billiard::BilliardGeometry.AbsBilliard) → nothing
+
+Log with `@info` the symmetry group `G'` of `billiard`, its irreps and, for each
+irrep, the character tuple to pass to [`symmetry_sector`](@ref), e.g.
+`symmetry_sector(billiard, (1, -1))`. Each generator's meaning is on its own line.
+
+## Character tuples
+A character tuple has one entry per generator in `info.generators` (the order of
+[`get_symmetries`](@ref BilliardGeometry.get_symmetries)) and selects one irrep.
+It is accepted by `symmetry_sector(billiard, tuple)` and by the `sym_characters`
+keyword of the BIM solvers.
+
+* Mirror generator: `+1` (Neumann on the mirror) or `-1` (Dirichlet on the mirror).
+* Rotation group `C_d`: a single entry, the cyclic sector `s ∈ 0:d-1`, meaning the rotation by `2π/d` acts on the wavefunction as the phase `exp(2πi s/d)`. Sectors `s` and `d-s` are complex conjugates and degenerate.
+* Dihedral group `D_d`, one-dimensional irreps: one `±1` per mirror generator. For odd `d` both mirrors must carry the same sign.
+* Dihedral group `D_d`, two-dimensional irrep `E_k`: a single entry `k ∈ 1:⌊(d-1)/2⌋`, which is solved in the cyclic sector `s = k`. Every level is twofold degenerate in the full problem.
+"""
+function log_symmetries(billiard::BilliardGeometry.AbsBilliard)
+    name = nameof(typeof(billiard))
+    info = symmetry_irreps(billiard)
+    if info.order == 1
+        @info "$name: no symmetry, a single (trivial) sector; use symmetry_sector(billiard) with no characters"
+        return nothing
+    end
+    gens = info.generators
+    d = _rotation_subgroup_order(BilliardGeometry.get_symmetry_group(billiard))
+    lines1d = String[]
+    for c in info.characters
+        parts = [_symmetry_label(gens[i]) * " => " * (gens[i] isa BilliardGeometry.NFoldRotation ? _irrep_description(gens[i], c[i], d) : _irrep_description(gens[i], c[i])) for i in eachindex(gens)]
+        push!(lines1d, "    " * string(c) * " :\n        " * join(parts, "\n        "))
+    end
+    lines2d = String[]
+    for k in info.irreps_2d
+        parts = ["Rotation(2π/$d) => two eigenvalues exp(+2πi*$k/$d) and exp(-2πi*$k/$d) (cyclic sectors s=$k and s=$(d - k))"]
+        append!(parts, _symmetry_label(g) * " => swaps the two rotation eigenvalues; no single ±1 character" for g in gens)
+        push!(lines2d, "    " * string((k,)) * " :  irrep E_$k, every level twofold degenerate\n        " * join(parts, "\n        ") * "\n        (solved once in cyclic sector s=$k, which contains each E_$k level once)")
+    end
+    irreps_text = "  $(length(lines1d)) one-dimensional irrep(s):\n" * join(lines1d, "\n")
+    isempty(lines2d) || (irreps_text *= "\n  $(length(lines2d)) two-dimensional irrep(s):\n" * join(lines2d, "\n"))
+    msg = "$name:\n" *
+          "  Symmetry group:\n" *
+          "    $(info.group) of order $(info.order)\n" *
+          "  Generators:\n" *
+          join(("    " * _symmetry_label(g) for g in gens), "\n") * "\n" *
+          irreps_text
+    @info msg
+    return nothing
 end
 
 """
@@ -138,12 +283,42 @@ the `NFoldRotation => s` form does.
 function symmetry_sector(billiard::BilliardGeometry.AbsBilliard, character1::Integer, characters::Integer...)
     all_characters = (character1, characters...)
     gens = BilliardGeometry.get_symmetries(billiard)
+    if length(all_characters) == 1 && length(gens) != 1 && !isempty(symmetry_irreps(billiard).irreps_2d)
+        return symmetry_sector(billiard; irrep2d = character1)
+    end
     length(all_characters) == length(gens) || throw(ArgumentError(
         "symmetry_sector(billiard, characters...) requires one character per " *
         "get_symmetries(billiard) generator ($(length(gens)) expected " *
         "$(map(typeof, gens))); received $(length(all_characters))"))
     return symmetry_sector(billiard, (typeof(sym) => val for (sym, val) in zip(gens, all_characters))...)
 end
+
+"""
+    symmetry_partner(f, billiard::BilliardGeometry.AbsBilliard) → g
+
+Degenerate partner `g(x) = f(σx)` of a function `f` in a two-dimensional dihedral
+irrep sector, with `σ` the first mirror of the symmetry group `G'` of `billiard`.
+The partner is linearly independent of `f` and has the same eigenvalue.
+"""
+function symmetry_partner(f, billiard::BilliardGeometry.AbsBilliard)
+    group = BilliardGeometry.get_symmetry_group(billiard)
+    i = findfirst(g -> g isa BilliardGeometry.AbsReflection, group)
+    isnothing(i) && throw(ArgumentError("the symmetry group $(_group_description(group)) of the billiard contains no mirror"))
+    σ = group[i]
+    return pt -> f(BilliardGeometry.apply_symmetry(σ, pt))
+end
+
+"""
+    symmetry_sector(billiard, characters::Tuple{Vararg{Integer}}) → sector::SymmetrySector
+
+Tuple form of the positional method, equivalent to
+`symmetry_sector(billiard, characters...)`. The irrep dimension is inferred from
+the number of entries: as many entries as generators of
+`get_symmetries(billiard)` is a one-dimensional irrep, and a single entry `k` on
+a dihedral group `D_d` with `d ≥ 3` (two mirror generators) is the
+two-dimensional irrep `E_k`, i.e. `irrep2d = k`.
+"""
+symmetry_sector(billiard::BilliardGeometry.AbsBilliard, characters::Tuple{Integer,Vararg{Integer}}) = symmetry_sector(billiard, characters...)
 
 # Verify that a sector is being resolved against the exact billiard instance
 # from which it was constructed. Symmetry IDs are assigned locally by each
@@ -169,7 +344,7 @@ end
 function _resolve_bim_symmetry(billiard::BilliardGeometry.AbsBilliard, sector::SymmetrySector)
     _check_sector_billiard(billiard, sector)
     isempty(sector.characters) && return nothing, ()
-    gens = Pair{BilliardGeometry.AbsSymmetry,ComplexF64}[BilliardGeometry.symmetry_of(billiard.symmetries, id) => char for (id, char) in sector.characters]
+    gens = Pair{BilliardGeometry.AbsSymmetry,ComplexF64}[BilliardGeometry.symmetry_of(BilliardGeometry.get_symmetry_group(billiard), id) => char for (id, char) in sector.characters]
     return _resolve_bim_symmetry(gens)
 end
 
@@ -211,9 +386,9 @@ end
 # phase is defined modulo 2π; dividing the principal argument by `m` does not
 # in general invert the map s ↦ sm mod N. Several sectors match when m and N
 # share a factor.
-function _matching_rotation_sectors(gen::BilliardGeometry.NFoldRotation, char::ComplexF64)
+function _matching_rotation_sectors(gen::BilliardGeometry.NFoldRotation, char::ComplexF64, d::Int = gen.order)
     order = gen.order
-    return [s for s in 0:order-1 if isapprox(cis(2*pi*s*gen.m/order), char; atol=1e-9)]
+    return [s for s in 0:d-1 if isapprox(cis(2*pi*s*gen.m/order), char; atol=1e-9)]
 end
 
 # Smallest sector matching `char` on the element g^m.
@@ -227,13 +402,24 @@ end
 # sector index. All elements must have the same group order; the sector is the
 # intersection of the sectors compatible with each element's character, which
 # must be a single index to define one consistent one-dimensional representation.
+#
+# The sector `s` is defined on the m = 1 generator, χ_s(g^m) = exp(2πi s m/N), whereas
+# `BilliardGeometry.symmetry_index_orbits(T, billiard, N, g, s')` assigns the phase
+# exp(2πi s' l/d) to the l-th power of the element `g` passed to it, with d the order
+# of g. The returned generator is the registered element of smallest m that generates the
+# whole group (independent of the iteration order of `gens`), and the sector is
+# converted to its own convention, s' = s m/gcd(N, m) mod d, so the folded phases
+# stay χ_s(g^m).
 function _resolve_bim_rotation_sector(gens::Vector{Pair{BilliardGeometry.AbsSymmetry,ComplexF64}})
     order = gens[1].first.order
     all(g -> g.first.order == order, gens) || throw(ArgumentError("Mismatched NFoldRotation orders within one SymmetrySector"))
-    candidates = [_matching_rotation_sectors(gen, char) for (gen, char) in gens]
+    dgroup = order ÷ foldl(gcd, (g.first.m for g in gens); init = order)
+    candidates = [_matching_rotation_sectors(gen, char, dgroup) for (gen, char) in gens]
     any(isempty, candidates) && throw(ArgumentError("Character is not a valid NFoldRotation irrep value for the registered elements: candidate sectors $candidates"))
     sectors = reduce(intersect, candidates)
     isempty(sectors) && throw(ArgumentError("Inconsistent rotation sector recovered across sym_ids: $candidates"))
     length(sectors) == 1 || throw(ArgumentError("Ambiguous rotation sector: the registered elements are compatible with sectors $sectors"))
-    return gens[1].first, (only(sectors),)
+    gen = first(sort!(BilliardGeometry.AbsSymmetry[g.first for g in gens]; by = g -> (gcd(order, g.m) != 1, g.m)))
+    d = order ÷ gcd(order, gen.m)
+    return gen, (mod(only(sectors) * (gen.m ÷ gcd(order, gen.m)), d),)
 end

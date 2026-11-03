@@ -17,13 +17,15 @@
 #   * the direct matrix against the analytic Taylor matrix, full and symmetry reduced, smooth and graded;
 #   * the symmetry reduced matrix against the orbit-summed columns of the full matrix on the same nodes (X, Y, XY, inferred
 #     rectangle reflections, C3 and Star rotations), orbits from BilliardGeometry.symmetry_index_orbits;
-#   * boundary_matrix_size and threaded = serial assembly.
+#   * boundary_matrix_size and threaded = serial assembly;
+#   * the keywords `multiple` and `N_override` of _cfie_evaluate_points (node count a multiple of lcm(...) with `multiple`, forced node
+#     count, unchanged defaults) for the smooth, GlobalCornerGrading and CornerGrading discretizations.
 # Helper definitions use the prefix `cf_`.
 
 using LinearAlgebra: norm, diag
 using SpecialFunctions: besselj0, besselj1, besselh
 using StaticArrays: SVector
-using QuantumBilliards: _construct_matrices_multi_k_taylor, _is_nontrivial_dlp_grading
+using QuantumBilliards: _construct_matrices_multi_k_taylor, _is_nontrivial_dlp_grading, _cfie_evaluate_points
 
 # Explicit Kress matrix of the periodic kernel log(4 sin^2((t - tau) / 2)) for the N = 2n midpoint nodes.
 function cf_kress_matrix(N::Int)
@@ -181,6 +183,68 @@ end
         sym = CombinedFieldIntegralEquationSolver(5.0, stadium; min_pts=8, symmetry=YAxisReflection(), sym_characters=(1,))
         full = CombinedFieldIntegralEquationSolver(5.0, stadium; min_pts=8)
         @test evaluate_points(sym, stadium, 8.0).xy == evaluate_points(full, stadium, 8.0).xy
+    end
+end
+
+@testset "_cfie_evaluate_points: multiple and N_override" begin
+    circle = CircleBilliard(1.0)
+    rect = RectangleBilliard(1.0, 0.6)
+    polar = PolarBilliard([0.0, 0.0, 0.0, 0.05])
+    ccomp = full_boundary(circle)
+    rcomp = full_boundary(rect)
+    pcomp = full_boundary(polar)
+
+    @testset "smooth periodic grading" begin
+        solver = CombinedFieldIntegralEquationSolver(5.0, circle; min_pts=33)       # N0 = 33 at k = 3, rounded to the even 34
+        grading = solver.grading
+        @test length(_cfie_evaluate_points(solver, grading, ccomp, 3.0)) == 34
+        @test length(_cfie_evaluate_points(solver, grading, ccomp, 3.0; multiple=1)) == 34
+        @test length(_cfie_evaluate_points(solver, grading, ccomp, 3.0; multiple=3)) == 36     # lcm(2, 3) = 6
+        @test length(_cfie_evaluate_points(solver, grading, ccomp, 3.0; multiple=5)) == 40     # lcm(2, 5) = 10
+        @test length(_cfie_evaluate_points(solver, grading, ccomp, 3.0; N_override=50)) == 50
+        @test length(_cfie_evaluate_points(solver, grading, ccomp, 3.0; multiple=7, N_override=50)) == 50
+        @test _cfie_evaluate_points(solver, grading, ccomp, 3.0).xy == evaluate_points(solver, circle, 3.0).xy
+        forced = _cfie_evaluate_points(solver, grading, ccomp, 3.0; N_override=50)
+        @test forced.ts ≈ [(j - 1 / 2) * 2π / 50 for j in 1:50]
+        sym = CombinedFieldIntegralEquationSolver(5.0, circle; min_pts=33, symmetry=XYAxisReflection(), sym_characters=(1, 1))
+        @test length(_cfie_evaluate_points(sym, sym.grading, ccomp, 3.0)) == 36
+        @test length(_cfie_evaluate_points(sym, sym.grading, ccomp, 3.0; multiple=5)) == 40    # lcm(2, 4, 5) = 20
+    end
+
+    @testset "GlobalCornerGrading" begin
+        solver = CombinedFieldIntegralEquationSolver(5.0, rect; min_pts=32, grading=GlobalCornerGrading())   # N0 = 32 at k = 3
+        grading = solver.grading
+        @test length(_cfie_evaluate_points(solver, grading, rcomp, 3.0)) == 32
+        @test length(_cfie_evaluate_points(solver, grading, rcomp, 3.0; multiple=1)) == 32
+        @test length(_cfie_evaluate_points(solver, grading, rcomp, 3.0; multiple=5)) == 40     # lcm(2, 5) = 10
+        @test length(_cfie_evaluate_points(solver, grading, rcomp, 3.0; multiple=7)) == 42     # lcm(2, 7) = 14
+        @test length(_cfie_evaluate_points(solver, grading, rcomp, 3.0; N_override=48)) == 48
+        @test length(_cfie_evaluate_points(solver, grading, rcomp, 3.0; multiple=7, N_override=48)) == 48
+        base = _cfie_evaluate_points(solver, grading, rcomp, 3.0)
+        @test base.xy == evaluate_points(solver, rect, 3.0).xy
+        forced = _cfie_evaluate_points(solver, grading, rcomp, 3.0; N_override=48)
+        @test _is_nontrivial_dlp_grading(forced)
+        @test forced.ts ≈ [(j - 1 / 2) * 2π / 48 for j in 1:48]
+        # a boundary without corners falls back to the smooth discretization and still honors both keywords
+        smooth = CombinedFieldIntegralEquationSolver(5.0, circle; min_pts=33, grading=GlobalCornerGrading())
+        @test length(_cfie_evaluate_points(smooth, smooth.grading, ccomp, 3.0; multiple=5)) == 40
+        @test length(_cfie_evaluate_points(smooth, smooth.grading, ccomp, 3.0; N_override=50)) == 50
+    end
+
+    @testset "CornerGrading (single closed curve)" begin
+        solver = CombinedFieldIntegralEquationSolver(10.0, polar; min_pts=256, grading=CornerGrading())   # N0 = 256 at k = 5
+        grading = solver.grading
+        @test length(_cfie_evaluate_points(solver, grading, pcomp, 5.0)) == 256
+        @test length(_cfie_evaluate_points(solver, grading, pcomp, 5.0; multiple=1)) == 256
+        @test length(_cfie_evaluate_points(solver, grading, pcomp, 5.0; multiple=3)) == 258    # lcm(2, 3) = 6
+        @test length(_cfie_evaluate_points(solver, grading, pcomp, 5.0; multiple=5)) == 260    # lcm(2, 5) = 10
+        @test length(_cfie_evaluate_points(solver, grading, pcomp, 5.0; N_override=300)) == 300
+        @test length(_cfie_evaluate_points(solver, grading, pcomp, 5.0; multiple=5, N_override=300)) == 300
+        base = _cfie_evaluate_points(solver, grading, pcomp, 5.0)
+        @test base.xy == evaluate_points(solver, polar, 5.0).xy
+        forced = _cfie_evaluate_points(solver, grading, pcomp, 5.0; N_override=300)
+        @test _is_nontrivial_dlp_grading(forced)
+        @test forced.ts ≈ [(j - 1 / 2) * 2π / 300 for j in 1:300]
     end
 end
 
@@ -466,10 +530,11 @@ end
 @testset "reduced matrix equals orbit-summed full matrix: Star billiard, rotation sector 1" begin
     star = StarBilliard(1.0, 0.05, 3)
     k = 3.0
+    rot = star.symmetries[2]                                            # NFoldRotation(3, 1); Star registers D3, whose generators are mirrors
     full = CombinedFieldIntegralEquationSolver(5.0, star; min_pts=36)
-    red = CombinedFieldIntegralEquationSolver(5.0, star; min_pts=36, sym_characters=(1,))
+    red = CombinedFieldIntegralEquationSolver(5.0, star; min_pts=36, symmetry=rot, sym_characters=(1,))
     pts = evaluate_points(red, star, k)
-    orbits = symmetry_index_orbits(Float64, star, length(pts), get_symmetries(star)[1], 1)
+    orbits = symmetry_index_orbits(Float64, star, length(pts), rot, 1)
 
     @test cf_orbit_matches(pts, orbits, (x -> x, x -> cf_rotate(x, 2π / 3), x -> cf_rotate(x, 4π / 3)))
     @test isapprox(construct_matrices(red, pts, k), cf_orbit_sum(construct_matrices(full, pts, k), orbits); atol=1e-12, rtol=0)
@@ -519,5 +584,23 @@ end
         pts = evaluate_points(solver, c3, k)
         @test boundary_matrix_size(solver, pts) >= 32
         @test construct_matrices(solver, pts, k; multithreaded=true) == construct_matrices(solver, pts, k; multithreaded=false)
+    end
+end
+
+@testset "CFIE constructor: sym_characters resolved from the billiard symmetry group (Sinai, D4)" begin
+    sinai = SinaiBilliard(1.0, 0.3)
+
+    @testset "single integer: cyclic sector of the order-4 rotation" begin
+        sol = CombinedFieldIntegralEquationSolver(20.0, sinai; sym_characters=(1,))
+        @test sol.symmetry isa NFoldRotation
+        @test sol.symmetry.order == 4
+        @test sol.symmetry.m == 1
+        @test sol.sym_characters == (1,)
+    end
+
+    @testset "sym_characters = nothing: full boundary" begin
+        sol = CombinedFieldIntegralEquationSolver(20.0, sinai; sym_characters=nothing)
+        @test sol.symmetry === nothing
+        @test sol.sym_characters == ()
     end
 end

@@ -15,14 +15,22 @@ CurrentModule = QuantumBilliards
 AbsBasis
 AbsSolver
 AbsBasisSolver
+AbsBIMSolver
 SweepBasisSolver
 AcceleratedBasisSolver
+SweepBIMSolver
+AcceleratedBIMSolver
 ```
 
 ## Utilities
 ```@docs
 make_triangle_and_basis
 adapt_basis
+@use_threads
+@blas_multi
+@blas_1
+@blas_multi_then_1
+try_MKL!
 ```
 
 ## Basis
@@ -45,11 +53,33 @@ fb_term_dk
 ## Solvers
 ```@docs
 BoundaryPoints
+boundary_s
+component_offsets
+points_in_billiard
+BoundaryPanelArrays
+BoundaryGeomCache
+boundary_geom_cache
+component_normals
+flatten_boundary_components
+flatten_boundary_ds
+boundary_matrix_size
 basis_matrix
 basis_and_gradient_matrices
 dk_matrix
 VerginiSaracenoSolver
 DecompositionMethodSolver
+ParticularSolutionsMethodSolver
+BoundaryGrading
+SmoothPeriodicGrading
+CornerGrading
+GlobalCornerGrading
+DoubleLayerPotentialSolver
+CombinedFieldIntegralEquationSolver
+CompositeBIMSolver
+ExpandedBIMSolver
+BeynSolver
+CORKSolver
+ChebyshevConfig
 evaluate_points
 construct_matrices
 solve
@@ -63,20 +93,44 @@ generalized_eigen
 generalized_eigvals
 sm_results
 solve_vectors
+solve_state
+weyl_window_width
+plan_weyl_windows
+beyn_disks_from_windows
+beyn_buffer_matrices
 ```
 
 ## Spectra
 ```@docs
+SpectralData
+compute_spectrum
+overlap_and_merge!
+overlap_and_merge_ebim!
+k_range
+sweep_windows
+weyl_window_count
+weyl_law
+state_at_k
+k_at_state
+spectral_density
+k_range_for_states
 ```
-Missing documentation: `SpectralData`, `compute_spectrum`, `merge_spectra`,
-`overlap_and_merge!`, `weyl_law` — defined in `src/spectra/spectralutils.jl`
-and `src/spectra/unfolding.jl`, none currently have docstrings.
+
+## Symmetry
+```@docs
+SymmetrySector
+symmetry_sector
+symmetry_irreps
+log_symmetries
+symmetry_degeneracy
+symmetry_partner
+```
 
 ## States
 ```@docs
 BasisEigenstate
 BasisState
-GaussianRandomState
+BIMEigenstate
 compute_eigenstate
 wavefunction
 compute_psi

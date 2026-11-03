@@ -5,10 +5,6 @@
 # Hankel/Bessel-J evaluation (see bessels.jl, dlp.jl, cfie.jl,
 # optimalpanelization.jl in this directory) to approximate special functions
 # on many geometric panels with high accuracy and stability.
-#
-# Ported verbatim from QuantumBilliards-develop/src/chebyshev/chebyshev_core.jl
-# per the migration plan's numerical-fidelity rule (see
-# QuantumBilliardsTests/scratchpad/migration-plan/10-chebyshev-acceleration.md).
 ###############################################################################
 
 # =============================================================================

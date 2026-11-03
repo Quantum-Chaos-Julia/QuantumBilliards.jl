@@ -64,7 +64,7 @@ billiard.
 * `dim_scaling_factor`: Scaling factor used to determine the basis dimension from the boundary length and wavenumber.
 * `pts_scaling_factor`: Vector of scaling factors, one per fundamental boundary curve, used to determine the number of boundary sampling points.
 * `sampler`: Vector of samplers, one per fundamental boundary curve, used to generate boundary points.
-* `eps`: Relative tolerance used to filter small eigenvalues in the generalized eigenvalue decomposition.
+* `eig_tol`: Relative tolerance used to filter small eigenvalues in the generalized eigenvalue decomposition.
 * `min_dim`: Minimum basis dimension.
 * `min_pts`: Minimum number of boundary sampling points.
 * `rellich_origin`: Origin `c₀` used in the Rellich boundary weight `w_dm = ds*((x-c₀)⋅n)/(2k²)`.
@@ -82,7 +82,7 @@ struct DecompositionMethodSolver{T} <: SweepBasisSolver where {T<:Real}
     dim_scaling_factor::T
     pts_scaling_factor::Vector{T}
     sampler::Vector
-    eps::T
+    eig_tol::T
     min_dim::Int64
     min_pts::Int64
     rellich_origin::SVector{2,T}
@@ -107,7 +107,7 @@ sampler shared by every fundamental boundary curve.
 ## Returns
 * `solver`: A [`DecompositionMethodSolver{T}`](@ref) instance.
 """
-function DecompositionMethodSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}; min_dim = 100, min_pts = 500, rellich_origin::SVector{2,T}=SVector{2,T}(zero(T),zero(T))) where T<:Real 
+function DecompositionMethodSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}; min_dim::Int = 100, min_pts::Int = 500, rellich_origin::SVector{2,T}=SVector{2,T}(zero(T),zero(T))) where T<:Real 
     d = dim_scaling_factor
     bs = typeof(pts_scaling_factor) == T ? [pts_scaling_factor] : pts_scaling_factor
     sampler = [GaussLegendreNodes()]
@@ -133,7 +133,7 @@ each fundamental boundary curve.
 ## Returns
 * `solver`: A [`DecompositionMethodSolver{T}`](@ref) instance.
 """
-function DecompositionMethodSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}, samplers::Vector{AbsSampler}; min_dim = 100, min_pts = 500, rellich_origin::SVector{2,T}=SVector{2,T}(zero(T),zero(T))) where {T<:Real} 
+function DecompositionMethodSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}, samplers::Vector{AbsSampler}; min_dim::Int = 100, min_pts::Int = 500, rellich_origin::SVector{2,T}=SVector{2,T}(zero(T),zero(T))) where {T<:Real} 
     d = dim_scaling_factor
     bs = typeof(pts_scaling_factor) == T ? [pts_scaling_factor] : pts_scaling_factor
     return DecompositionMethodSolver(d, bs, samplers, eps(T), min_dim, min_pts, rellich_origin)
@@ -217,26 +217,24 @@ function construct_matrices(solver::DecompositionMethodSolver,basis::Ba,pts::Bou
 
         @debug "Matrix construction started" N M k nsym
         @timeit_debug "basis_and_gradient_matrices" begin
-            # the alogrithm consctructs B and the normal derivative Bn with syrk to minimize the allocation cost. It does this with the trick of putting sqrt(w_n) into both the rows of B and the rows of B' so that we can use syrk on sqrt(W)*B to get B'*(W*B) without forming W*B as a temporary matrix (posible b/c W is diagonal)
+            # F = B'*(W*B) and G = Bn'*(Wn*Bn) are formed with syrk on row-scaled copies sqrt(W)*B and
+            # sqrt(Wn)*Bn (W is diagonal), which avoids the temporary W*B.
             @blas_1 B,dX,dY=basis_and_gradient_matrices(basis,k,xy;multithreaded)
-            # Form F = B'*(W*B) by inplace scaling the rows of B by sqrt(w) (inplace to B) and use syrk to perform the Rank-k update of a symmetric matrix
-            _scale_rows_sqrtw!(B,w,nsym) #  trick of putting sqrt(w_n) into the rows of the transposed and original B to get (sqrt(W)*B)' * (sqrt(W)*B) so we can use syrk on sqrt(W)*B
+            _scale_rows_sqrtw!(B,w,nsym)
         end
         @debug "Basis and gradient matrix computed" size=size(B) 
         @timeit_debug "compute_F" begin
-            F=Matrix{eltype(B)}(undef,N,N) # preallocate F
-            @blas_multi_then_1 MAX_BLAS_THREADS BLAS.syrk!('U','T',one(eltype(B)),B,zero(eltype(B)),F) # F[u ∈ upper]+=1.0*B'*B, no need to fill(F,0) since the additive constant in C is 0
-            _symmetrize_from_upper!(F) # since we chose "U" in syrk, we need to mirror upper -> lower
-            # Build Bn into dX: dX <- nx*dX + ny*dY 
+            F=Matrix{eltype(B)}(undef,N,N)
+            @blas_multi_then_1 MAX_BLAS_THREADS BLAS.syrk!('U','T',one(eltype(B)),B,zero(eltype(B)),F)
+            _symmetrize_from_upper!(F)
             _build_Bn_inplace!(dX,dY,pts.normal)
-            # Form G = Bn'*(Wn*Bn) by first scaling the rows of Bn (dX) by sqrt(w_n) (inplace to dX) and use syrk to perform the Rank-k update of a symmetric matrix
-            _scale_rows_sqrtw!(dX,wn,nsym) # like for F form sqrt(Wn*Bn) with row scaling with the same trick of putting sqrt(w_n) into the rows of the transposed and original dX to get (sqrt(Wn)*Bn)' * (sqrt(Wn)*Bn) so we can use syrk on dX
+            _scale_rows_sqrtw!(dX,wn,nsym)
         end
         @debug "F computed" size=size(F)
         @timeit_debug "compute_G" begin
-            G=Matrix{eltype(B)}(undef,N,N) # preallocate G, no need to fill with zeros since we use zero(eltype(B)) for the additive constant in syrk
-            @blas_multi_then_1 MAX_BLAS_THREADS BLAS.syrk!('U','T',one(eltype(B)),dX,zero(eltype(B)),G) # G[u ∈ upper]+=1.0*dX'*dX where dX is now sqrt(Wn)*Bn due to inplace scalings above
-            _symmetrize_from_upper!(G) # since we chose "U" in syrk, we need to mirror upper -> lower
+            G=Matrix{eltype(B)}(undef,N,N)
+            @blas_multi_then_1 MAX_BLAS_THREADS BLAS.syrk!('U','T',one(eltype(B)),dX,zero(eltype(B)),G)
+            _symmetrize_from_upper!(G)
         end
         @debug "G computed" size=size(F)
         return F,G
@@ -253,7 +251,7 @@ Computes the boundary decomposition method tension `t` at wavenumber `k` for
 ## Description
 The matrices `F` and `G` are built with [`construct_matrices`](@ref), and the
 generalized eigenvalues `mu` of `F * x = λ * G * x` are computed with
-[`generalized_eigvals`](@ref) (truncated using `solver.eps`). The tension is
+[`generalized_eigvals`](@ref) (truncated using `solver.eig_tol`). The tension is
 `t = 1 / mu[end]`, where `mu[end]` is the largest generalized eigenvalue.
 
 ## Arguments
@@ -270,7 +268,7 @@ generalized eigenvalues `mu` of `F * x = λ * G * x` are computed with
 """
 function solve(solver::DecompositionMethodSolver,basis::Ba,pts::BoundaryPoints,k;multithreaded::Bool=true) where {Ba<:AbsBasis}
     F,G=construct_matrices(solver,basis,pts,k;multithreaded=multithreaded)
-    @blas_multi_then_1 MAX_BLAS_THREADS mu=generalized_eigvals(Symmetric(F),Symmetric(G);eps=solver.eps)
+    @blas_multi_then_1 MAX_BLAS_THREADS mu=generalized_eigvals(Symmetric(F),Symmetric(G); eig_tol = solver.eig_tol)
     lam0=mu[end]
     t=1.0/lam0
     return t
@@ -292,7 +290,7 @@ them from a basis and boundary points. See [`solve`](@ref) for details.
 * `t`: The tension, `t = 1 / mu[end]`, where `mu` are the generalized eigenvalues of `F * x = λ * G * x`.
 """
 function solve(solver::DecompositionMethodSolver,F,G)
-    @blas_multi_then_1 MAX_BLAS_THREADS mu=generalized_eigvals(Symmetric(F),Symmetric(G);eps=solver.eps)
+    @blas_multi_then_1 MAX_BLAS_THREADS mu=generalized_eigvals(Symmetric(F),Symmetric(G); eig_tol = solver.eig_tol)
     lam0=mu[end]
     t=1.0/lam0
     return t
@@ -307,7 +305,7 @@ eigenvector `x` (expressed in the original basis) at wavenumber `k`.
 ## Description
 The matrices `F` and `G` are built with [`construct_matrices`](@ref), and the
 generalized eigenproblem `F * x = λ * G * x` is solved with
-[`generalized_eigen`](@ref) (truncated using `solver.eps`) to obtain the largest
+[`generalized_eigen`](@ref) (truncated using `solver.eig_tol`) to obtain the largest
 eigenvalue `mu[end]`, its eigenvector `Z[:,end]` in the reduced space, and the
 change-of-basis matrix `C`. The eigenvector is transformed back into the original
 basis as `x = C * Z[:,end]`, normalized by `sqrt(mu[end])`, and the tension is
@@ -328,7 +326,7 @@ basis as `x = C * Z[:,end]`, normalized by `sqrt(mu[end])`, and the tension is
 """
 function solve_vect(solver::DecompositionMethodSolver,basis::AbsBasis,pts::BoundaryPoints,k;multithreaded::Bool=true)
     F,G=construct_matrices(solver,basis,pts,k;multithreaded=multithreaded)
-    @blas_multi MAX_BLAS_THREADS mu,Z,C=generalized_eigen(Symmetric(F),Symmetric(G);eps=solver.eps)
+    @blas_multi MAX_BLAS_THREADS mu,Z,C=generalized_eigen(Symmetric(F),Symmetric(G); eig_tol = solver.eig_tol)
     x=Z[:,end]
     @blas_multi_then_1 MAX_BLAS_THREADS x=C*x #transform into original basis, BLAS mul
     lam0=mu[end]

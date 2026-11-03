@@ -1,7 +1,8 @@
 # Unit tests for the solver-agnostic helpers of
 #   src/solvers/sweepmethods/sweepmethods.jl   (_fold_boundary, _infer_bim_symmetry, symmetrize_layer_density,
 #                                               _bim_normal_derivative for DLP kernels, _bim_dlp_cross_kernel_entry,
-#                                               _cfie_derivative!)
+#                                               _cfie_derivative!, and the symmetric-holes plumbing _orbit_character_args,
+#                                               _fold_group, _bim_node_multiple, _bim_round_nodes)
 # _fold_boundary adapts the exact symmetry-orbit map of BilliardGeometry (symmetry_index_orbits) to the character storage of
 # the BIM solvers: scalar characters for single reflections, one Vector for CompositeReflection and one integer sector for
 # NFoldRotation. _infer_bim_symmetry pairs `sym_characters` with the minimal generators of the billiard.
@@ -11,11 +12,18 @@
 # this file solve eigenproblems and belong to the integration tier; solve_state and the CFIE normal derivative are covered
 # with the DLP and CFIE kernels.
 # No eigen solves. Helper definitions use the prefix `sw_`.
+# _orbit_character_args turns the stored character tuple into the arguments that follow the symmetry in symmetry_index_orbits /
+# group_symmetry_orbits; _fold_group is the same fold for one boundary group of a billiard with holes (group 0 is the outer boundary,
+# so on a billiard without holes it equals _fold_boundary). _bim_node_multiple and _bim_round_nodes are the node-count rules:
+# reflections about the axes 0, 1/4, 1/2, 3/4 need N divisible by 4 (4, 4, 8, 8 for X/Y, Diagonal/AntiDiagonal as in
+# symmetry_node_multiple), a rotation by its order, a composite by the lcm, a generic axis by nothing (1). The hole billiards are
+# the fixtures of test/holes_fixtures.jl (quarter square with D2, G' = D2 for four discs placed by D2, G' = {X} for a quarter-disc hole).
 
 using SpecialFunctions: hankelh1
 using StaticArrays: SVector
 using QuantumBilliards: _fold_boundary, _infer_bim_symmetry, symmetrize_layer_density, _bim_normal_derivative,
-                        _bim_dlp_cross_kernel_entry, _cfie_derivative!
+                        _bim_dlp_cross_kernel_entry, _cfie_derivative!, _orbit_character_args, _fold_group,
+                        _bim_node_multiple, _bim_round_nodes, _bim_solver_node_multiple
 
 # Whether two SymmetryOrbitMaps agree in every field.
 sw_same_orbits(a, b) = a.fundamental_indices == b.fundamental_indices && a.orbit_of == b.orbit_of && a.phase == b.phase &&
@@ -74,7 +82,7 @@ end
         @test sw_same_orbits(orbits, BilliardGeometry.symmetry_index_orbits(Float64, c3, N, rot, 1))
         @test orbits.fundamental_size == N ÷ 3
         @test size(orbits.fund_to_full) == (3, N ÷ 3)
-        @test sort(unique(round.(orbits.phase; digits=12)), by=real) ≈ sort([1.0, cis(2π / 3), cis(-2π / 3)], by=real)
+        @test sort(unique(round.(orbits.phase; digits=12)), by=z -> (real(z), imag(z))) ≈ sort([1.0, cis(2π / 3), cis(-2π / 3)], by=z -> (real(z), imag(z)))
 
         @test sw_same_orbits(_fold_boundary(Float64, c3, N, rot, ()),                       # empty character is the trivial sector
                              BilliardGeometry.symmetry_index_orbits(Float64, c3, N, rot))
@@ -95,6 +103,152 @@ end
         @test orbits isa BilliardGeometry.SymmetryOrbitMap{Float32}
         @test eltype(orbits.phase) == ComplexF32
     end
+end
+
+@testset "_orbit_character_args" begin
+    @testset "ordinary symmetries: scalars converted to Complex{T}" begin
+        args = _orbit_character_args(Float64, XAxisReflection(), (-1,))
+        @test args == (-1.0 + 0.0im,)
+        @test args isa Tuple{ComplexF64}
+        args2 = _orbit_character_args(Float64, XYAxisReflection(), (-1, 1))
+        @test args2 == (-1.0 + 0.0im, 1.0 + 0.0im)
+        @test args2 isa Tuple{ComplexF64,ComplexF64}
+        @test _orbit_character_args(Float32, YAxisReflection(), (1,)) isa Tuple{ComplexF32}
+        @test _orbit_character_args(Float64, XAxisReflection(), ()) == ()
+    end
+
+    @testset "CompositeReflection: one Vector of characters" begin
+        sym = CompositeReflection(YAxisReflection(), XAxisReflection())
+        args = _orbit_character_args(Float64, sym, (1, -1))
+        @test length(args) == 1
+        @test args[1] isa Vector{ComplexF64}
+        @test args[1] == ComplexF64[1, -1]
+        @test _orbit_character_args(Float32, sym, (1, -1))[1] isa Vector{ComplexF32}
+    end
+
+    @testset "NFoldRotation: () or (sector,)" begin
+        rot = NFoldRotation(3, 1)
+        @test _orbit_character_args(Float64, rot, ()) == ()
+        @test _orbit_character_args(Float64, rot, (2,)) == (2,)
+        @test _orbit_character_args(Float64, rot, (0,)) == (0,)
+        @test only(_orbit_character_args(Float32, rot, (1,))) isa Int
+        @test_throws ArgumentError _orbit_character_args(Float64, rot, (1.0,))         # the sector must be an Int
+        @test_throws ArgumentError _orbit_character_args(Float64, rot, (1.0 + 0im,))
+        @test_throws ArgumentError _orbit_character_args(Float64, rot, (1, 2))         # more than one rotation character
+        @test_throws "exactly one sector" _orbit_character_args(Float64, rot, (1, 2))
+        @test_throws "must be an Int" _orbit_character_args(Float64, rot, (1.0,))
+    end
+end
+
+@testset "_fold_boundary (equals symmetry_index_orbits)" begin
+    rect = RectangleBilliard(1.0, 0.7)
+    c3 = C3Billiard(0.02)
+    for N in (32, 64)
+        @test sw_same_orbits(_fold_boundary(Float64, rect, N, YAxisReflection(), (1,)),
+                             BilliardGeometry.symmetry_index_orbits(Float64, rect, N, YAxisReflection(), 1.0 + 0.0im))
+        @test sw_same_orbits(_fold_boundary(Float64, rect, N, XYAxisReflection(), (1, -1)),
+                             BilliardGeometry.symmetry_index_orbits(Float64, rect, N, XYAxisReflection(), 1.0 + 0.0im, -1.0 + 0.0im))
+        comp = CompositeReflection(YAxisReflection(), XAxisReflection())
+        @test sw_same_orbits(_fold_boundary(Float64, rect, N, comp, (-1, 1)),
+                             BilliardGeometry.symmetry_index_orbits(Float64, rect, N, comp, ComplexF64[-1, 1]))
+    end
+    @test sw_same_orbits(_fold_boundary(Float64, c3, 60, NFoldRotation(3, 1), (2,)),
+                         BilliardGeometry.symmetry_index_orbits(Float64, c3, 60, NFoldRotation(3, 1), 2))
+end
+
+@testset "_fold_group" begin
+    rect = RectangleBilliard(1.0, 0.7)
+    c3 = C3Billiard(0.02)
+
+    @testset "group 0 of a billiard without holes equals _fold_boundary" begin
+        N = 64
+        comp = CompositeReflection(YAxisReflection(), XAxisReflection())
+        @test sw_same_orbits(_fold_group(Float64, rect, 0, N, XAxisReflection(), (-1,)), _fold_boundary(Float64, rect, N, XAxisReflection(), (-1,)))
+        @test sw_same_orbits(_fold_group(Float64, rect, 0, N, XYAxisReflection(), (-1, 1)), _fold_boundary(Float64, rect, N, XYAxisReflection(), (-1, 1)))
+        @test sw_same_orbits(_fold_group(Float64, rect, 0, N, comp, (1, -1)), _fold_boundary(Float64, rect, N, comp, (1, -1)))
+        @test sw_same_orbits(_fold_group(Float64, c3, 0, 60, NFoldRotation(3, 1), (1,)), _fold_boundary(Float64, c3, 60, NFoldRotation(3, 1), (1,)))
+        @test sw_same_orbits(_fold_group(Float64, c3, 0, 60, NFoldRotation(3, 1), ()), _fold_boundary(Float64, c3, 60, NFoldRotation(3, 1), ()))
+    end
+
+    @testset "hole group of four discs placed by D2" begin
+        b = hf_symmetrized_disc_billiard()
+        comp = CompositeReflection(YAxisReflection(), XAxisReflection())
+        orbits = _fold_group(Float64, b, 1, 24, comp, (1, -1))
+        @test sw_same_orbits(orbits, BilliardGeometry.group_symmetry_orbits(Float64, b, 1, 24, comp, ComplexF64[1, -1]))
+        @test full_size(orbits) == 24 && orbit_size(orbits) == 4 && fundamental_size(orbits) == 6
+        # the outer boundary is group 0, folded by the same group
+        outer = _fold_group(Float64, b, 0, 32, comp, (-1, -1))
+        @test orbit_size(outer) == 4 && fundamental_size(outer) == 8
+        # a single generator of G'
+        x = _fold_group(Float64, b, 1, 24, XAxisReflection(), (-1,))
+        @test orbit_size(x) == 2 && fundamental_size(x) == 12
+        @test sort(unique(real.(x.phase))) == [-1.0, 1.0]
+    end
+
+    @testset "quarter-disc hole: G' = {X}" begin
+        b = hf_quarter_disc_billiard()
+        orbits = _fold_group(Float64, b, 1, 20, XAxisReflection(), (-1,))
+        @test orbit_size(orbits) == 2 && fundamental_size(orbits) == 10 && full_size(orbits) == 20
+        @test_throws ArgumentError _fold_group(Float64, b, 1, 20, YAxisReflection(), (1,))      # Y is not in G'
+        @test_throws "G'" _fold_group(Float64, b, 1, 20, YAxisReflection(), (1,))
+    end
+end
+
+@testset "_bim_node_multiple" begin
+    @test _bim_node_multiple(nothing) == 1
+    @test _bim_node_multiple(XAxisReflection()) == 4
+    @test _bim_node_multiple(YAxisReflection()) == 4
+    @test _bim_node_multiple(DiagonalReflection()) == 8
+    @test _bim_node_multiple(AntiDiagonalReflection()) == 8
+    @test _bim_node_multiple(XYAxisReflection()) == 4
+    # a mirror at a generic angle imposes nothing here (the composite path supplies the block count)
+    @test _bim_node_multiple(AxisReflection{1 // 6}()) == 1
+    # a composite takes the lcm of its reflections
+    @test _bim_node_multiple(CompositeReflection(YAxisReflection(), XAxisReflection())) == 4
+    @test _bim_node_multiple(CompositeReflection(YAxisReflection(), DiagonalReflection())) == 8
+    @test _bim_node_multiple(CompositeReflection(AxisReflection{1 // 6}(), XAxisReflection())) == 4
+    @test _bim_node_multiple(CompositeReflection(AxisReflection{1 // 6}(), AxisReflection{1 // 3}())) == 1
+    # a rotation needs N divisible by its order
+    @test _bim_node_multiple(NFoldRotation(3, 1)) == 3
+    @test _bim_node_multiple(NFoldRotation(4, 1)) == 4
+    @test _bim_node_multiple(NFoldRotation(6, 5)) == 6
+    @test (@inferred _bim_node_multiple(XAxisReflection())) isa Int
+    @test (@inferred _bim_node_multiple(nothing)) isa Int
+end
+
+@testset "_bim_solver_node_multiple" begin
+    rect = RectangleBilliard(1.0, 0.7)
+    stadium = StadiumBilliard(1.0)
+    c3 = C3Billiard(0.02)
+    # no symmetry: no constraint
+    @test _bim_solver_node_multiple(DoubleLayerPotentialSolver(5.0, rect; min_pts = 33)) == 1
+    # Composite (Y, X) on the rectangle (D2, three registered elements): lcm(4, 3 + 1) = 4
+    solver = DoubleLayerPotentialSolver(5.0, rect; min_pts = 33, sym_characters = (1, 1))
+    @test _bim_solver_node_multiple(solver) == 4
+    @test _bim_solver_node_multiple(solver) == lcm(_bim_node_multiple(solver.symmetry), length(rect.symmetries) + 1)
+    # single reflection on a hole-free billiard: lcm(4, number of blocks)
+    solver = DoubleLayerPotentialSolver(5.0, stadium; min_pts = 33, symmetry = YAxisReflection(), sym_characters = (1,))
+    @test _bim_solver_node_multiple(solver) == lcm(4, length(stadium.symmetries) + 1)
+    # rotation: lcm(3, 3)
+    solver = DoubleLayerPotentialSolver(5.0, c3; min_pts = 33, sym_characters = (1,))
+    @test _bim_solver_node_multiple(solver) == lcm(3, length(c3.symmetries) + 1) == 3
+    @test (@inferred _bim_solver_node_multiple(solver)) isa Int
+end
+
+@testset "_bim_round_nodes" begin
+    # rounds up to a multiple of `needed`
+    @test _bim_round_nodes(30, 4, nothing) == 32
+    @test _bim_round_nodes(32, 4, nothing) == 32
+    @test _bim_round_nodes(33, 4, nothing) == 36
+    @test _bim_round_nodes(1, 7, nothing) == 7
+    @test _bim_round_nodes(30, 1, nothing) == 30
+    @test _bim_round_nodes(15, 6, nothing) == 18
+    # a forced node count is returned as given, whatever N and needed
+    @test _bim_round_nodes(30, 4, 50) == 50
+    @test _bim_round_nodes(30, 4, 17) == 17
+    @test _bim_round_nodes(100, 8, 24) == 24
+    @test (@inferred _bim_round_nodes(30, 4, nothing)) isa Int
+    @test (@inferred _bim_round_nodes(30, 4, 50)) isa Int
 end
 
 @testset "_infer_bim_symmetry" begin

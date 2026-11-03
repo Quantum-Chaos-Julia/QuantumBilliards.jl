@@ -93,12 +93,13 @@ end
 
 # solver: Beyn contour integral (composite, one CFIE component per boundary domain)
 # kernel/basis: CFIE, SmoothPeriodicGrading, min_pts=64, ppw=10
-# billiard: Annular (AnnularBilliard(0.3, 0.0)), concentric, inner radius 0.3, outer radius 1
+# billiard: Annular (AnnularBilliard(0.3, 0.0; center=[0.2, 0.1])), concentric, inner radius 0.3, outer radius 1; the nonzero center keeps the
+#   unreduced construction (the origin-centered annulus is symmetric since B7); the spectrum is translation invariant
 # symmetry: None
 # reference: analytic roots of the annulus Bessel determinant (incl. multiplicity 2 for m > 0); window [3, 8] holds 9 levels
 # functions to test: compute_spectrum
 @testset "Beyn (CFIE composite) - Annular - Spectrum k in [3, 8]" begin
-    billiard = AnnularBilliard(0.3, 0.0)
+    billiard = AnnularBilliard(0.3, 0.0; center=[0.2, 0.1])
     component() = CombinedFieldIntegralEquationSolver(10.0, billiard; grading=SmoothPeriodicGrading(), min_pts=64)
     kernel = CompositeBIMSolver(component(), component())
     solver = BeynSolver(kernel; use_chebyshev=false)

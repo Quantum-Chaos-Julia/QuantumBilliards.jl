@@ -31,7 +31,7 @@ export flatten_boundary_components, flatten_boundary_ds
 include("solvers/taylor/recurrence_core.jl")
 
 include("states/symmetry/symmetrysector.jl")
-export SymmetrySector, symmetry_sector
+export SymmetrySector, symmetry_sector, symmetry_irreps, log_symmetries, symmetry_degeneracy, symmetry_partner
 
 include("basis/planewaves/realplanewaves.jl")
 include("basis/planewaves/realplanewaves_recurrence.jl")

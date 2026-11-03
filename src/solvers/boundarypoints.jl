@@ -271,10 +271,10 @@ delegating directly to [`is_inside`](@ref).
 @inline points_in_billiard(pts, billiard) = is_inside(billiard, pts)
 
 function _determine_bp_sizes(curves, bs, k)
-    Ns = Vector{Int64}(undef,length(curves)) # store the data to indexwise access. This needs to be this way b/c we dont know beforehand which curves are real and which are abstract. Use sizehint! to give an idea as to not need to resize b/c it could the that real and abstract curves and intermingled
+    Ns = Vector{Int64}(undef,length(curves)) # per-curve point counts, indexed by curve
     @inbounds for i in eachindex(curves) # make an initial size calculation of the resulting vectors
         crv=curves[i]
-        Ns[i] =max(20,round(Int,k*crv.length*bs[i]/2*pi))
+        Ns[i] =max(20,round(Int,k*crv.length*bs[i]/(2*pi)))
     end
     return Ns
 end
@@ -448,7 +448,17 @@ end
 Throws an `ArgumentError` for a billiard with holes and a nonempty symmetry
 registry. Holes are specified in the full physical frame and are not clipped
 to the fundamental domain, so fundamental-domain solvers and symmetry-reduced
-boundary-integral solvers cannot represent such a billiard.
+boundary-integral solvers cannot represent such a billiard. Returns `nothing`
+for billiards without holes or with an empty registry.
+
+## Arguments
+* `billiard`: Billiard to check; [`genus`](@ref) and its symmetry registry are inspected.
+
+## Returns
+* `nothing` when the billiard is supported.
+
+## Throws
+`ArgumentError` when `genus(billiard) > 0` and the symmetry registry is not empty.
 """
 function _require_fundamental_frame_support(billiard::AbsBilliard)
     (isempty(billiard.symmetries) || genus(billiard) == 0) && return nothing
@@ -458,10 +468,22 @@ end
 """
     _require_no_holes(solver::AbsSolver, billiard::AbsBilliard) → nothing
 
-Throws an `ArgumentError` when `billiard` has holes. Only
+Throws an `ArgumentError` when `billiard` has holes (`genus(billiard) > 0`). Only
 [`CompositeBIMSolver`](@ref) (and the accelerated solvers wrapping it as their
 kernel) treats every closed boundary loop as its own component; every other
 solver discretizes the boundary as one closed curve and cannot represent holes.
+Called first in `evaluate_points` of the particular-solutions, decomposition,
+Vergini-Saraceno, DLP and CFIE solvers.
+
+## Arguments
+* `solver`: Solver about to discretize `billiard`; its type name is used in the error message.
+* `billiard`: Billiard to check.
+
+## Returns
+* `nothing` when the billiard has no holes.
+
+## Throws
+`ArgumentError` pointing to [`CompositeBIMSolver`](@ref) when `billiard` has holes.
 """
 function _require_no_holes(solver::AbsSolver, billiard::AbsBilliard)
     genus(billiard) == 0 && return nothing

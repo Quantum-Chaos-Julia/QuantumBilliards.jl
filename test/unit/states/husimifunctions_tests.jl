@@ -4,7 +4,7 @@
 #                                    husimi_function(k, s, ds, u, L[, qs, ps]), the BoundaryPoints form, the eigenstate forms
 #                                    for basis states and BIM states, the batched forms and the SpectralData wrappers)
 # The Poincare-Husimi amplitude is h(q, p) = sum_j u_j exp(-k (s_j - q)^2 / 2) exp(-i k p (s_j - q)) ds_j and the returned
-# density is H = |h|^2 / sum |h|^2. This file has no `fundamental_domain` or `inside_only` keyword to test: the
+# density is H = |h|^2 / sum |h|^2. This file has no `fundamental_only` or `inside_only` keyword to test: the
 # state-based forms always use the boundary returned by boundary_function (unfolded when the basis has reflection symmetries).
 #
 # All references are analytic Gaussian integrals (sigma = 1/sqrt(k), truncation w = 7 gives a relative error of e^{-24}):
@@ -416,10 +416,10 @@ end
         @test q2 ≈ qs && p2 ≈ ps
     end
 
-    @testset "full_p, b, w, multithreaded" begin
+    @testset "full_p, ppw, w, multithreaded" begin
         @test husimi_function(st, HU_CIRCLE; full_p=true)[1] ≈ H atol = 1e-12 * maximum(H)
         @test husimi_function(st, HU_CIRCLE; multithreaded=false)[1] ≈ H atol = 1e-12 * maximum(H)
-        Hb, qb, _ = husimi_function(st, HU_CIRCLE; b=3000.0)
+        Hb, qb, _ = husimi_function(st, HU_CIRCLE; ppw=3000.0)
         hu_check_constant(Hb, qb, ps, k; var=false)
         Hw, _, pw = husimi_function(st, HU_CIRCLE; w=1.0)
         @test hu_err(Hw, H) > 1e-3                                    # a narrow window truncates the Gaussian
@@ -543,4 +543,55 @@ end
         @test_throws ArgumentError husimi_function(data)
         @test_throws ArgumentError husimi_function(data, 1)
     end
+end
+
+# Billiards with holes: the boundary data come from a CompositeBIMSolver discretization of the annulus (unit circle with an
+# eccentric hole of radius 0.3, 32 outer and 24 hole nodes). No eigen solve: u is hand-built.
+function hu_annulus_composite_pts(k)
+    annulus = AnnularBilliard(0.3, 0.1)
+    solver = CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, annulus; min_pts=32), DoubleLayerPotentialSolver(5.0, annulus; min_pts=24))
+    return annulus, solver, evaluate_points(solver, annulus, k)
+end
+
+@testset "_husimi_boundary_data" begin
+    @testset "billiard without holes: the full boundary" begin
+        s, ds, _ = hu_uniform_grid(Float64, 64)
+        pts = hu_pts(s, ds)
+        u = collect(1.0:64.0)
+        s2, ds2, u2, L = QuantumBilliards._husimi_boundary_data(pts, u, HU_CIRCLE)
+        @test s2 === pts.s && ds2 === pts.ds && u2 === u
+        @test L ≈ 2π
+        # the perimeter is that of the full boundary, not of the fundamental domain
+        rect = RectangleBilliard(1.0, 0.6)
+        prect = hu_pts(collect(0.0:3.0), fill(1.0, 4))
+        @test QuantumBilliards._husimi_boundary_data(prect, ones(4), rect)[4] ≈ 2 * (2 * 1.0 + 2 * 0.6)
+    end
+
+    @testset "billiard with a hole: the outer block only" begin
+        annulus, _, pts = hu_annulus_composite_pts(3.0)
+        u = collect(1.0:length(pts))
+        s, ds, uo, L = QuantumBilliards._husimi_boundary_data(pts, u, annulus)
+        @test length(s) == length(ds) == length(uo) == 32                 # the 32 outer nodes
+        @test s == pts.s[1:32] && ds == pts.ds[1:32] && uo == u[1:32]
+        @test L ≈ 2π                                                      # outer perimeter, not 2 pi (1 + 0.3)
+        @test sum(ds) ≈ L
+        @test all(<(L), s) && issorted(s)
+        @test all(x -> hypot(x[1], x[2]) ≈ 1.0, pts.xy[1:32])              # no hole node in the kept block
+    end
+
+    @testset "billiard with a hole: boundary points without composite bookkeeping are refused" begin
+        s, ds, _ = hu_uniform_grid(Float64, 64)
+        @test_throws ArgumentError QuantumBilliards._husimi_boundary_data(hu_pts(s, ds), ones(64), AnnularBilliard(0.3, 0.1))
+        @test_throws "CompositeBIMSolver" QuantumBilliards._husimi_boundary_data(hu_pts(s, ds), ones(64), AnnularBilliard(0.3, 0.1))
+    end
+end
+
+@testset "husimi_function(::BIMEigenstate) on a billiard with a hole" begin
+    annulus, solver, pts = hu_annulus_composite_pts(3.0)
+    st = hu_bim_state(3.0, fill(1.0, length(pts)), pts)
+    H, qs, ps = husimi_function(st, annulus, solver; c=5.0)
+    @test size(H) == (length(qs), length(ps))
+    @test sum(H) ≈ 1 rtol = 1e-10
+    @test all(isfinite, H) && all(>=(0), H)
+    @test 0 <= minimum(qs) && maximum(qs) < 2π + 1e-12                   # the outer perimeter only, no hole arclength
 end
