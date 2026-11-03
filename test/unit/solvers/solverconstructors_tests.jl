@@ -505,7 +505,7 @@ end
         sinai = SinaiBilliard(1.0, 0.25)
         @test CompositeBIMSolver(DoubleLayerPotentialSolver(10.0, sinai), DoubleLayerPotentialSolver(10.0, sinai)).loop_solver == [1, 2]
         sws = SquareWithinSquareBilliard(1.0)
-        @test CompositeBIMSolver(DoubleLayerPotentialSolver(10.0, sws)).loop_solver == [1, 2, 3]    # two hole objects
+        @test CompositeBIMSolver(DoubleLayerPotentialSolver(10.0, sws)).loop_solver == [1, 2, 2]    # one mirrored hole object: its two loops share solver 2
     end
 
     @testset "single component and common symmetry" begin

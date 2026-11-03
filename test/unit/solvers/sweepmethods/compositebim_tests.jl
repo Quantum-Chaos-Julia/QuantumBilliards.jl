@@ -544,7 +544,7 @@ cb_group_of(i, first_hole) = i < first_hole ? 0 : 1
     # one loop per hole object
     @test _composite_loop_groups(AnnularBilliard(0.3, 0.1)) == [0, 1]
     @test _composite_loop_groups(SinaiBilliard(1.0, 0.25)) == [0, 1]
-    @test _composite_loop_groups(SquareWithinSquareBilliard(1.0)) == [0, 1, 2]
+    @test _composite_loop_groups(SquareWithinSquareBilliard(1.0)) == [0, 1, 1]
     @test _composite_loop_groups(hf_domain_hole_billiard()) == [0, 1]
     @test _composite_loop_groups(hf_quarter_disc_billiard()) == [0, 1]
     # several loops in one hole object share its group
