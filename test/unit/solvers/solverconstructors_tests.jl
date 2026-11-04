@@ -745,7 +745,6 @@ end
         @test solver.stable_tol == 1e-9
         @test solver.imag_search_tol == 1e-4
         @test solver.eigenvectors === false
-        @test solver.verbose === false
         @test solver.taylor_tol == 3e-10
         @test _bim_numeric_type(solver) === Float64
         @test ismutabletype(CORKSolver)

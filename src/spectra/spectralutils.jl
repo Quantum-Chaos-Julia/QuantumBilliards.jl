@@ -845,7 +845,7 @@ function compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; accept_tol::
     end
     a, b = intervals[1]; k0 = (a+b)/2; Δpoly = (1+solver.guard)*(b-a)/2; pts = evaluate_points(solver, billiard, k0)
     pmin = max(2, ceil(Int, sqrt(solver.block_size))); p = max(solver.p, pmin)
-    @time "Polynomial Validation..." begin
+    @timeit_debug "polynomial_degree_tuning" begin
         P, _ = build_cork_polynomial(solver.kernel, pts, Float64(k0), Float64(Δpoly), p; multithreaded)
         err = validate_polynomial(solver.kernel, pts, P; multithreaded)
         if err>solver.taylor_tol
@@ -862,7 +862,7 @@ function compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; accept_tol::
                 p -= 1; err = err1
             end
         end
-        solver.verbose && @info @sprintf("CORK polynomial degree: %d -> %d, validation error = %.3e, tolerance = %.3e", solver.p, p, err, solver.taylor_tol)
+        @debug "CORK polynomial degree tuned" p_initial=solver.p p_final=p validation_error=err tolerance=solver.taylor_tol
     end
     ks = Complex{T}[]; ts = T[]
     if solver.eigenvectors

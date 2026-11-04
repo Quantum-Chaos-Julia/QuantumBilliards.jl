@@ -248,8 +248,7 @@ end
 
     @testset "fills exactly the requested columns" begin
         W = zeros(ComplexF64, (p + 1) * N, rmax)
-        t = cache_block!(W, B, U, N, p, 2, 4)
-        @test t isa Float64 && t >= 0
+        @test cache_block!(W, B, U, N, p, 2, 4) === nothing
         for j in 0:p
             rows = j * N + 1:(j + 1) * N
             @test W[rows, 2:4] ≈ B[rows, :] * U[:, 2:4]
@@ -259,7 +258,7 @@ end
 
     @testset "an empty column range does nothing" begin
         W = zeros(ComplexF64, (p + 1) * N, rmax)
-        @test cache_block!(W, B, U, N, p, 4, 3) == 0.0
+        @test cache_block!(W, B, U, N, p, 4, 3) === nothing
         @test iszero(W)
     end
 end
