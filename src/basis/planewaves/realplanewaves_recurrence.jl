@@ -164,7 +164,7 @@ Construct the Taylor cache associated with a [`RealPlaneWaves`](@ref) basis.
 * `cache`: [`RealPlaneWaveTaylorCache`](@ref) associated with `basis`.
 """
 @inline function basis_cache(basis::RealPlaneWaves, k0, pts; multithreaded::Bool = true)
-    return RealPlaneWaveTaylorCache(basis, k0, pts; multithreaded)
+    return @timeit_debug "basis_cache" RealPlaneWaveTaylorCache(basis, k0, pts; multithreaded)
 end
 
 """

@@ -128,7 +128,7 @@ Construct the Taylor cache associated with a [`FourierBessel`](@ref) basis.
 * `cache`: [`FourierBesselTaylorCache`](@ref) associated with `basis`.
 """
 @inline function basis_cache(basis::FourierBessel, k0, pts; multithreaded::Bool = true)
-    return FourierBesselTaylorCache(basis, k0, pts; multithreaded)
+    return @timeit_debug "basis_cache" FourierBesselTaylorCache(basis, k0, pts; multithreaded)
 end
 
 """

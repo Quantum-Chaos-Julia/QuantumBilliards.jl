@@ -678,24 +678,30 @@ of `cache.coeffs`, the recurrence streams linearly through memory.
 * `dA::Matrix{ComplexF64}`: First derivative.
 * `ddA::Matrix{ComplexF64}`: Second derivative.
 """
-function _construct_matrices!(solver::ExpandedBIMSolver, A::Matrix{ComplexF64}, dA::Matrix{ComplexF64}, ddA::Matrix{ComplexF64}, cache::EBIMTaylorCache, k::Real)
+function _construct_matrices!(solver::ExpandedBIMSolver, A::Matrix{ComplexF64}, dA::Matrix{ComplexF64}, ddA::Matrix{ComplexF64}, cache::EBIMTaylorCache, k::Real; multithreaded::Bool=true)
     δ = Float64(k) - cache.k0
     abs(δ) <= solver.taylor_radius || throw(ArgumentError("wavenumber $k lies outside the Taylor radius $(solver.taylor_radius) about $(cache.k0)"))
     C = cache.coeffs
     p = cache.degree
     n2 = length(A)
-    off = p * n2
-    @inbounds @simd for q = 1:n2
-        A[q] = C[off + q]
-        dA[q] = 0.0
-        ddA[q] = 0.0
-    end
-    @inbounds for l = p:-1:1
-        off = (l - 1) * n2
-        @simd for q = 1:n2
-            ddA[q] = ddA[q] * δ + 2 * dA[q]
-            dA[q] = dA[q] * δ + A[q]
-            A[q] = A[q] * δ + C[off + q]
+    nchunks = multithreaded ? clamp(n2 ÷ 16384, 1, Threads.nthreads()) : 1
+    len = cld(n2, nchunks)
+    @inbounds @use_threads multithreading=(nchunks > 1) for c = 1:nchunks
+        lo = (c - 1) * len + 1
+        hi = min(c * len, n2)
+        off = p * n2
+        @simd for q = lo:hi
+            A[q] = C[off + q]
+            dA[q] = 0.0
+            ddA[q] = 0.0
+        end
+        for l = p:-1:1
+            off = (l - 1) * n2
+            @simd for q = lo:hi
+                ddA[q] = ddA[q] * δ + 2 * dA[q]
+                dA[q] = dA[q] * δ + A[q]
+                A[q] = A[q] * δ + C[off + q]
+            end
         end
     end
     return A, dA, ddA
@@ -752,7 +758,7 @@ than implicitly constructing a one-point Taylor panel.
 * `ddA::Matrix`: Second derivative `A''(k)`.
 """
 function construct_matrices(solver::ExpandedBIMSolver, pts::BoundaryPoints, k; multithreaded::Bool = true)
-    return _ebim_construct_matrices(solver.kernel, pts, k; multithreaded)
+    return @timeit_debug "ebim_direct_assembly" _ebim_construct_matrices(solver.kernel, pts, k; multithreaded)
 end
 
 ################################################################################
@@ -789,33 +795,38 @@ function _solve(solver::ExpandedBIMSolver, A::Matrix{Complex{T}}, dA::Matrix{Com
     ks = Complex{T}[]
     ts = T[]
     @blas_multi_then_1 MAX_BLAS_THREADS begin
-        F = lu!(A)
+        @timeit_debug "lu_factorization" F = lu!(A)
         Ft = adjoint(F)
         dAt = adjoint(dA)
         op_r = x -> F \ (dA * x)
         op_l = x -> dAt * (Ft \ x)
-        μ, (VR, UL), (info_r, info_l) = KrylovKit.bieigsolve((op_r, op_l), n, nev, :LM, Complex{T}; tol = solver.krylov_tol, maxiter = solver.maxiter, krylovdim = max(solver.krylovdim, 2 * nev + 1))
+        @timeit_debug "bieigsolve" begin
+            μ, (VR, UL), (info_r, info_l) = KrylovKit.bieigsolve((op_r, op_l), n, nev, :LM, Complex{T}; tol = solver.krylov_tol, maxiter = solver.maxiter, krylovdim = max(solver.krylovdim, 2 * nev + 1))
+        end
         nconv::Int = min(info_r.converged, info_l.converged)
+        @debug "EBIM Krylov solve" maxlog=1 n nev nconv numops_r=info_r.numops numops_l=info_l.numops numiter_r=info_r.numiter numiter_l=info_l.numiter
         nconv >= nlevels || error("EBIM Krylov solve converged only $nconv eigenpairs; requested $nlevels")
         p = sortperm(abs.(μ[1:nconv]); rev = true)
         nkeep::Int = min(nev, nconv)
         resize!(ks, nkeep)
         resize!(ts, nkeep)
         buf = Vector{Complex{T}}(undef, n)
-        @inbounds for q = 1:nkeep
-            j::Int = p[q]
-            λ = inv(μ[j])
-            v = VR[j]
-            u = Ft \ UL[j]
-            ε1 = -λ
-            mul!(buf, ddA, v)
-            num = dot(u, buf)
-            mul!(buf, dA, v)
-            den = dot(u, buf)
-            ε2 = abs(den) > eps(T) ? -T(0.5) * ε1^2 * (num / den) : zero(ε1)
-            corr = ε1 + ε2
-            ks[q] = k + corr
-            ts[q] = abs(corr)
+        @timeit_debug "second_order_correction" begin
+            @inbounds for q = 1:nkeep
+                j::Int = p[q]
+                λ = inv(μ[j])
+                v = VR[j]
+                u = Ft \ UL[j]
+                ε1 = -λ
+                mul!(buf, ddA, v)
+                num = dot(u, buf)
+                mul!(buf, dA, v)
+                den = dot(u, buf)
+                ε2 = abs(den) > eps(T) ? -T(0.5) * ε1^2 * (num / den) : zero(ε1)
+                corr = ε1 + ε2
+                ks[q] = k + corr
+                ts[q] = abs(corr)
+            end
         end
     end
     return ks, ts

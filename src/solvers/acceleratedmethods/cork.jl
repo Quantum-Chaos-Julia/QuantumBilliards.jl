@@ -354,15 +354,18 @@ character and the symmetry-reduced polynomial is constructed.
   elapsed Taylor-Chebyshev assembly time in seconds.
 """
 function build_cork_polynomial(solver::SweepBIMSolver, pts, k0::Float64, Δ::Float64, p::Int; multithreaded::Bool=true)::Tuple{CORKPolynomial,Float64}
-    cache = _taylor_cache(solver,pts)
-    if solver.symmetry === nothing
-        B,t = build_B_full(cache,k0,Δ,p; multithreaded=multithreaded)
-        return CORKPolynomial(B,k0,Δ,p,cache.N),t
+    return @timeit_debug "build_cork_polynomial" begin
+        cache = _taylor_cache(solver,pts)
+        if solver.symmetry === nothing
+            B,t = build_B_full(cache,k0,Δ,p; multithreaded=multithreaded)
+            (CORKPolynomial(B,k0,Δ,p,cache.N),t)
+        else
+            orbits = solver isa CompositeBIMSolver ? _composite_symmetry_orbits(Float64,solver,pts) : _fold_boundary(Float64,solver.billiard,length(pts.xy),solver.symmetry,solver.sym_characters)
+            N = fundamental_size(orbits)
+            B,t = build_B_reduced(cache,orbits,k0,Δ,p; multithreaded=multithreaded)
+            (CORKPolynomial(B,k0,Δ,p,N),t)
+        end
     end
-    orbits = solver isa CompositeBIMSolver ? _composite_symmetry_orbits(Float64,solver,pts) : _fold_boundary(Float64,solver.billiard,length(pts.xy),solver.symmetry,solver.sym_characters)
-    N = fundamental_size(orbits)
-    B,t = build_B_reduced(cache,orbits,k0,Δ,p; multithreaded=multithreaded)
-    return CORKPolynomial(B,k0,Δ,p,N),t
 end
 
 """
@@ -412,14 +415,30 @@ where `Δpoly=P.Δ` is the guarded polynomial half-width.
 ## Returns
 - `Float64`: Worst relative error over the sampled points.
 """
-function validate_polynomial(solver::SweepBIMSolver, pts, P::CORKPolynomial; nsample::Int=5, multithreaded::Bool=true)
-    ts = range(-1.0, 1.0, length=nsample); worst = 0.0
-    for t in ts
-        k = P.k0+P.Δ*t; Ap = evaluate_cork_polynomial(P, t)
-        Ad = construct_matrices(solver, pts, k; multithreaded)
-        worst = max(worst, norm(Ap-Ad)/norm(Ad))
+function validate_polynomial(solver::SweepBIMSolver, pts, P::CORKPolynomial; nsample::Int=5, multithreaded::Bool=true, references=nothing)
+    return @timeit_debug "validate_polynomial" begin
+        ts = range(-1.0, 1.0, length=nsample); worst = 0.0
+        for (i, t) in enumerate(ts)
+            k = P.k0+P.Δ*t; Ap = evaluate_cork_polynomial(P, t)
+            Ad = references === nothing ? construct_matrices(solver, pts, k; multithreaded) : references[i]
+            worst = max(worst, norm(Ap-Ad)/norm(Ad))
+        end
+        worst
     end
-    return worst
+end
+
+"""
+    cork_validation_references(solver::SweepBIMSolver, pts, k0::Float64, Δ::Float64; nsample::Int=5, multithreaded::Bool=true) -> Vector{Matrix}
+
+Directly assemble the Fredholm matrices at the `nsample` validation points
+`k0+Δt`, `t∈[-1,1]`. They are independent of the polynomial degree and can be
+passed to [`validate_polynomial`](@ref) through `references` while tuning `p`.
+"""
+function cork_validation_references(solver::SweepBIMSolver, pts, k0::Float64, Δ::Float64; nsample::Int=5, multithreaded::Bool=true)
+    return @timeit_debug "validation_references" begin
+        geom = _bim_geometry(solver, pts)
+        [construct_matrices(solver, pts, k0+Δ*t, geom; multithreaded) for t in range(-1.0, 1.0, length=nsample)]
+    end
 end
 
 """
@@ -472,7 +491,6 @@ the vertically stacked coefficient blocks.
             mul!(@view(W[rows,a:b]), @view(B[rows,:]), X)
         end
     end
-    @debug "Coefficient actions cached" columns=(b - a + 1)
     return nothing
 end
 
@@ -724,7 +742,6 @@ function block_apply!(S::CORKState, B::Matrix{ComplexF64}, F, Gin)
             end
         end
     end
-    @debug "CORK block applied" rank_before=r rank_after=rn new_directions=bp
     bp > 0 && cache_block!(S.W,B,S.U,N,p,r + 1,rn)
     fill!(S.Z,0); @views S.Z[1:r,1:p,:] .+= γ; @views S.Z[1:r,1,:] .+= Hphys
     bp > 0 && (@views S.Z[r + 1:rn,1,:] .+= Cnew)
@@ -788,7 +805,7 @@ function init_cork(B::Matrix{ComplexF64}, p::Int, N::Int; block_size::Int=10)::C
     bn, _ = compact_block_qr!(Z0f,b); bn == b || error("Initial block breakdown")
     fill!(Z0,0); unpack!(Z0,Z0f,r,p,b); @views G[1:r,:,1:b] .= Z0[1:r,:,:]
     cache_block!(W,B,U,N,p,1,r)
-    @debug "CORK state initialized" N p block_size=b mdim state_MiB=(Base.summarysize(U) + Base.summarysize(W) + Base.summarysize(G)) / 2^20
+    @debug "CORK state initialized" maxlog=1 N p block_size=b mdim state_GiB=(Base.summarysize(U) + Base.summarysize(W) + Base.summarysize(G)) / 2^30
     return CORKState(U,W,G,Hb,pendingG,Z,H1,H2,γ,RHS,tmp,Y,Hphys,Hphys2,Zf,r,b,b,p,N,rmax,false,0)
 end
 
@@ -1026,7 +1043,7 @@ function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ
     mstep % block_size == 0 || error("mstep must be divisible by block_size")
     S = init_cork(B, p, N; block_size); mdim = size(S.Hb, 2); m = min(mstart, mdim)
     kmin = k0 - Δ; kmax = k0 + Δ; prev = Tuple{Float64,Float64,Float64}[]; have_prev = false; nstable = 0
-    @debug "CORK adaptive iteration started" kmin kmax mstart mstep mdim
+    @debug "CORK adaptive iteration" maxlog=1 kmin kmax mstart mstep mdim
     while true
         @timeit_debug "extend" extend!(S, B, F, m)
         @timeit_debug "ritz_roots" begin
@@ -1051,7 +1068,7 @@ function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ
         converged = nstable >= stable_checks && (edge_ok || empty_ok)
         maxρ = isempty(phys) ? Inf : maximum(x[3] for x in phys)
         status = empty_ok ? "EMPTY" : edge_ok ? "PASS" : "FAIL"
-        @debug "CORK Krylov step" m mdim rank=S.r ritz=length(requested) converged=length(phys) states=length(ks) max_residual=maxρ drift nstable stable_checks edges=status applies=S.napply
+        @debug "CORK Krylov step" maxlog=1 m mdim rank=S.r ritz=length(requested) converged=length(phys) states=length(ks) max_residual=maxρ drift nstable stable_checks edges=status applies=S.napply
         if converged
             Ψ = nothing
             if eigenvectors
@@ -1061,7 +1078,10 @@ function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ
             end
             return S, ks, Ψ, requested, allroots, edges, edge_good, m
         end
-        m == mdim && error("Reached full CORK Krylov dimension m=$mdim for matrix size N=$N without a stable requested spectrum. The boundary discretization is too coarse for the window (increase `ppw`/`min_pts` of the kernel) or the window holds too many levels (narrow it or lower `Rmax`/`nlevels`).")
+        if m == mdim
+            max_im = maximum(x -> abs(x[2]), requested; init = 0.0)
+            error("Reached full CORK Krylov dimension m=$mdim for matrix size N=$N without a stable requested spectrum (Weyl estimate $(round(expected; digits=1)) levels, $(length(requested)) Ritz roots in the window, $(length(phys)) accepted, max |Im k| = $max_im vs imag_tol = $imag_tol). The boundary discretization is too coarse for the window (increase `ppw`/`min_pts` of the kernel; roots shifted off the real axis by more than `imag_tol` are rejected) or the window holds too many levels (narrow it or lower `Rmax`/`nlevels`).")
+        end
         prev = copy(ks); have_prev = true; m = min(m + mstep, mdim)
     end
 end
@@ -1171,11 +1191,11 @@ Execute the complete Chebyshev-CORK pipeline on the interval `[k₀-dk/2,k₀+dk
 function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=true, eigenvectors::Bool=solver.eigenvectors, p::Int=solver.p, expected::Real=0.0)
     k0f = Float64(k0); Δ = Float64(dk)/2; Δpoly = Δ*(1+solver.guard)
     @timeit_debug "cork_solve_core" begin
-        @debug "CORK solve started" k0=k0f dk p guard=solver.guard npts=length(pts.xy)
+        @debug "CORK solve" maxlog=1 k0=k0f dk p guard=solver.guard npts=length(pts.xy)
         @timeit_debug "CORK polynomial construction" begin
             P, _ = build_cork_polynomial(solver.kernel, pts, k0f, Δpoly, p; multithreaded)
         end
-        @debug "CORK polynomial built" N=P.N p B_MiB=Base.summarysize(P.B)/2^20 reduction=length(pts.xy)/P.N
+        @debug "CORK polynomial" maxlog=1 N=P.N p B_GiB=Base.summarysize(P.B)/2^30 reduction=length(pts.xy)/P.N
         @timeit_debug "get_A0" begin
             A0 = get_A0(P.B, P.N, p)
         end
@@ -1186,7 +1206,7 @@ function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=t
             end
         end
         S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = adaptive_cork(P.B, F, p, P.N; k0=k0f, Δ=Δ, Δpoly=Δpoly, block_size=solver.block_size, mstart=solver.mstart, mstep=solver.mstep, stable_checks=solver.stable_checks, imag_tol=solver.imag_tol, edge_tol=solver.edge_tol, res_tol=solver.res_tol, stable_tol=solver.stable_tol, imag_search_tol=solver.imag_search_tol, eigenvectors, expected)
-        @debug "CORK solve finished" krylov_dim=mfinal rank=S.r napply=S.napply nroots=length(ks)
+        @debug "CORK solve finished" maxlog=1 krylov_dim=mfinal rank=S.r napply=S.napply nroots=length(ks)
         (P, S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal)
     end
 end

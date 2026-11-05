@@ -112,3 +112,18 @@ function try_MKL!()
         @info "Not on x86_64 architecture ($(Sys.ARCH)), defaulting to stock BLAS backend: $(BLAS.vendor())"
     end
 end
+
+"""
+    _gib(A)
+
+Memory footprint of `A` in GiB.
+"""
+_gib(A::DenseArray) = sizeof(A) / 2^30
+_gib(A) = Base.summarysize(A) / 2^30
+
+"""
+    _matinfo(A)
+
+Size and memory in GiB of `A`, for `@debug` messages.
+"""
+_matinfo(A) = (size=size(A), GiB=_gib(A))

@@ -36,6 +36,22 @@ function sw_orbit_identity_holds(orbits, full, reduced)
     return all(full[orbits.fund_to_full[g, b]] ≈ orbits.fund_to_scale[g, b] * reduced[b] for g in 1:ng, b in 1:nf)
 end
 
+# Minimal SweepBIMSolver without reusable geometry: its matrix records the wavenumber and the multithreaded flag.
+struct sw_ToyBIM <: SweepBIMSolver end
+QuantumBilliards.construct_matrices(::sw_ToyBIM, pts, k; multithreaded::Bool=true) = fill(ComplexF64(k) + (multithreaded ? 0.0 : 0.5), 2, 2)
+
+@testset "_bim_geometry fallback and the geom = nothing construct_matrices method" begin
+    solver = sw_ToyBIM()
+    pts = :pts                                                              # the fallback never inspects the points
+    @test QuantumBilliards._bim_geometry(solver, pts) === nothing
+
+    for k in (2.0, 3.5 + 0.1im)
+        @test construct_matrices(solver, pts, k, nothing) == construct_matrices(solver, pts, k)
+        @test construct_matrices(solver, pts, k, nothing; multithreaded=false) == construct_matrices(solver, pts, k; multithreaded=false)
+    end
+    @test construct_matrices(solver, pts, 2.0, nothing; multithreaded=false) != construct_matrices(solver, pts, 2.0, nothing; multithreaded=true)   # the flag is forwarded
+end
+
 @testset "_fold_boundary" begin
     rect = RectangleBilliard(1.0, 0.7)
     c3 = C3Billiard(0.02)

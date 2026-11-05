@@ -29,7 +29,7 @@
 using LinearAlgebra: Diagonal, qr, norm, svdvals, lu, I, tril
 using Random: MersenneTwister
 using QuantumBilliards: construct_matrices, _bim_numeric_type, TaylorWorkspace, power_to_cheb, taylor_to_cheb!, CORKPolynomial,
-                        build_cork_polynomial, evaluate_cork_polynomial, validate_polynomial, get_A0, cache_block!,
+                        build_cork_polynomial, evaluate_cork_polynomial, validate_polynomial, cork_validation_references, get_A0, cache_block!,
                         compact_project!, compact_block_qr!, pack!, unpack!, init_cork, compute_tail!, promote_tail!, extend!,
                         ritz_roots, reconstruct_cork_eigenvectors, adaptive_cork, _cork_solve_core, _cork_solve, _cork_kernel_name,
                         _cork_warn_if_incomplete
@@ -220,6 +220,45 @@ end
         errs = [norm(evaluate_cork_polynomial(P2, t) - ck_matrix(s, CK_K0 + CK_DPOLY * t)) / norm(ck_matrix(s, CK_K0 + CK_DPOLY * t)) for t in (-1.0, 0.0, 1.0)]
         @test err ≈ maximum(errs)
         @test validate_polynomial(s, CK_PTS, P2; nsample=2, multithreaded=false) ≈ max(errs[1], errs[3]) atol = 1e-12   # samples t = -1, 1
+    end
+end
+
+@testset "cork_validation_references and the references keyword of validate_polynomial" begin
+    @testset "synthetic kernel (no reusable geometry)" begin
+        s = ck_problem()
+        refs = cork_validation_references(s, CK_PTS, CK_K0, CK_DPOLY; nsample=5, multithreaded=false)
+        @test length(refs) == 5
+        for (r, t) in zip(refs, range(-1.0, 1.0, length=5))
+            @test r == ck_matrix(s, CK_K0 + CK_DPOLY * t)
+        end
+        @test length(cork_validation_references(s, CK_PTS, CK_K0, CK_DPOLY; multithreaded=false)) == 5   # default nsample = 5
+        @test length(cork_validation_references(s, CK_PTS, CK_K0, CK_DPOLY; nsample=3, multithreaded=false)) == 3
+
+        P2 = ck_polynomial(2)
+        for ns in (2, 3, 5)
+            refs = cork_validation_references(s, CK_PTS, P2.k0, P2.Δ; nsample=ns, multithreaded=false)
+            @test validate_polynomial(s, CK_PTS, P2; nsample=ns, multithreaded=false, references=refs) ==
+                  validate_polynomial(s, CK_PTS, P2; nsample=ns, multithreaded=false)
+        end
+    end
+
+    @testset "DLP on a circle: references equal construct_matrices at k0 + Δ t" begin
+        circle = CircleBilliard(1.0)
+        solver = DoubleLayerPotentialSolver(5.0, circle; min_pts=24)
+        k0, Δ, nsample = 3.0, 0.1, 4
+        pts = evaluate_points(solver, circle, k0 + Δ)
+        refs = cork_validation_references(solver, pts, k0, Δ; nsample, multithreaded=false)
+        @test length(refs) == nsample
+        for (r, t) in zip(refs, range(-1.0, 1.0, length=nsample))
+            @test r == construct_matrices(solver, pts, k0 + Δ * t; multithreaded=false)
+            @test size(r) == (boundary_matrix_size(solver, pts), boundary_matrix_size(solver, pts))
+        end
+
+        P, _ = build_cork_polynomial(solver, pts, k0, Δ, 8; multithreaded=false)
+        e_direct = validate_polynomial(solver, pts, P; nsample, multithreaded=false)
+        e_refs = validate_polynomial(solver, pts, P; nsample, multithreaded=false, references=refs)
+        @test e_refs == e_direct
+        @test isfinite(e_refs)
     end
 end
 

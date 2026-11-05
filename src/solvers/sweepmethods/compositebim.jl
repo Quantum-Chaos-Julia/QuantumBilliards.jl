@@ -650,40 +650,60 @@ over source symmetry orbits with the prescribed character phases.
 * `A::Matrix{Complex{T}}`: Full or symmetry-reduced globally coupled composite Fredholm matrix.
 """
 function construct_matrices(solver::CompositeBIMSolver{T}, pts::BoundaryPoints{T}, k; multithreaded::Bool=true) where {T<:Real}
+    return construct_matrices(solver, pts, k, _bim_geometry(solver, pts); multithreaded)
+end
+
+"""
+    _bim_geometry(solver::CompositeBIMSolver{T}, pts::BoundaryPoints{T}) where {T<:Real}
+
+Wavenumber-independent data of the composite Fredholm assembly: component offsets and slices,
+per-component geometry caches `Gs` and Kress matrices `Rmats` and, for a symmetry-reduced solver,
+the folded boundary `orbits`. It is read-only during assembly and can be reused for every
+wavenumber on the same `pts`.
+"""
+function _bim_geometry(solver::CompositeBIMSolver{T}, pts::BoundaryPoints{T}) where {T<:Real}
+    nc = length(solver.loop_solver)
+    maximum(solver.loop_solver) == length(solver.component_solvers) || error("CompositeBIMSolver has $(length(solver.component_solvers)) component solver(s) but its boundary loops need $(maximum(solver.loop_solver))")
+    offs = _composite_offsets(pts,nc)
+    comp_pts = [_composite_component_slice(pts,offs[a]:offs[a+1]-1,a) for a in 1:nc]
+    Gs = Vector{BoundaryGeomCache{T}}(undef, nc); Rmats = Vector{Matrix{T}}(undef,nc)
+    @timeit_debug "boundary_geom_cache" begin
+        @inbounds for a in 1:nc
+            graded = _is_nontrivial_dlp_grading(comp_pts[a])
+            Gs[a] = boundary_geom_cache(comp_pts[a], graded)
+            Na = length(comp_pts[a]); Ra = zeros(T, Na, Na)
+            kress_R!(Ra)
+            Rmats[a] = Ra
+        end
+    end
+    orbits = solver.symmetry === nothing ? nothing : _composite_symmetry_orbits(T, solver, pts)
+    return (; offs, comp_pts, Gs, Rmats, orbits)
+end
+
+"""
+    construct_matrices(solver::CompositeBIMSolver{T}, pts::BoundaryPoints{T}, k, geom; multithreaded::Bool=true) where {T<:Real}
+
+Assemble the composite Fredholm matrix with the precomputed geometry `geom = _bim_geometry(solver, pts)`.
+"""
+function construct_matrices(solver::CompositeBIMSolver{T}, pts::BoundaryPoints{T}, k, geom::NamedTuple; multithreaded::Bool=true) where {T<:Real}
     @timeit_debug "construct_matrices" begin
         kT = _bim_widen_k(T,k)
         nc = length(solver.loop_solver); N = length(pts)
-        maximum(solver.loop_solver) == length(solver.component_solvers) || error("CompositeBIMSolver has $(length(solver.component_solvers)) component solver(s) but its boundary loops need $(maximum(solver.loop_solver))")
-        @debug "Composite BIM matrix construction started" N kT nc symmetry = solver.symmetry sym_characters = solver.sym_characters
-        offs = _composite_offsets(pts,nc)
-        comp_pts = [_composite_component_slice(pts,offs[a]:offs[a+1]-1,a) for a in 1:nc]
-        Gs = Vector{BoundaryGeomCache{T}}(undef, nc); Rmats = Vector{Matrix{T}}(undef,nc)
-        @timeit_debug "boundary_geom_cache" begin
-            @inbounds for a in 1:nc
-                graded = _is_nontrivial_dlp_grading(comp_pts[a])
-                Gs[a] = boundary_geom_cache(comp_pts[a], graded)
-                Na = length(comp_pts[a]); Ra = zeros(T, Na, Na)
-                kress_R!(Ra)
-                Rmats[a] = Ra
-            end
-        end
+        (; offs, comp_pts, Gs, Rmats, orbits) = geom
         if solver.symmetry === nothing
             A = Matrix{Complex{T}}(undef, N, N)
             @timeit_debug "fredholm_assembly" begin
                 _composite_fredholm_full!(A, solver, comp_pts, Gs, Rmats, offs, kT; multithreaded)
             end
-            @debug "Composite Fredholm matrix assembled" size=size(A)
+            @debug "Composite BIM matrix construction" maxlog=1 N nc A=_matinfo(A)
             return A
         else
-            @timeit_debug "symmetry_orbits" begin
-                orbits = _composite_symmetry_orbits(T, solver, pts)
-            end
             m = fundamental_size(orbits); g2c, g2l = _composite_global_to_local(offs)
             A = Matrix{Complex{T}}(undef, m, m)
             @timeit_debug "reduced_fredholm_assembly" begin
                 _composite_fredholm_reduced!(A, solver, comp_pts, Gs, Rmats, offs, g2c, g2l, orbits, kT; multithreaded)
             end
-            @debug "Symmetry-reduced composite Fredholm matrix assembled" fundamental_size = m
+            @debug "Composite BIM symmetry-reduced matrix construction" maxlog=1 N nc symmetry=solver.symmetry A=_matinfo(A)
             return A
         end
     end

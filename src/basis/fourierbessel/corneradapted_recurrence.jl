@@ -180,7 +180,7 @@ Construct the Taylor cache associated with a [`CornerAdaptedFourierBessel`](@ref
 * `cache`: [`CornerAdaptedTaylorCache`](@ref) associated with `basis`.
 """
 @inline function basis_cache(basis::CornerAdaptedFourierBessel, k0, pts; multithreaded::Bool = true)
-    return CornerAdaptedTaylorCache(basis, k0, pts; multithreaded)
+    return @timeit_debug "basis_cache" CornerAdaptedTaylorCache(basis, k0, pts; multithreaded)
 end
 
 

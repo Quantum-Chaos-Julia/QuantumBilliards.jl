@@ -335,6 +335,110 @@ end
     end
 end
 
+@testset "_beyn_imag_k_check: krange filtering" begin
+    s = bn_problem()
+    # real parts: window 1 = (2.7 good, 3.0 good, 2.7 fake with large imag), window 2 = (3.3 good, 3.8 wrong)
+    ks1, X1 = bn_candidates(s, [(2.7 + 1e-5im, 3), (3.0 + 2e-5im, 4), (2.7 + 0.3im, 3)])
+    ks2, X2 = bn_candidates(s, [(3.3 + 3e-5im, 6), (3.8 + 1e-7im, 6)])
+    ks_all, X_all, pts_all = [ks1, ks2], [X1, X2], [BN_PTS, BN_PTS]
+    chk(solver; kw...) = _beyn_imag_k_check(solver, ks_all, X_all, pts_all; pad=10, group_size=1, multithreaded=false, kw...)
+
+    @testset "krange covering all roots equals krange = nothing" begin
+        solver = bn_solver(use_taylor=false, res_tol=1e-2)
+        idx0, res0 = chk(solver)
+        idx1, res1 = chk(solver; krange=(2.0, 4.0))
+        @test idx1 == idx0
+        @test isequal(res1, res0)
+        @test idx1 == [[1, 2], [1]]
+    end
+
+    @testset "narrower krange drops out-of-range roots; the rest matches the unrestricted run" begin
+        # auto_discard_spurious = false keeps every checked root, so idx_keep isolates the krange effect
+        solver = bn_solver(use_taylor=false, res_tol=1e-2, auto_discard_spurious=false)
+        idx0, res0 = chk(solver)
+        krange = (2.9, 4.0)
+        idx1, res1 = chk(solver; krange)
+        inrange = [[j for j in eachindex(ks_all[i]) if krange[1] <= real(ks_all[i][j]) <= krange[2]] for i in 1:2]
+        @test idx0 == [[1, 2, 3], [1, 2]]
+        @test idx1 == inrange == [[2], [1, 2]]
+        @test idx1 == [intersect(idx0[i], inrange[i]) for i in 1:2]
+        for i in 1:2, (p, j) in enumerate(idx1[i])
+            @test res1[i][p] == res0[i][findfirst(==(j), idx0[i])]
+        end
+    end
+
+    @testset "out-of-range roots do not take part in the streak" begin
+        # extra window with an out-of-range wrong root (imag 2.5e-5) that sits between the good roots in processing order
+        ks3, X3 = bn_candidates(s, [(9.0 + 2.5e-5im, 6)])
+        @test abs(bn_d(s, 6, ks3[1])) > 1e-2
+        ks3_all, X3_all, pts3_all = [ks1, ks2, ks3], [X1, X2, X3], [BN_PTS, BN_PTS, BN_PTS]
+        solver = bn_solver(use_taylor=false, res_tol=1e-2)
+        # order in range: (w2,1) good, (w1,2) good, then pad = 2 ends the check; (w2,2) is accepted unchecked
+        # if the out-of-range root counted, it would fail between them, reset the streak and let (w1,1) in as well
+        idx, res = _beyn_imag_k_check(solver, ks3_all, X3_all, pts3_all; pad=2, group_size=1, multithreaded=false, krange=(2.9, 4.0))
+        @test idx == [[2], [1, 2], Int[]]
+        @test isfinite(res[1][1]) && isfinite(res[2][1]) && isnan(res[2][2])
+        idx, _ = _beyn_imag_k_check(solver, ks3_all, X3_all, pts3_all; pad=2, group_size=1, multithreaded=false)
+        @test idx != [[2], [1, 2], Int[]]                                   # without krange the extra root does interfere
+    end
+
+    @testset "all roots out of range" begin
+        solver = bn_solver(use_taylor=false, res_tol=1e-2)
+        idx, res = chk(solver; krange=(10.0, 11.0))
+        @test idx == [Int[], Int[]]
+        @test all(isnan, vcat(res...))
+    end
+end
+
+@testset "_beyn_residual: geometry-free path equals the reused-geometry path" begin
+    @testset "synthetic kernel (no reusable geometry, geom = nothing)" begin
+        s = bn_problem()
+        solver = bn_solver(use_taylor=false)
+        k, x = 2.7 + 1e-3im, ComplexF64.(s.Q[:, 3])
+        y = zeros(ComplexF64, BN_N)
+        r3 = QuantumBilliards._beyn_residual(solver, BN_PTS, k, x, y; multithreaded=false)
+        r4 = QuantumBilliards._beyn_residual(solver, BN_PTS, k, x, y, nothing; multithreaded=false)
+        @test r3 == r4
+        @test r3 ≈ abs(bn_d(s, 3, k)) atol = 1e-12
+    end
+
+    @testset "DLP kernel, with and without symmetry" begin
+        stadium = StadiumBilliard(0.3)
+        for kw in ((;), (symmetry=YAxisReflection(), sym_characters=(-1,)))
+            kernel = DoubleLayerPotentialSolver(5.0, stadium; min_pts=32, kw...)
+            solver = BeynSolver(kernel; r=4, nq=8, use_taylor=false)
+            pts = evaluate_points(kernel, stadium, 3.0)
+            geom = QuantumBilliards._bim_geometry(kernel, pts)
+            N = boundary_matrix_size(kernel, pts)
+            x = randn(MersenneTwister(1), ComplexF64, N)
+            y1, y2 = zeros(ComplexF64, N), zeros(ComplexF64, N)
+            for k in (3.0, 3.1 + 0.05im)
+                r_free = QuantumBilliards._beyn_residual(solver, pts, k, x, y1; multithreaded=false)
+                r_geom = QuantumBilliards._beyn_residual(solver, pts, k, x, y2, geom; multithreaded=false)
+                @test r_free == r_geom
+                @test y1 == y2
+            end
+        end
+    end
+
+    @testset "_beyn_imag_k_check with a reusable-geometry kernel equals the manual residuals" begin
+        stadium = StadiumBilliard(0.3)
+        kernel = DoubleLayerPotentialSolver(5.0, stadium; min_pts=32)
+        solver = BeynSolver(kernel; r=4, nq=8, use_taylor=false, res_tol=1e10)   # huge tolerance: every candidate is kept
+        pts = evaluate_points(kernel, stadium, 3.0)
+        N = boundary_matrix_size(kernel, pts)
+        rng = MersenneTwister(2)
+        ks = [ComplexF64[3.0 + 1e-3im, 3.1 + 2e-3im], ComplexF64[3.2 + 1e-3im]]
+        Xs = [randn(rng, ComplexF64, N, 2), randn(rng, ComplexF64, N, 1)]
+        idx, res = _beyn_imag_k_check(solver, ks, Xs, [pts, pts]; pad=10, group_size=1, multithreaded=false)
+        @test idx == [[1, 2], [1]]
+        for i in 1:2, j in eachindex(ks[i])
+            A = construct_matrices(kernel, pts, ks[i][j]; multithreaded=false)
+            @test res[i][j] ≈ norm(A * Xs[i][:, j]) rtol = 1e-10
+        end
+    end
+end
+
 # Degree-2 Taylor matrix of the synthetic problem about k0 at a real k, to check the single-sample error of validate_beyn_taylor.
 function bn_taylor_matrix_p2(s::bn_Problem, k0, k)
     a = bn_taylor_coeffs(s, k0)
@@ -422,5 +526,68 @@ end
         ks, res = solve_spectrum(solver, billiard, BN_K0, BN_DK; multithreaded=false)
         @test sort(real.(ks)) ≈ BN_INSIDE atol = 1e-6
         @test length(res) == 4 && all(<(solver.res_tol), res)
+    end
+end
+
+# Chebyshev multi-k matrix construction with a precomputed geometry (DLP and CFIE) and its use in _beyn_imag_k_check.
+bn_cheb_config() = ChebyshevConfig(; n_panels_h=50, M_h=8, n_panels_j=20, M_j=8, tol=1e-10, sampling_points=400, max_iter=30)
+
+@testset "_construct_matrices_multi_k_cheb: 4-arg wrapper vs explicit geometry" begin
+    circle = CircleBilliard(1.0)
+    cfg = bn_cheb_config()
+    zj_a = ComplexF64[3.0 + 0.02im, 2.9 + 0.05im, 3.1 - 0.03im]
+    zj_b = ComplexF64[2.8 + 0.1im, 3.2 - 0.01im]
+    makers = (("DLP", DoubleLayerPotentialSolver), ("CFIE", CombinedFieldIntegralEquationSolver))
+    for (name, Solver) in makers, (label, kw) in (("no symmetry", (;)), ("Y reflection", (symmetry=YAxisReflection(), sym_characters=(1,))))
+        solver = Solver(5.0, circle; min_pts=32, kw...)
+        pts = evaluate_points(solver, circle, 3.0)
+        geom = QuantumBilliards._bim_geometry(solver, pts)
+
+        @testset "$name, $label: 4-arg == 5-arg bitwise" begin
+            F4 = QuantumBilliards._construct_matrices_multi_k_cheb(solver, pts, zj_a, cfg; multithreaded=false)
+            F5 = QuantumBilliards._construct_matrices_multi_k_cheb(solver, pts, zj_a, cfg, geom; multithreaded=false)
+            @test length(F4) == length(F5) == length(zj_a)
+            @test all(q -> F4[q] == F5[q], eachindex(zj_a))
+            @test all(M -> M isa Matrix{ComplexF64}, F5)
+        end
+
+        @testset "$name, $label: one geometry reused for two zj sets == fresh geometry" begin
+            Fa_re = QuantumBilliards._construct_matrices_multi_k_cheb(solver, pts, zj_a, cfg, geom; multithreaded=false)
+            Fb_re = QuantumBilliards._construct_matrices_multi_k_cheb(solver, pts, zj_b, cfg, geom; multithreaded=false)
+            Fa_new = QuantumBilliards._construct_matrices_multi_k_cheb(solver, pts, zj_a, cfg, QuantumBilliards._bim_geometry(solver, pts); multithreaded=false)
+            Fb_new = QuantumBilliards._construct_matrices_multi_k_cheb(solver, pts, zj_b, cfg, QuantumBilliards._bim_geometry(solver, pts); multithreaded=false)
+            @test all(q -> Fa_re[q] == Fa_new[q], eachindex(zj_a))
+            @test all(q -> Fb_re[q] == Fb_new[q], eachindex(zj_b))
+        end
+    end
+end
+
+@testset "_beyn_imag_k_check: Chebyshev path with reused geometry" begin
+    circle = CircleBilliard(1.0)
+    cfg = bn_cheb_config()
+    kernel = DoubleLayerPotentialSolver(5.0, circle; min_pts=32)
+    solver = BeynSolver(kernel; r=4, nq=8, use_taylor=false, use_chebyshev=true, cheb_config=cfg, res_tol=1e10)   # keep every candidate
+    pts = evaluate_points(kernel, circle, 3.0)
+    N = boundary_matrix_size(kernel, pts)
+    rng = MersenneTwister(3)
+    ks = [ComplexF64[3.0 + 1e-3im, 3.1 + 2e-3im, 2.9 + 3e-3im], ComplexF64[3.2 + 1e-3im, 3.3 + 4e-3im]]
+    Xs = [randn(rng, ComplexF64, N, 3), randn(rng, ComplexF64, N, 2)]
+    idx, res = _beyn_imag_k_check(solver, ks, Xs, [pts, pts]; pad=10, group_size=1, multithreaded=false)
+    @test idx == [[1, 2, 3], [1, 2]]
+    for i in 1:2, j in eachindex(ks[i])
+        # reference: pre-change behaviour, one 4-arg Chebyshev call per candidate (geometry rebuilt each time)
+        A = QuantumBilliards._construct_matrices_multi_k_cheb(kernel, pts, ComplexF64[ks[i][j]], cfg; multithreaded=false)[1]
+        @test res[i][j] == norm(A * Xs[i][:, j])
+        # consistent with direct construction within the Chebyshev tolerance
+        Ad = construct_matrices(kernel, pts, ks[i][j]; multithreaded=false)
+        @test abs(res[i][j] - norm(Ad * Xs[i][:, j])) < 1e-6 * norm(Xs[i][:, j])
+    end
+
+    @testset "grouped checks give the same residuals as group_size = 1" begin
+        idx_g, res_g = _beyn_imag_k_check(solver, ks, Xs, [pts, pts]; pad=10, group_size=5, multithreaded=false)
+        @test idx_g == idx
+        for i in 1:2
+            @test isapprox(res_g[i], res[i]; rtol=1e-6)
+        end
     end
 end

@@ -379,6 +379,24 @@ end
     end
 end
 
+@testset "_construct_matrices!: multithreaded chunks equal the serial evaluation" begin
+    # n2 = n^2 chunks of 16384 entries: n = 400 gives min(9, nthreads) chunks, n = 200 gives 2 (needs Threads.nthreads() >= 2).
+    solver = eb_solver(taylor_radius=0.5)
+    p = 4
+    for n in (200, 400)
+        rng = MersenneTwister(n)
+        cache = EBIMTaylorCache(3.0, p, randn(rng, ComplexF64, n, n, p + 1))
+        As = Matrix{ComplexF64}(undef, n, n); dAs = similar(As); ddAs = similar(As)
+        At = similar(As); dAt = similar(As); ddAt = similar(As)
+        _construct_matrices!(solver, As, dAs, ddAs, cache, 3.2; multithreaded=false)
+        _construct_matrices!(solver, At, dAt, ddAt, cache, 3.2; multithreaded=true)
+        @test At == As
+        @test dAt == dAs
+        @test ddAt == ddAs
+        @test norm(As) > 0
+    end
+end
+
 @testset "_solve: local second-order EBIM problem" begin
     s = eb_problem()
     solver = eb_solver()

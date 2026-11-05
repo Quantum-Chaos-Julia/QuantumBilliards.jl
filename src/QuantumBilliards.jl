@@ -64,6 +64,10 @@ include("solvers/acceleratedmethods/ebim.jl")
 include("solvers/acceleratedmethods/beyn.jl")
 include("solvers/acceleratedmethods/cork.jl")
 include("solvers/acceleratedmethods/acceleratedmethods.jl")
+include("solvers/memoryestimates.jl")
+export estimate_memory, MemoryEstimate, default_memory_limit
+include("solvers/solverlogging.jl")
+export log_solver
 include("solvers/chebyshev/optimalpanelization.jl")
 include("solvers/chebyshev/dlp.jl")
 include("solvers/chebyshev/cfie.jl")

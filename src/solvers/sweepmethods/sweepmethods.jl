@@ -64,6 +64,16 @@ function k_sweep(solver::SweepBasisSolver, basis::AbsBasis, billiard::AbsBilliar
 end
 
 """
+    _bim_geometry(solver::SweepBIMSolver, pts::BoundaryPoints)
+
+Wavenumber-independent data reused across calls of `construct_matrices(solver, pts, k, geom)`.
+Solvers without reusable geometry return `nothing`, for which `construct_matrices` falls back to the
+three-argument method.
+"""
+_bim_geometry(::SweepBIMSolver, pts) = nothing
+construct_matrices(solver::SweepBIMSolver, pts, k, ::Nothing; multithreaded::Bool=true) = construct_matrices(solver, pts, k; multithreaded)
+
+"""
     solve_wavenumber(solver::SweepBIMSolver, billiard::AbsBilliard, k, dk; multithreaded::Bool = true, pts::Union{Nothing,BoundaryPoints} = nothing) → (k0::Real, t0::Real)
 
 Finds the wavenumber `k0` within `[k - dk/2, k + dk/2]` via `Optim.optimize` that minimizes the tension

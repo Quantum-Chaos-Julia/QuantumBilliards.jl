@@ -1,5 +1,5 @@
 # Unit tests for
-#   src/solvers/decompositions.jl   (generalized_eigen, generalized_eigvals, generalized_eigen_all, directsum)
+#   src/solvers/decompositions.jl   (generalized_eigen, generalized_eigen!, generalized_eigvals, generalized_eigen_all, directsum)
 # Pencils are either diagonal (eigenvalues known in closed form) or random symmetric-definite, checked against
 # LAPACK's generalized symmetric-definite solver and against residual / orthogonality identities.
 #
@@ -10,7 +10,7 @@
 
 using LinearAlgebra
 using Random
-using QuantumBilliards: generalized_eigen, generalized_eigvals, generalized_eigen_all, directsum
+using QuantumBilliards: generalized_eigen, generalized_eigen!, generalized_eigvals, generalized_eigen_all, directsum
 
 # Random symmetric positive-definite A and symmetric B (well conditioned).
 function dec_random_pencil(rng, n)
@@ -126,6 +126,38 @@ end
     @testset "shape errors" begin
         @test_throws DimensionMismatch generalized_eigen(ones(3, 4), ones(3, 3))      # A not square
         @test_throws DimensionMismatch generalized_eigen(A, ones(4, 4))               # B size differs from A
+    end
+end
+
+@testset "generalized_eigen!: in-place variant" begin
+    n = 8
+    A, B = dec_random_pencil(Xoshiro(7), n)
+
+    @testset "outputs equal those of generalized_eigen" begin
+        mu, Z, C = generalized_eigen(A, B)
+        mu!, Z!, C! = generalized_eigen!(copy(A), B)
+        @test mu! == mu
+        @test Z! == Z
+        @test C! == C
+        X = C! * Z!
+        @test X' * A * X ≈ Matrix(1.0I, n, n) atol=1e-10                  # A-orthonormal, so the result is a valid pencil solution
+        @test B * X ≈ A * X * Diagonal(mu!) atol=1e-9
+    end
+
+    @testset "eig_tol is forwarded" begin
+        As = Matrix(Diagonal([1.0, 1e-3, 1e-9]))
+        Bs = Matrix(Diagonal([1.0, 1.0, 1.0]))
+        @test generalized_eigen!(copy(As), Bs; eig_tol=1e-6)[1] == generalized_eigen(As, Bs; eig_tol=1e-6)[1]
+        @test length(generalized_eigen!(copy(As), Bs; eig_tol=1e-6)[1]) == 2
+    end
+
+    @testset "generalized_eigen leaves A unchanged, generalized_eigen! may overwrite it" begin
+        A0 = copy(A)
+        generalized_eigen(A, B)
+        @test A == A0                                                      # works on a copy
+        Aw = copy(A)
+        generalized_eigen!(Aw, B)
+        @test Aw != A0                                                     # LAPACK eigen! destroys its input (observed)
     end
 end
 

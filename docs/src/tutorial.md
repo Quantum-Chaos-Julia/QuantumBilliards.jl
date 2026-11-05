@@ -61,3 +61,22 @@ and `s = d-k`, so the solve runs in the cyclic sector `s = k`, which contains ev
 b = SinaiBilliard(1.0, 0.3)               # D₄: E₁ is the only 2D irrep
 sector = symmetry_sector(b; irrep2d = 1)
 ```
+
+## Profiling a spectrum computation
+
+The accelerated solvers (`VerginiSaracenoSolver`, `BeynSolver`, `ExpandedBIMSolver`, `CORKSolver`) are instrumented with `@timeit_debug` (TimerOutputs) and `@debug` (Logging). Both are no-ops by default.
+
+```julia
+using TimerOutputs, QuantumBilliards
+TimerOutputs.enable_debug_timings(QuantumBilliards)   # before the first call; triggers recompilation
+reset_timer!()
+ENV["JULIA_DEBUG"] = "QuantumBilliards"               # optional: sizes, ranks, memory markers
+data = compute_spectrum(solver, billiard, k1, k2; show_progress = false)
+print_timer(; allocations = true)
+```
+
+The timer tree is rooted at `compute_spectrum_vs`, `compute_spectrum_beyn`, `compute_spectrum_ebim` or `compute_spectrum_cork`, with three stage children, `preparation` (boundary points, caches, polynomial/degree tuning), `solution` (window solves) and `postprocessing` (state construction, merging, finalization), and the performance-critical steps (matrix assembly, factorizations, eigen/SVD/Krylov) below them. Notes:
+
+* Allocation columns count Julia allocations only; BLAS/LAPACK workspace and peak memory are not included. `@debug` lines report `live_GiB` and `maxrss_GiB` at sweep boundaries, and matrix construction messages report each matrix size and memory in GiB.
+* Each `@debug` call site prints only once per logger (`maxlog=1`), so repeated windows do not flood the output.
+* The default timer is not thread-safe. Timers are placed around whole loops, never inside threaded loop bodies.

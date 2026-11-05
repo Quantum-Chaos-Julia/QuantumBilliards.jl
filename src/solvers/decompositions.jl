@@ -30,11 +30,20 @@ Reference: https://users.flatironinstitute.org/~ahb/thesis_html/node60.html
 * `C_scaled`: Scaled eigenvector matrix corresponding to the truncated basis.
 """
 function generalized_eigen(A,B;eig_tol=1e-15)
-    @debug "Generalized eigen decomposition started." 
+    return generalized_eigen!(copy(A),B;eig_tol)
+end
+
+"""
+    generalized_eigen!(A::Symmetric, B::Symmetric; eig_tol::Real = 1e-15) → (mu::Vector, Z::Matrix, C_scaled::Matrix)
+
+In-place variant of [`generalized_eigen`](@ref) that overwrites `A` with the
+diagonalization workspace and so avoids one copy of `A`.
+"""
+function generalized_eigen!(A,B;eig_tol=1e-15)
     @timeit_debug "generalized_eigen" begin
-        @debug "First decomposition matrix size." size=size(A)
+        @debug "Generalized eigen decomposition" maxlog=1 A=_matinfo(A) B=_matinfo(B)
         @timeit_debug "First decomposition" begin
-            d,S=eigen(Symmetric(A))
+            d,S=eigen!(Symmetric(A))
         end
         idx=d.>eig_tol*maximum(d)
         q=1.0./sqrt.(d[idx])
@@ -46,7 +55,6 @@ function generalized_eigen(A,B;eig_tol=1e-15)
         E=Matrix{eltype(B)}(undef,n,n)
         mul!(tmp,B,C_scaled)
         mul!(E,C_scaled',tmp)
-        @debug "Second decomposition matrix size." size=size(E)
         @timeit_debug "Second decomposition" begin
             mu,Z=eigen!(Symmetric(E))
         end
@@ -84,9 +92,8 @@ Reference: https://users.flatironinstitute.org/~ahb/thesis_html/node60.html
 * `mu`: Vector of generalized eigenvalues.
 """
 function generalized_eigvals(A,B;eig_tol=1e-15)
-    @debug "Generalized eigenvals decomposition started." 
     @timeit_debug "generalized_eigenvals" begin
-        @debug "First decomposition matrix size." size=size(A)
+        @debug "Generalized eigenvals decomposition" maxlog=1 A=_matinfo(A) B=_matinfo(B)
         @timeit_debug "First decomposition" begin    
             d,S=eigen(Symmetric(A))
         end
@@ -101,7 +108,6 @@ function generalized_eigvals(A,B;eig_tol=1e-15)
         E=Matrix{eltype(B)}(undef,n,n) 
         mul!(tmp,B,C_scaled)
         mul!(E,C_scaled',tmp)
-        @debug "Second decomposition matrix size." size=size(E)
         @timeit_debug "Second decomposition" begin
             return eigvals!(Symmetric(E))
         end
@@ -131,15 +137,12 @@ It is important to filter the eigenvalues λ for Inf or NaN since eigen internal
 """
 function generalized_eigen_all(A,B)
     @timeit_debug "generalized_eigen_all" begin
-        @debug "Generalized eigen all decomposition started."
-        @debug "Matrix size." size=size(A)
-        @debug "Computing right eigenvectors."
+        @debug "Generalized eigen all decomposition" maxlog=1 A=_matinfo(A) B=_matinfo(B)
         @timeit_debug "Right decomposition" begin 
             F=eigen(A,B)
         end
         λ=F.values
         VR=F.vectors # right eigenvectors
-        @debug "Computing left eigenvectors."
         @timeit_debug "Left decomposition" begin 
             F_adj=eigen(A',B') # adjoint problem to find left eigenvectors
         end
