@@ -388,15 +388,7 @@ function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billi
                 @debug "VS Taylor validation" maxlog=1 kcheck keval err_B err_dB tol=basis.taylor_tol
                 max(err_B, err_dB) <= basis.taylor_tol || throw(ArgumentError("Taylor representation with degree $(basis.taylor_degree) and radius $(basis.taylor_radius) fails tolerance $(basis.taylor_tol) for expansion center k0 = $kcheck at evaluation point k = $keval: basis error = $err_B, derivative error = $err_dB"))
             end
-            panel_start = Int[]
-            panel_stop = Int[]
-            i = 1
-            while i <= length(centers)
-                j = max(i, searchsortedlast(centers, centers[i] + 2R))
-                push!(panel_start, i)
-                push!(panel_stop, j)
-                i = j + 1
-            end
+            panel_start, panel_stop = _vs_panels(centers, R)
             @maybe_showprogress show_progress for p in eachindex(panel_start)
                 i1 = panel_start[p]
                 i2 = panel_stop[p]
@@ -738,26 +730,8 @@ directly at every expansion center.
 function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::Function = (k -> 0.05 * k^(-1/3)), merge_tol = 1e-5, spacing_frac = 0.02, tolmax = 5e-3, local_window::Int = 4, accept_tol::Union{Nothing,Real} = 5e-4, multithreaded::Bool = true, show_progress::Bool = true, max_memory::Real = default_memory_limit()) where {Bi<:AbsBilliard}
     _enforce_memory_limit(max_memory, "EBIM", solver, billiard, k1, k2)
     @timeit_debug "compute_spectrum_ebim" @with_kress_q_floor begin
-        T = _bim_numeric_type(solver)
-        k1T = T(k1)
-        k2T = T(k2)
-        k1T < k2T || throw(ArgumentError("require k1 < k2"))
-        fundamental_only = solver.kernel.symmetry !== nothing
-        centers = T[]
-        dks = T[]
-        nlevels = Int[]
-        begin
-            k = k1T
-            while k <= k2T
-                Δk = T(dk(k))
-                Δk > zero(T) || throw(ArgumentError("dk(k) must be positive"))
-                push!(centers, k)
-                push!(dks, Δk)
-                nweyl = ceil(Int, weyl_window_count(billiard, k - Δk, 2 * Δk; fundamental_only))
-                push!(nlevels, max(1, nweyl))
-                k += Δk
-            end
-        end
+        centers, dks, nlevels = _ebim_windows(solver, billiard, k1, k2, dk)
+        T = eltype(centers); k1T = T(k1); k2T = T(k2)
         @debug "EBIM sweep" maxlog=1 k1 k2 ncenters=length(centers) use_taylor=solver.use_taylor live_GiB=Base.gc_live_bytes()/2^30 maxrss_GiB=Sys.maxrss()/2^30
         ks = Complex{T}[]
         ts = T[]

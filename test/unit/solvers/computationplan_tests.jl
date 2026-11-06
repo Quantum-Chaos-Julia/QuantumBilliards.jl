@@ -236,3 +236,200 @@ using QuantumBilliards: plan_computation, plan_weyl_windows, k_range_for_states,
         end
     end
 end
+
+# plan_computation (AcceleratedBasisSolver, ExpandedBIMSolver), _vs_panels, _ebim_windows. Plans only; no eigen solves.
+using QuantumBilliards: _vs_panels, _ebim_windows, _assemble_plan, sweep_windows, weyl_window_count
+
+@testset "_vs_panels" begin
+    centers = collect(0.0:0.1:3.0)
+    R = 0.25
+    starts, stops = _vs_panels(centers, R)
+    @test length(starts) == length(stops)
+    @test starts[1] == 1
+    @test stops[end] == length(centers)
+    @test all(starts[i+1] == stops[i] + 1 for i in 1:length(starts)-1)
+    @test all(starts .<= stops)
+    @test all(centers[stops[i]] - centers[starts[i]] <= 2R + 1e-12 for i in eachindex(starts))
+    @test length(starts) > 1
+
+    @testset "single center and tiny radius" begin
+        @test _vs_panels([1.0], 0.5) == ([1], [1])
+        s, e = _vs_panels(centers, 1e-6)       # every center is its own panel
+        @test s == e == collect(1:length(centers))
+        s, e = _vs_panels(centers, 10.0)       # one panel for everything
+        @test (s, e) == ([1], [length(centers)])
+    end
+end
+
+@testset "plan_computation accelerated" begin
+    rect = RectangleBilliard(1.0, 0.5)
+    vs = VerginiSaracenoSolver(2.0, 5.0)
+    basis = RealPlaneWaves(6; use_taylor=false)
+    L = CompositeCurve(get_boundary_curves(rect)).length
+    vsdim(s, k) = max(s.min_dim, round(Int, L * k * s.dim_scaling_factor / (2 * pi)))
+
+    @testset "window layout equals sweep_windows" begin
+        plan = plan_computation(vs, basis, rect, 20.0, 22.0, 0.05)
+        centers, widths = sweep_windows(20.0, 22.0, 0.05)
+        @test plan isa ComputationPlan
+        @test plan.solver === vs
+        @test length(plan.windows) == length(centers)
+        @test [w.kcenter for w in plan.windows] == centers
+        @test [w.halfwidth for w in plan.windows] == widths
+        @test all(w.expected_states ≈ weyl_window_count(rect, w.kcenter - w.halfwidth, 2 * w.halfwidth) for w in plan.windows)
+        @test sum(w.expected_states for w in plan.windows) > 0
+        @test (plan.k1, plan.k2) == (20.0, 22.0)
+        @test plan.notes == String[]
+    end
+
+    @testset "dim and matrix_dim" begin
+        plan = plan_computation(vs, basis, rect, 20.0, 22.0, 0.05)
+        @test all(w.dim == vsdim(vs, w.kcenter) for w in plan.windows)
+        @test all(w.matrix_dim == length(QuantumBilliards.evaluate_points(vs, rect, w.kcenter).w_vs) for w in plan.windows)
+        vs2 = with_params(vs; min_dim=10)             # make dim depend on k
+        plan2 = plan_computation(vs2, basis, rect, 20.0, 22.0, 0.05)
+        @test all(w.dim == vsdim(vs2, w.kcenter) for w in plan2.windows)
+        @test plan2.windows[end].dim >= plan2.windows[1].dim
+    end
+
+    @testset "dk as Function and solver unchanged" begin
+        dkf = k -> 0.05 * k^(-1/3)
+        plan = plan_computation(vs, basis, rect, 20.0, 22.0, dkf)
+        centers, widths = sweep_windows(20.0, 22.0, dkf)
+        @test [w.kcenter for w in plan.windows] == centers
+        @test [w.halfwidth for w in plan.windows] == widths
+        @test plan.solver === vs
+        @test plan_computation(vs, basis, rect, 20.0, 22.0, 0.05; tune=false).solver === vs
+    end
+
+    @testset "k2 <= k1 throws" begin
+        @test_throws ArgumentError plan_computation(vs, basis, rect, 22.0, 20.0, 0.05)
+        @test_throws ArgumentError plan_computation(vs, basis, rect, 20.0, 20.0, 0.05)
+    end
+
+    @testset "max_memory note" begin
+        tight = plan_computation(vs, basis, rect, 20.0, 22.0, 0.05; max_memory=1.0)
+        @test any(occursin("max_memory", n) for n in tight.notes)
+        loose = plan_computation(vs, basis, rect, 20.0, 22.0, 0.05; max_memory=1e15)
+        @test !any(occursin("max_memory", n) for n in loose.notes)
+    end
+
+    @testset "N1,N2 form" begin
+        fo = basis.symmetries !== nothing
+        k1, k2 = k_range_for_states(rect, 10, 30; fundamental_only=fo)
+        plan = plan_computation(vs, basis, rect, 10, 30; nlevels=3)
+        @test plan.k1 ≈ k1
+        @test plan.k2 ≈ k2
+        @test !isempty(plan.windows)
+        @test any(occursin("nlevels", n) for n in plan.notes)
+        plan_small = plan_computation(vs, basis, rect, 10, 30; nlevels=0.35)
+        @test !any(occursin("nlevels", n) for n in plan_small.notes)
+        @test length(plan_small.windows) > length(plan.windows)
+        @test plan_small.k1 ≈ k1
+    end
+
+    @testset "Taylor panels" begin
+        R = 0.5
+        tbasis = RealPlaneWaves(6; use_taylor=true, taylor_radius=R)
+        @test QuantumBilliards.uses_taylor(tbasis)
+        vs2 = with_params(vs; min_dim=10)
+        plan = plan_computation(vs2, tbasis, rect, 20.0, 22.0, 0.05)
+        centers, _ = sweep_windows(20.0, 22.0, 0.05)
+        @test [w.kcenter for w in plan.windows] == centers
+        starts, stops = _vs_panels(centers, R)
+        @test length(starts) > 1
+        for (i1, i2) in zip(starts, stops)
+            last = plan.windows[i2]
+            @test all(plan.windows[i].dim == last.dim for i in i1:i2)
+            @test all(plan.windows[i].matrix_dim == last.matrix_dim for i in i1:i2)
+            @test last.dim == vsdim(vs2, centers[i2])
+        end
+        plain = plan_computation(vs2, basis, rect, 20.0, 22.0, 0.05)
+        @test all(plan.windows[i].dim >= plain.windows[i].dim for i in eachindex(centers))
+    end
+end
+
+@testset "plan_computation ExpandedBIMSolver" begin
+    rect = RectangleBilliard(1.0, 0.5)
+    eb = ExpandedBIMSolver(DoubleLayerPotentialSolver(4.0, rect))
+    dkf = k -> 0.05 * k^(-1/3)
+
+    @testset "_ebim_windows" begin
+        centers, dks, nl = _ebim_windows(eb, rect, 20.0, 22.0, dkf)
+        @test centers[1] == 20.0
+        @test all(centers .<= 22.0)
+        @test centers[end] + dks[end] > 22.0
+        @test all(diff(centers) .≈ dks[1:end-1])
+        @test dks == dkf.(centers)
+        @test all(nl .>= 1)
+        @test nl == [max(1, ceil(Int, weyl_window_count(rect, k - d, 2d))) for (k, d) in zip(centers, dks)]
+        @test_throws ArgumentError _ebim_windows(eb, rect, 22.0, 20.0, dkf)
+        @test_throws ArgumentError _ebim_windows(eb, rect, 20.0, 20.0, dkf)
+        @test_throws ArgumentError _ebim_windows(eb, rect, 20.0, 22.0, k -> 0.0)
+        @test_throws ArgumentError _ebim_windows(eb, rect, 20.0, 22.0, k -> -0.1)
+    end
+
+    @testset "plan structure" begin
+        plan = plan_computation(eb, rect, 20.0, 22.0)
+        centers, dks, _ = _ebim_windows(eb, rect, 20.0, 22.0, dkf)
+        @test plan isa ComputationPlan
+        @test plan.solver === eb
+        @test length(plan.windows) == length(centers)
+        @test [w.kcenter for w in plan.windows] == centers
+        @test [w.halfwidth for w in plan.windows] ≈ dkf.(centers)
+        for w in plan.windows
+            @test w.expected_states isa Float64
+            @test w.expected_states ≈ weyl_window_count(rect, w.kcenter - w.halfwidth, 2 * w.halfwidth)
+        end
+        @test all(w.dim == w.matrix_dim for w in plan.windows)
+        @test all(w.dim > 0 for w in plan.windows)
+        @test plan.expected_total_states ≈ expected_states(rect, 20.0, 22.0)
+        @test plan.notes == String[]
+        @test plan_computation(eb, rect, 20.0, 22.0; tune=false).solver === eb
+    end
+
+    @testset "custom dk" begin
+        plan = plan_computation(eb, rect, 20.0, 22.0; dk=k -> 0.2)
+        @test all(w.halfwidth == 0.2 for w in plan.windows)
+        @test length(plan.windows) < length(plan_computation(eb, rect, 20.0, 22.0).windows)
+        @test_throws ArgumentError plan_computation(eb, rect, 20.0, 22.0; dk=k -> 0.0)
+    end
+
+    @testset "N1,N2 form" begin
+        k1, k2 = k_range_for_states(rect, 10, 30)
+        plan = plan_computation(eb, rect, 10, 30)
+        @test plan.k1 ≈ k1
+        @test plan.k2 ≈ k2
+        @test length(plan.windows) == length(_ebim_windows(eb, rect, k1, k2, dkf)[1])
+        @test plan.solver === eb
+    end
+
+    @testset "k2 <= k1 throws" begin
+        @test_throws ArgumentError plan_computation(eb, rect, 22.0, 20.0)
+    end
+
+    @testset "max_memory note" begin
+        tight = plan_computation(eb, rect, 20.0, 22.0; max_memory=1.0)
+        @test any(occursin("max_memory", n) for n in tight.notes)
+        loose = plan_computation(eb, rect, 20.0, 22.0; max_memory=1e15)
+        @test !any(occursin("max_memory", n) for n in loose.notes)
+    end
+end
+
+@testset "_assemble_plan" begin
+    rect = RectangleBilliard(1.0, 0.5)
+    beyn = BeynSolver(DoubleLayerPotentialSolver(4.0, rect))
+    ws = [WindowPlan(21.0, 1.0, 2.0, 40, 80)]
+    mem = MemoryEstimate(2.0^30, 2.0^29)
+    plan = _assemble_plan(beyn, rect, 20.0, 22.0, ws, mem, 1e15, String[]; fundamental_only=false)
+    @test plan isa ComputationPlan{Float64}
+    @test plan.windows === ws
+    @test plan.memory === mem
+    @test plan.expected_total_states ≈ expected_states(rect, 20.0, 22.0)
+    @test plan.density_k1 ≈ spectral_density(20.0, rect)
+    @test plan.density_k2 ≈ spectral_density(22.0, rect)
+    @test plan.nthreads == Threads.nthreads()
+    @test isempty(plan.notes)
+    tight = _assemble_plan(beyn, rect, 20.0, 22.0, ws, mem, 1.0, String[]; fundamental_only=false)
+    @test length(tight.notes) == 1 && occursin("max_memory", tight.notes[1])
+end
