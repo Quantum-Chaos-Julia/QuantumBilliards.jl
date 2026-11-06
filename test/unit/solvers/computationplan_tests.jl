@@ -119,3 +119,120 @@ end
         @test !occursin('\n', out)
     end
 end
+
+# plan_computation (Beyn and CORK), _beyn_intervals, _cork_intervals, _bim_plan. Plans only; no eigen solves.
+using QuantumBilliards: plan_computation, plan_weyl_windows, k_range_for_states, _beyn_intervals, _cork_intervals, _bim_plan
+
+@testset "plan_computation" begin
+    rect = RectangleBilliard(1.0, 0.5)
+    kernel = DoubleLayerPotentialSolver(4.0, rect)
+    beyn = BeynSolver(kernel; nlevels=20)
+    cork = CORKSolver(kernel; nlevels=20)
+
+    @testset "_beyn_intervals matches plan_weyl_windows" begin
+        iv = _beyn_intervals(beyn, rect, 20.0, 40.0)
+        ref = plan_weyl_windows(rect, 20.0, 40.0; nlevels=20, Rmax=beyn.Rmax)
+        @test iv == ref
+        @test !isempty(iv)
+        @test iv[1][1] ≈ 20.0
+        @test iv[end][2] ≈ 40.0
+        @test_throws ArgumentError _beyn_intervals(beyn, rect, 40.0, 20.0)
+    end
+
+    @testset "_cork_intervals" begin
+        iv = _cork_intervals(cork, rect, 20.0, 40.0)
+        ref = plan_weyl_windows(rect, 20.0, 40.0; nlevels=20, Rmax=cork.Rmax)
+        @test length(iv) == length(ref)
+        @test iv[1:end-1] == ref[1:end-1]
+        @test iv[end][1] == ref[end][1]
+        prev_width = iv[end-1][2] - iv[end-1][1]
+        @test iv[end][2] - iv[end][1] >= prev_width - 1e-12       # last window is not narrower than the previous one
+        @test_throws ArgumentError _cork_intervals(cork, rect, 40.0, 20.0)
+    end
+
+    @testset "Beyn plan structure" begin
+        plan = plan_computation(beyn, rect, 20.0, 40.0)
+        ref = plan_weyl_windows(rect, 20.0, 40.0; nlevels=20, Rmax=beyn.Rmax)
+        @test plan isa ComputationPlan
+        @test (plan.k1, plan.k2) == (20.0, 40.0)
+        @test length(plan.windows) == length(ref)
+        @test sum(w.expected_states for w in plan.windows) ≈ plan.expected_total_states
+        @test plan.expected_total_states ≈ expected_states(rect, 20.0, 40.0)
+        @test all(w.dim > 0 && w.matrix_dim > 0 for w in plan.windows)
+        @test all(w.matrix_dim == plan.windows[1].matrix_dim for w in plan.windows)
+        @test all(w.dim == plan.windows[1].dim for w in plan.windows)
+        @test all(w.halfwidth > 0 for w in plan.windows)
+        @test plan.nthreads == Threads.nthreads()
+        @test plan.density_k1 ≈ spectral_density(20.0, rect)
+        @test plan.density_k2 ≈ spectral_density(40.0, rect)
+    end
+
+    @testset "Beyn tune keeps input solver unchanged" begin
+        deg = beyn.taylor_degree
+        plan = plan_computation(beyn, rect, 20.0, 40.0)
+        @test beyn.taylor_degree == deg
+        @test plan.solver isa BeynSolver
+        @test plan.solver.kernel === beyn.kernel
+        @test plan.solver.taylor_degree > 0
+        plan0 = plan_computation(beyn, rect, 20.0, 40.0; tune=false)
+        @test plan0.solver === beyn
+        @test !any(occursin("taylor", n) for n in plan0.notes)
+    end
+
+    @testset "N1,N2 form equals k_range_for_states" begin
+        for s in (beyn, cork)
+            k1, k2 = k_range_for_states(rect, 10, 60)
+            p = plan_computation(s, rect, 10, 60)
+            @test p.k1 ≈ k1
+            @test p.k2 ≈ k2
+            pk = plan_computation(s, rect, k1, k2)
+            @test length(pk.windows) == length(p.windows)
+        end
+    end
+
+    @testset "CORK plan structure" begin
+        plan = plan_computation(cork, rect, 20.0, 40.0)
+        iv = _cork_intervals(cork, rect, 20.0, 40.0)
+        @test length(plan.windows) == length(iv)
+        # the last window may be widened beyond k2, so the window sum can exceed the total
+        @test sum(w.expected_states for w in plan.windows) >= plan.expected_total_states - 1e-8
+        @test sum(w.expected_states for w in plan.windows) ≈ sum(expected_states(rect, a, b) for (a, b) in iv)
+        ws = plan.windows
+        for i in 1:length(ws)-1
+            @test ws[i].kcenter + ws[i].halfwidth ≈ ws[i+1].kcenter - ws[i+1].halfwidth
+        end
+        @test any(occursin("polynomial degree", n) for n in plan.notes)
+        @test plan.solver === cork
+        @test all(w.dim > 0 && w.matrix_dim > 0 for w in ws)
+    end
+
+    @testset "max_memory note" begin
+        for s in (beyn, cork)
+            tight = plan_computation(s, rect, 20.0, 40.0; max_memory=1.0)
+            @test any(occursin("max_memory", n) for n in tight.notes)
+            loose = plan_computation(s, rect, 20.0, 40.0; max_memory=1e15)
+            @test !any(occursin("max_memory", n) for n in loose.notes)
+        end
+    end
+
+    @testset "_bim_plan direct call" begin
+        iv = _beyn_intervals(beyn, rect, 20.0, 40.0)
+        plan = _bim_plan(beyn, rect, iv, 20.0, 40.0, 1e15, String[])
+        @test plan isa ComputationPlan{Float64}
+        @test length(plan.windows) == length(iv)
+        @test plan.notes == String[]
+        @test plan.solver === beyn
+        @test plan.windows[1].kcenter ≈ (iv[1][1] + iv[1][2]) / 2
+        @test plan.windows[1].halfwidth ≈ (iv[1][2] - iv[1][1]) / 2
+        note = _bim_plan(beyn, rect, iv, 20.0, 40.0, 1.0, ["pre"])
+        @test note.notes[1] == "pre"
+        @test length(note.notes) == 2
+    end
+
+    @testset "empty interval throws" begin
+        for s in (beyn, cork)
+            @test_throws ArgumentError plan_computation(s, rect, 40.0, 20.0)
+            @test_throws ArgumentError plan_computation(s, rect, 30.0, 30.0)
+        end
+    end
+end

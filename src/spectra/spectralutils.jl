@@ -518,9 +518,8 @@ residual check before the final spectrum is constructed.
 function compute_spectrum(solver::BeynSolver, billiard::Bi, k1, k2; accept_tol::Union{Nothing,Real}=1e-8, multithreaded::Bool=true, show_progress::Bool=true, max_memory::Real=default_memory_limit()) where {Bi<:AbsBilliard}
     _enforce_memory_limit(max_memory, "Beyn", solver, billiard, k1, k2)
     @timeit_debug "compute_spectrum_beyn" @with_kress_q_floor begin
-        T = _bim_numeric_type(solver); fundamental_only = solver.kernel.symmetry!==nothing
-        intervals = plan_weyl_windows(billiard, T(k1), T(k2); nlevels=solver.nlevels, Rmax=solver.Rmax, fundamental_only)
-        isempty(intervals) && throw(ArgumentError("Spectrum interval [$k1,$k2] contains no Weyl windows"))
+        T = _bim_numeric_type(solver)
+        intervals = _beyn_intervals(solver, billiard, k1, k2)
         k0, R = beyn_disks_from_windows(intervals); nw = length(k0)
         @debug "Beyn sweep" maxlog=1 k1 k2 nwindows=nw eigenvectors=solver.eigenvectors imag_k_check=solver.imag_k_check live_GiB=Base.gc_live_bytes()/2^30 maxrss_GiB=Sys.maxrss()/2^30
         pts_type = typeof(evaluate_points(solver, billiard, T(k1))); pts = Vector{pts_type}(undef, nw)
@@ -894,13 +893,8 @@ function compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; accept_tol::
     @timeit_debug "compute_spectrum_cork" @with_kress_q_floor begin
         T = _bim_numeric_type(solver); k1T = T(k1); k2T = T(k2); k1T<k2T || throw(ArgumentError("require k1<k2"))
         fundamental_only = solver.kernel.symmetry!==nothing
-        intervals = plan_weyl_windows(billiard, k1T, k2T; nlevels=solver.nlevels, Rmax=solver.Rmax, fundamental_only)
-        isempty(intervals) && throw(ArgumentError("Spectrum interval [$k1,$k2] contains no Weyl windows"))
+        intervals = _cork_intervals(solver, billiard, k1, k2)
         @debug "CORK sweep" maxlog=1 k1 k2 nwindows=length(intervals) eigenvectors=solver.eigenvectors live_GiB=Base.gc_live_bytes()/2^30 maxrss_GiB=Sys.maxrss()/2^30
-        if length(intervals)>1
-            ap, bp = intervals[end-1]; a, b = intervals[end]; dkprev = bp-ap
-            b-a<dkprev && (intervals[end] = (a, a+dkprev))
-        end
         a, b = intervals[1]; k0 = (a+b)/2; Δpoly = (1+solver.guard)*(b-a)/2; pts = evaluate_points(solver, billiard, k0)
         pmin = max(2, ceil(Int, sqrt(solver.block_size))); p = max(solver.p, pmin)
         @timeit_debug "preparation" begin
