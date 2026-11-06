@@ -49,8 +49,6 @@ Default `max_memory` of `compute_spectrum`: 90% of the physical RAM, in bytes.
 """
 default_memory_limit() = 0.9 * Float64(Sys.total_memory())
 
-_expected_states(billiard, k1, k2, fundamental_only::Bool) = max(0.0, Float64(state_at_k(k2, billiard; fundamental_only)) - Float64(state_at_k(k1, billiard; fundamental_only)))
-
 # Full boundary size and symmetry-reduced matrix size at the largest wavenumber.
 function _bim_sizes(solver, billiard, k2)
     pts = evaluate_points(solver, billiard, k2)
@@ -80,7 +78,7 @@ function estimate_memory(solver::VerginiSaracenoSolver, basis::AbsBasis, billiar
     p = uses_taylor(basis) ? Float64(basis.taylor_degree) : -1.0
     taylor_units = p >= 0 ? p + 2 : 0.0     # coefficient tensor + angular factors
     working = _REAL_BYTES * ((taylor_units + 6) * M * dim + 10 * dim^2)
-    ns = _expected_states(billiard, k1, k2, basis.symmetries !== nothing)
+    ns = expected_states(billiard, k1, k2; fundamental_only=basis.symmetries !== nothing)
     persistent = solver.eigenvectors ? _REAL_BYTES * ns * dim : 0.0
     return MemoryEstimate(working, persistent)
 end
@@ -90,7 +88,7 @@ function estimate_memory(solver::BeynSolver, billiard::AbsBilliard, k1, k2)
     Nf, M = _bim_sizes(solver, billiard, k2)
     r = Float64(min(solver.r, round(Int, M)))
     nw = length(plan_weyl_windows(billiard, Float64(k1), Float64(k2); nlevels=solver.nlevels, Rmax=solver.Rmax, fundamental_only))
-    ns = _expected_states(billiard, k1, k2, fundamental_only)
+    ns = expected_states(billiard, k1, k2; fundamental_only=fundamental_only)
     streaming = !solver.use_taylor && !solver.use_chebyshev     # direct backend keeps O(1) contour matrices
     working = _CPLX_BYTES * ((streaming ? 3 : solver.nq) * M^2 + _BIM_GEOM_UNITS * Nf^2 + 6 * M * r)
     persistent = _PTS_BYTES_PER_POINT * nw * Nf
@@ -104,7 +102,7 @@ function estimate_memory(solver::CORKSolver, billiard::AbsBilliard, k1, k2)
     Nf, M = _bim_sizes(solver, billiard, k2)
     p = Float64(max(solver.p, ceil(Int, sqrt(solver.block_size))))
     nw = length(plan_weyl_windows(billiard, Float64(k1), Float64(k2); nlevels=solver.nlevels, Rmax=solver.Rmax, fundamental_only))
-    ns = _expected_states(billiard, k1, k2, fundamental_only)
+    ns = expected_states(billiard, k1, k2; fundamental_only=fundamental_only)
     build = (p + 1) * M^2 + _BIM_GEOM_UNITS * Nf^2 + 2 * M^2     # polynomial B + geometry + validation matrices
     krylov = (3p + 5) * M^2                                      # B, P(0) + LU, U, W, G
     working = _CPLX_BYTES * max(build, krylov)

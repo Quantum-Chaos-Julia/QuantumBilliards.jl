@@ -67,7 +67,7 @@ include("solvers/acceleratedmethods/acceleratedmethods.jl")
 include("solvers/memoryestimates.jl")
 export estimate_memory, MemoryEstimate, default_memory_limit
 include("solvers/computationplan.jl")
-export with_params
+export with_params, expected_states, WindowPlan, ComputationPlan
 include("solvers/solverlogging.jl")
 export log_solver
 include("solvers/chebyshev/optimalpanelization.jl")

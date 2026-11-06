@@ -1,7 +1,7 @@
 # Unit tests for
 #   src/solvers/acceleratedmethods/beyn.jl   (construct_matrices(::BeynSolver, ...) contour moments, _beyn_projected_solve,
 #                                             _beyn_solve_core via solve / solve_vectors, _beyn_imag_k_check,
-#                                             validate_beyn_taylor, _tune_beyn_taylor_degree!, solve_wavenumber, solve_spectrum)
+#                                             validate_beyn_taylor, _tune_beyn_taylor_degree, solve_wavenumber, solve_spectrum)
 # Weyl window planning (plan_weyl_windows, beyn_disks_from_windows, beyn_buffer_matrices) is covered in
 # spectra/spectralutils_tests.jl and not repeated here; constructor validation is covered in solvers/solverconstructors_tests.jl.
 #
@@ -24,7 +24,7 @@
 using LinearAlgebra: Diagonal, qr, norm, svdvals, opnorm
 using Random: MersenneTwister
 using QuantumBilliards: construct_matrices, _beyn_projected_solve, _beyn_solve_core, _beyn_imag_k_check,
-                        validate_beyn_taylor, _tune_beyn_taylor_degree!, _bim_numeric_type
+                        validate_beyn_taylor, _tune_beyn_taylor_degree, _bim_numeric_type
 
 # Roots, polynomial strength and orthogonal Q of the synthetic problem.
 struct bn_Problem <: QuantumBilliards.SweepBIMSolver
@@ -472,37 +472,37 @@ end
     end
 end
 
-@testset "_tune_beyn_taylor_degree!" begin
+@testset "_tune_beyn_taylor_degree" begin
     @testset "too high a starting degree is lowered to the smallest accurate one" begin
         solver = bn_solver(taylor_degree=9, taylor_tol=1e-12)
-        p = _tune_beyn_taylor_degree!(solver, [BN_PTS], [3.0 + 0im], [0.5]; multithreaded=false)
+        p = _tune_beyn_taylor_degree(solver, [BN_PTS], [3.0 + 0im], [0.5]; multithreaded=false)
         @test p == 3                                                         # the cubic is exact from degree 3 on, degree 2 is not
-        @test solver.taylor_degree == 3
+        @test solver.taylor_degree == 9                                      # the solver is not modified
     end
 
     @testset "too low a starting degree is raised" begin
         solver = bn_solver(taylor_degree=1, taylor_tol=1e-12)
-        @test _tune_beyn_taylor_degree!(solver, [BN_PTS], [3.0 + 0im], [0.5]; multithreaded=false) == 3
-        @test solver.taylor_degree == 3
+        @test _tune_beyn_taylor_degree(solver, [BN_PTS], [3.0 + 0im], [0.5]; multithreaded=false) == 3
+        @test solver.taylor_degree == 1
     end
 
     @testset "a start at the accurate degree is kept" begin
         solver = bn_solver(taylor_degree=3, taylor_tol=1e-12)
-        @test _tune_beyn_taylor_degree!(solver, [BN_PTS], [3.0 + 0im], [0.5]; multithreaded=false) == 3
+        @test _tune_beyn_taylor_degree(solver, [BN_PTS], [3.0 + 0im], [0.5]; multithreaded=false) == 3
     end
 
     @testset "the window with the largest radius is calibrated" begin
         # equal Taylor accuracy is reached at degree 3 on every window; the call must not fail with several windows
         solver = bn_solver(taylor_degree=5, taylor_tol=1e-12)
-        p = _tune_beyn_taylor_degree!(solver, [BN_PTS, BN_PTS], [3.0 + 0im, 4.0 + 0im], [0.2, 0.5]; multithreaded=false)
+        p = _tune_beyn_taylor_degree(solver, [BN_PTS, BN_PTS], [3.0 + 0im, 4.0 + 0im], [0.2, 0.5]; multithreaded=false)
         @test p == 3
     end
 
     @testset "a loose tolerance accepts a lower degree" begin
         solver = bn_solver(taylor_degree=6, taylor_tol=1e-1)
-        p = _tune_beyn_taylor_degree!(solver, [BN_PTS], [3.0 + 0im], [0.5]; multithreaded=false)
+        p = _tune_beyn_taylor_degree(solver, [BN_PTS], [3.0 + 0im], [0.5]; multithreaded=false)
         @test 2 <= p < 3
-        @test p == solver.taylor_degree
+        @test solver.taylor_degree == 6
     end
 end
 
