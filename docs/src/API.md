@@ -100,6 +100,18 @@ beyn_disks_from_windows
 beyn_buffer_matrices
 ```
 
+## Computation planning
+```@docs
+plan_computation
+ComputationPlan
+WindowPlan
+expected_states
+with_params
+estimate_memory
+MemoryEstimate
+default_memory_limit
+```
+
 ## Spectra
 ```@docs
 SpectralData
