@@ -77,7 +77,7 @@ order and terminates after a prescribed sequence of residual-good roots.
 * `imag_k_group_size::Int`: Maximum residual-check batch size for imaginary-`k` screening. 
 * `eigenvectors::Bool`: Whether `compute_spectrum` retains the layer densities returned by the Beyn solve.
 """
-mutable struct BeynSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
+struct BeynSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
     kernel::K
     nlevels::Int
     nq::Int
@@ -334,14 +334,14 @@ function _beyn_taylor_reference(solver::SweepBIMSolver, pts::BoundaryPoints{Floa
 end
 
 """
-    _tune_beyn_taylor_degree!(solver::BeynSolver, pts, k0, R; multithreaded::Bool=true) -> Int
+    _tune_beyn_taylor_degree(solver::BeynSolver, pts, k0, R; multithreaded::Bool=true) -> Int
 
 Determine the Taylor degree used for Beyn contour-matrix construction.
 
 The degree is validated on the first contour having the largest radius and is
 increased or decreased from `solver.taylor_degree` until the smallest degree
-satisfying `solver.taylor_tol` is found. The resulting degree is stored in
-`solver.taylor_degree`.
+satisfying `solver.taylor_tol` is found. The solver is not modified; the caller
+uses the returned degree, e.g. through [`with_params`](@ref).
 
 ## Arguments
 - `solver::BeynSolver`: Beyn solver and Taylor configuration.
@@ -355,7 +355,7 @@ satisfying `solver.taylor_tol` is found. The resulting degree is stored in
 ## Returns
 - `Int`: Validated Taylor degree.
 """
-function _tune_beyn_taylor_degree!(solver::BeynSolver, pts, k0, R; multithreaded::Bool=true)::Int
+function _tune_beyn_taylor_degree(solver::BeynSolver, pts, k0, R; multithreaded::Bool=true)::Int
     Rcal, ical = findmax(R); kcal = Float64(real(k0[ical])); p0 = solver.taylor_degree; p = p0
     reference = @timeit_debug "taylor_reference" _beyn_taylor_reference(solver.kernel, pts[ical], kcal, Float64(Rcal), 5; multithreaded)
     err = validate_beyn_taylor(solver.kernel, pts[ical], kcal, Float64(Rcal), p; multithreaded, reference)
@@ -372,7 +372,6 @@ function _tune_beyn_taylor_degree!(solver::BeynSolver, pts, k0, R; multithreaded
         end
     end
     @debug "Beyn Taylor degree tuned" p_initial=p0 p_final=p validation_error=err tolerance=solver.taylor_tol
-    solver.taylor_degree = p
     return p
 end
 

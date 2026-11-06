@@ -1090,7 +1090,7 @@ end
 # SOLVER AND PUBLIC API
 ################################################################################
 
-mutable struct CORKSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
+struct CORKSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
     kernel::K
     p::Int
     guard::T

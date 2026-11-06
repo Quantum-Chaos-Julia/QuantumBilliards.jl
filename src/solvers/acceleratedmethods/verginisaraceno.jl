@@ -65,7 +65,7 @@ The following functions can be evaluated for this type:
 - [`solve_wavenumber`](@ref)
 - [`solve_spectrum`](@ref)
 """
-mutable struct VerginiSaracenoSolver{T} <: AcceleratedBasisSolver where {T<:Real}
+struct VerginiSaracenoSolver{T} <: AcceleratedBasisSolver where {T<:Real}
     dim_scaling_factor::T
     pts_scaling_factor::Vector{T}
     sampler::Vector

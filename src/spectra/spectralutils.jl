@@ -530,7 +530,8 @@ function compute_spectrum(solver::BeynSolver, billiard::Bi, k1, k2; accept_tol::
             end
         end
         if solver.use_taylor
-            @timeit_debug "preparation" _tune_beyn_taylor_degree!(solver, pts, k0, R; multithreaded)
+            p = @timeit_debug "preparation" _tune_beyn_taylor_degree(solver, pts, k0, R; multithreaded)
+            solver = with_params(solver; taylor_degree=p)
         end
         cheb_config = solver.cheb_config
         if (solver.use_chebyshev || solver.imag_k_check) && solver.cheb_config.param_strategy!==:manual # always do cheb config since imag_k_check requires it anyway even if taylor
