@@ -135,14 +135,121 @@ function _assemble_plan(solver, billiard::AbsBilliard, k1, k2, windows::Vector{W
     return ComputationPlan{T,typeof(solver)}(solver, T(k1), T(k2), expected_states(billiard, k1, k2; fundamental_only), Float64(spectral_density(k1, billiard; fundamental_only)), Float64(spectral_density(k2, billiard; fundamental_only)), windows, memory, Threads.nthreads(), notes)
 end
 
-function _bim_plan(solver, billiard::AbsBilliard, intervals::Vector{Tuple{T,T}}, k1, k2, max_memory::Real, notes::Vector{String}) where {T<:Real}
+function _bim_window_plans(solver, billiard::AbsBilliard, intervals::Vector{Tuple{T,T}}) where {T<:Real}
     fundamental_only = solver.kernel.symmetry !== nothing
-    windows = @with_kress_q_floor map(intervals) do (a, b)
+    return @with_kress_q_floor map(intervals) do (a, b)
         kc = (a + b) / 2
         pts = evaluate_points(solver, billiard, kc)
         WindowPlan{T}(kc, (b - a) / 2, expected_states(billiard, a, b; fundamental_only), length(pts.xy), boundary_matrix_size(solver.kernel, pts))
     end
-    return _assemble_plan(solver, billiard, k1, k2, windows, estimate_memory(solver, billiard, k1, k2), max_memory, notes; fundamental_only)
+end
+
+function _bim_plan(solver, billiard::AbsBilliard, intervals::Vector{Tuple{T,T}}, k1, k2, max_memory::Real, notes::Vector{String}) where {T<:Real}
+    fundamental_only = solver.kernel.symmetry !== nothing
+    windows = _bim_window_plans(solver, billiard, intervals)
+    memory = estimate_memory(solver, windows, expected_states(billiard, k1, k2; fundamental_only))
+    return _assemble_plan(solver, billiard, k1, k2, windows, memory, max_memory, notes; fundamental_only)
+end
+
+function _ebim_window_plans(solver::ExpandedBIMSolver, billiard::AbsBilliard, k1, k2, dk::Function)
+    fundamental_only = solver.kernel.symmetry !== nothing
+    centers, dks, _ = _ebim_windows(solver, billiard, k1, k2, dk)
+    T = eltype(centers)
+    return @with_kress_q_floor map(eachindex(centers)) do i
+        pts = evaluate_points(solver, billiard, centers[i])
+        WindowPlan{T}(centers[i], dks[i], Float64(weyl_window_count(billiard, centers[i] - dks[i], 2 * dks[i]; fundamental_only)), length(pts.xy), boundary_matrix_size(solver.kernel, pts))
+    end
+end
+
+function _vs_window_plans(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, k1, k2, dk::Union{Real,Function})
+    fundamental_only = basis.symmetries !== nothing
+    centers, widths = sweep_windows(k1, k2, dk)
+    T = eltype(centers)
+    L = CompositeCurve(get_boundary_curves(billiard)).length
+    vsdim(k) = max(solver.min_dim, round(Int, L * k * solver.dim_scaling_factor / (2 * pi)))
+    kdim = copy(centers)
+    if uses_taylor(basis)
+        R = T(basis.taylor_radius)
+        R > zero(T) || throw(ArgumentError("taylor_radius must be positive"))
+        for (i1, i2) in zip(_vs_panels(centers, R)...)
+            kdim[i1:i2] .= centers[i2]
+        end
+    end
+    return map(eachindex(centers)) do i
+        k0, Δk = centers[i], widths[i]
+        WindowPlan{T}(k0, Δk, Float64(weyl_window_count(billiard, k0 - Δk, 2Δk; fundamental_only)), vsdim(kdim[i]), length(evaluate_points(solver, billiard, kdim[i]).w_vs))
+    end
+end
+
+function _single_window(solver, billiard::AbsBilliard, k1, k2; vs_basis=nothing)
+    T = promote_type(typeof(float(k1)), typeof(float(k2)))
+    k = T(k2)
+    if vs_basis === nothing
+        pts = @with_kress_q_floor evaluate_points(solver, billiard, k)
+        return [WindowPlan{T}(k, zero(T), 0.0, length(pts.xy), boundary_matrix_size(solver.kernel, pts))]
+    end
+    L = CompositeCurve(get_boundary_curves(billiard)).length
+    dim = max(solver.min_dim, round(Int, L * k * solver.dim_scaling_factor / (2 * pi)))
+    return [WindowPlan{T}(k, zero(T), 0.0, dim, length(evaluate_points(solver, billiard, k).w_vs))]
+end
+
+"""
+    estimate_memory(solver, [basis,] windows::AbstractVector{<:WindowPlan}, expected_total_states) → MemoryEstimate
+    estimate_memory(solver, [basis,] billiard, k1, k2[, dk]) → MemoryEstimate
+
+Estimate the peak memory of a `compute_spectrum` run without running the solve.
+The working set is the maximum over the windows, each sized by its own basis or
+boundary dimension `dim` and matrix dimension `matrix_dim`; retained results are
+sized by the total expected states and the largest dimensions. The estimate is an
+order-of-magnitude upper bound, not an exact figure.
+
+The `billiard` form builds the same window layout as [`plan_computation`](@ref).
+For [`VerginiSaracenoSolver`](@ref) and [`ExpandedBIMSolver`](@ref), omitting `dk`
+sizes a single window at `k2`.
+
+## Arguments
+* `solver`: A [`VerginiSaracenoSolver`](@ref) (with `basis`), [`BeynSolver`](@ref), [`ExpandedBIMSolver`](@ref) or [`CORKSolver`](@ref).
+* `basis`: Basis, only for [`VerginiSaracenoSolver`](@ref).
+* `windows`: Window layout, for example `plan.windows`.
+* `expected_total_states`: Weyl estimate of the levels in the interval.
+* `billiard`: Billiard geometry.
+* `k1`, `k2`: Wavenumber interval.
+* `dk`: Spacing of scaling or expansion centers, for the sweep methods.
+
+## Returns
+* `MemoryEstimate`: Peak working set and retained results in bytes.
+"""
+function estimate_memory(solver::Union{BeynSolver,CORKSolver,ExpandedBIMSolver}, windows::AbstractVector{<:WindowPlan}, expected_total_states::Real)
+    working = mapreduce(w -> _working_bytes(solver, Float64(w.dim), Float64(w.matrix_dim)), max, windows; init=0.0)
+    Nf = mapreduce(w -> Float64(w.dim), max, windows; init=0.0)
+    M = mapreduce(w -> Float64(w.matrix_dim), max, windows; init=0.0)
+    return MemoryEstimate(working, _persistent_bytes(solver, length(windows), Float64(expected_total_states), Nf, M))
+end
+
+function estimate_memory(solver::VerginiSaracenoSolver, basis::AbsBasis, windows::AbstractVector{<:WindowPlan}, expected_total_states::Real)
+    working = mapreduce(w -> _working_bytes(solver, basis, Float64(w.dim), Float64(w.matrix_dim)), max, windows; init=0.0)
+    dim = mapreduce(w -> Float64(w.dim), max, windows; init=0.0)
+    return MemoryEstimate(working, _persistent_bytes(solver, basis, Float64(expected_total_states), dim))
+end
+
+function estimate_memory(solver::BeynSolver, billiard::AbsBilliard, k1, k2)
+    windows = _bim_window_plans(solver, billiard, _beyn_intervals(solver, billiard, k1, k2))
+    return estimate_memory(solver, windows, expected_states(billiard, k1, k2; fundamental_only=solver.kernel.symmetry !== nothing))
+end
+
+function estimate_memory(solver::CORKSolver, billiard::AbsBilliard, k1, k2)
+    windows = _bim_window_plans(solver, billiard, _cork_intervals(solver, billiard, k1, k2))
+    return estimate_memory(solver, windows, expected_states(billiard, k1, k2; fundamental_only=solver.kernel.symmetry !== nothing))
+end
+
+function estimate_memory(solver::ExpandedBIMSolver, billiard::AbsBilliard, k1, k2; dk::Union{Nothing,Function}=nothing)
+    windows = dk === nothing ? _single_window(solver, billiard, k1, k2) : _ebim_window_plans(solver, billiard, k1, k2, dk)
+    return estimate_memory(solver, windows, expected_states(billiard, k1, k2; fundamental_only=solver.kernel.symmetry !== nothing))
+end
+
+function estimate_memory(solver::VerginiSaracenoSolver, basis::AbsBasis, billiard::AbsBilliard, k1, k2, dk::Union{Nothing,Real,Function}=nothing)
+    windows = dk === nothing ? _single_window(solver, billiard, k1, k2; vs_basis=basis) : _vs_window_plans(solver, basis, billiard, k1, k2, dk)
+    return estimate_memory(solver, basis, windows, expected_states(billiard, k1, k2; fundamental_only=basis.symmetries !== nothing))
 end
 
 # Group consecutive scaling centers into panels spanning at most `2R`; returns first and last center index per panel.
@@ -198,13 +305,9 @@ modified, and `tune` has no effect.
 """
 function plan_computation(solver::ExpandedBIMSolver, billiard::AbsBilliard, k1, k2; dk::Function=(k -> 0.05 * k^(-1/3)), tune::Bool=true, max_memory::Real=default_memory_limit())
     fundamental_only = solver.kernel.symmetry !== nothing
-    centers, dks, _ = _ebim_windows(solver, billiard, k1, k2, dk)
-    T = eltype(centers)
-    windows = @with_kress_q_floor map(eachindex(centers)) do i
-        pts = evaluate_points(solver, billiard, centers[i])
-        WindowPlan{T}(centers[i], dks[i], Float64(weyl_window_count(billiard, centers[i] - dks[i], 2 * dks[i]; fundamental_only)), length(pts.xy), boundary_matrix_size(solver.kernel, pts))
-    end
-    return _assemble_plan(solver, billiard, k1, k2, windows, estimate_memory(solver, billiard, k1, k2), max_memory, String[]; fundamental_only)
+    windows = _ebim_window_plans(solver, billiard, k1, k2, dk)
+    memory = estimate_memory(solver, windows, expected_states(billiard, k1, k2; fundamental_only))
+    return _assemble_plan(solver, billiard, k1, k2, windows, memory, max_memory, String[]; fundamental_only)
 end
 
 function plan_computation(solver::ExpandedBIMSolver, billiard::AbsBilliard, N1::Int, N2::Int; kwargs...)
@@ -243,23 +346,9 @@ halving driven by `accept_tol` cannot be predicted and is not included.
 """
 function plan_computation(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, k1, k2, dk::Union{Real,Function}; tune::Bool=true, max_memory::Real=default_memory_limit())
     fundamental_only = basis.symmetries !== nothing
-    centers, widths = sweep_windows(k1, k2, dk)
-    T = eltype(centers)
-    L = CompositeCurve(get_boundary_curves(billiard)).length
-    vsdim(k) = max(solver.min_dim, round(Int, L * k * solver.dim_scaling_factor / (2 * pi)))
-    kdim = copy(centers)
-    if uses_taylor(basis)
-        R = T(basis.taylor_radius)
-        R > zero(T) || throw(ArgumentError("taylor_radius must be positive"))
-        for (i1, i2) in zip(_vs_panels(centers, R)...)
-            kdim[i1:i2] .= centers[i2]
-        end
-    end
-    windows = map(eachindex(centers)) do i
-        k0, Δk = centers[i], widths[i]
-        WindowPlan{T}(k0, Δk, Float64(weyl_window_count(billiard, k0 - Δk, 2Δk; fundamental_only)), vsdim(kdim[i]), length(evaluate_points(solver, billiard, kdim[i]).w_vs))
-    end
-    return _assemble_plan(solver, billiard, k1, k2, windows, estimate_memory(solver, basis, billiard, k1, k2), max_memory, String[]; fundamental_only)
+    windows = _vs_window_plans(solver, basis, billiard, k1, k2, dk)
+    memory = estimate_memory(solver, basis, windows, expected_states(billiard, k1, k2; fundamental_only))
+    return _assemble_plan(solver, billiard, k1, k2, windows, memory, max_memory, String[]; fundamental_only)
 end
 
 function plan_computation(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, N1::Int, N2::Int; nlevels::Real=3, kwargs...)

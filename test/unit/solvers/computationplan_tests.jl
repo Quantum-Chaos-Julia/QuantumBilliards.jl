@@ -433,3 +433,203 @@ end
     tight = _assemble_plan(beyn, rect, 20.0, 22.0, ws, mem, 1.0, String[]; fundamental_only=false)
     @test length(tight.notes) == 1 && occursin("max_memory", tight.notes[1])
 end
+
+# Memory estimates: _working_bytes, _persistent_bytes (src/solvers/memoryestimates.jl), estimate_memory, window-plan helpers
+# (src/solvers/computationplan.jl) and the method existence of compute_spectrum(plan, ...) (src/spectra/spectralutils.jl).
+# Plans and estimates only; no eigen solves, compute_spectrum is not called.
+using QuantumBilliards: estimate_memory, total_bytes, _working_bytes, _persistent_bytes, _enforce_memory_limit,
+                        _bim_window_plans, _ebim_window_plans, _vs_window_plans, _single_window
+
+@testset "memory estimate formulas" begin
+    rect = RectangleBilliard(1.0, 0.5)
+    kernel = DoubleLayerPotentialSolver(4.0, rect)
+    beyn = BeynSolver(kernel; nlevels=20)
+    cork = CORKSolver(kernel; nlevels=20)
+    eb = ExpandedBIMSolver(kernel)
+    vs = VerginiSaracenoSolver(2.0, 5.0)
+    pw = RealPlaneWaves(6; use_taylor=false)
+
+    @testset "_working_bytes BIM solvers" begin
+        for s in (beyn, cork, eb)
+            w = _working_bytes(s, 100.0, 50.0)
+            @test w isa Float64
+            @test w > 0
+            @test _working_bytes(s, 200.0, 50.0) > w        # grows with Nf
+            @test _working_bytes(s, 100.0, 100.0) > w       # grows with M
+            @test _working_bytes(s, 100, 50) == w           # integer sizes accepted
+        end
+    end
+
+    @testset "_persistent_bytes BIM solvers" begin
+        @test _persistent_bytes(eb, 3, 10.0, 100.0, 50.0) == 0.0
+        for s in (beyn, cork)
+            p = _persistent_bytes(s, 3, 10.0, 100.0, 50.0)
+            @test p >= 0
+            @test _persistent_bytes(s, 6, 10.0, 100.0, 50.0) >= p
+            @test _persistent_bytes(s, 3, 20.0, 100.0, 50.0) >= p
+        end
+        @test _persistent_bytes(with_params(beyn; eigenvectors=true), 3, 10.0, 100.0, 50.0) > _persistent_bytes(with_params(beyn; eigenvectors=false, imag_k_check=false), 3, 10.0, 100.0, 50.0)
+        @test _persistent_bytes(with_params(cork; eigenvectors=false), 3, 10.0, 100.0, 50.0) == 0.0
+        @test _persistent_bytes(with_params(cork; eigenvectors=true), 3, 10.0, 100.0, 50.0) > 0.0
+    end
+
+    @testset "VerginiSaraceno formulas" begin
+        w = _working_bytes(vs, pw, 100.0, 50.0)
+        @test w > 0
+        @test _working_bytes(vs, pw, 200.0, 50.0) > w
+        @test _working_bytes(vs, pw, 100.0, 100.0) > w
+        tpw = RealPlaneWaves(6; use_taylor=true, taylor_radius=0.5)
+        @test _working_bytes(vs, tpw, 100.0, 50.0) > w     # Taylor tensors add to the working set
+        @test _persistent_bytes(with_params(vs; eigenvectors=false), pw, 10.0, 100.0) == 0.0
+        @test _persistent_bytes(with_params(vs; eigenvectors=true), pw, 10.0, 100.0) == 8.0 * 10.0 * 100.0
+    end
+
+    @testset "_enforce_memory_limit forwards kwargs" begin
+        dkf = k -> 0.05 * k^(-1/3)
+        @test _enforce_memory_limit(Inf, "EBIM", eb, rect, 20.0, 22.0; dk=dkf) === nothing
+        @test _enforce_memory_limit(1e15, "EBIM", eb, rect, 20.0, 22.0; dk=dkf) === nothing
+        @test_throws ErrorException _enforce_memory_limit(1.0, "EBIM", eb, rect, 20.0, 22.0; dk=dkf)
+        @test_throws ErrorException _enforce_memory_limit(1.0, "Beyn", beyn, rect, 20.0, 22.0)
+    end
+end
+
+@testset "estimate_memory from windows" begin
+    rect = RectangleBilliard(1.0, 0.5)
+    kernel = DoubleLayerPotentialSolver(4.0, rect)
+    beyn = BeynSolver(kernel; nlevels=20)
+    cork = CORKSolver(kernel; nlevels=20)
+    eb = ExpandedBIMSolver(kernel)
+    vs = VerginiSaracenoSolver(2.0, 5.0)
+    pw = RealPlaneWaves(6; use_taylor=false)
+    small = WindowPlan(21.0, 1.0, 2.0, 40, 80)
+    big = WindowPlan(23.0, 1.0, 2.0, 80, 160)
+    ws = WindowPlan{Float64}[]
+
+    @testset "BIM solvers" begin
+        for s in (beyn, cork, eb)
+            e_small = estimate_memory(s, [small], 2.0)
+            e_big = estimate_memory(s, [big], 2.0)
+            @test e_small isa MemoryEstimate
+            @test e_big.working > e_small.working                              # monotone in window dims
+            @test e_small.working ≈ _working_bytes(s, 40.0, 80.0)
+            e_mix = estimate_memory(s, [small, big, small], 6.0)
+            @test e_mix.working == e_big.working                                # max over windows
+            @test e_mix.working == estimate_memory(s, [big, small, small], 6.0).working
+            @test e_mix.persistent ≈ _persistent_bytes(s, 3, 6.0, 80.0, 160.0)  # totals / max dims
+            e0 = estimate_memory(s, ws, 0.0)
+            @test e0.working == 0.0
+            @test e0.persistent == 0.0
+            @test total_bytes(e_mix) == e_mix.working + e_mix.persistent
+        end
+    end
+
+    @testset "VerginiSaraceno" begin
+        e_small = estimate_memory(vs, pw, [small], 2.0)
+        e_big = estimate_memory(vs, pw, [big], 2.0)
+        @test e_big.working > e_small.working
+        @test e_small.working ≈ _working_bytes(vs, pw, 40.0, 80.0)
+        e_mix = estimate_memory(vs, pw, [small, big, small], 6.0)
+        @test e_mix.working == e_big.working
+        @test e_mix.persistent ≈ _persistent_bytes(vs, pw, 6.0, 80.0)
+        e0 = estimate_memory(vs, pw, ws, 0.0)
+        @test e0.working == 0.0
+        @test e0.persistent == 0.0
+    end
+
+    @testset "window helpers" begin
+        iv = _beyn_intervals(beyn, rect, 20.0, 40.0)
+        bw = _bim_window_plans(beyn, rect, iv)
+        @test bw isa Vector{WindowPlan{Float64}}
+        @test length(bw) == length(iv)
+        @test [w.kcenter for w in bw] ≈ [(a + b) / 2 for (a, b) in iv]
+        @test [w.halfwidth for w in bw] ≈ [(b - a) / 2 for (a, b) in iv]
+        @test all(w.dim > 0 && w.matrix_dim > 0 for w in bw)
+
+        dkf = k -> 0.05 * k^(-1/3)
+        ew = _ebim_window_plans(eb, rect, 20.0, 22.0, dkf)
+        centers, dks, _ = _ebim_windows(eb, rect, 20.0, 22.0, dkf)
+        @test [w.kcenter for w in ew] == centers
+        @test [w.halfwidth for w in ew] == dks
+        @test all(w.dim > 0 && w.matrix_dim > 0 for w in ew)
+
+        vw = _vs_window_plans(vs, pw, rect, 20.0, 22.0, 0.05)
+        vcenters, vwidths = sweep_windows(20.0, 22.0, 0.05)
+        @test [w.kcenter for w in vw] == vcenters
+        @test [w.halfwidth for w in vw] == vwidths
+        @test all(w.dim > 0 && w.matrix_dim > 0 for w in vw)
+        @test _vs_window_plans(vs, pw, rect, 20.0, 22.0, k -> 0.05) isa Vector{WindowPlan{Float64}}
+
+        sw = _single_window(eb, rect, 20.0, 22.0)
+        @test length(sw) == 1
+        @test sw[1].kcenter == 22.0
+        @test sw[1].halfwidth == 0.0
+        @test sw[1].expected_states == 0.0
+        @test sw[1].dim > 0 && sw[1].matrix_dim > 0
+        sv = _single_window(vs, rect, 20.0, 22.0; vs_basis=pw)
+        @test length(sv) == 1
+        @test sv[1].kcenter == 22.0
+        @test sv[1].dim > 0 && sv[1].matrix_dim > 0
+    end
+end
+
+@testset "estimate_memory billiard forms and plan.memory" begin
+    rect = RectangleBilliard(1.0, 0.5)
+    kernel = DoubleLayerPotentialSolver(4.0, rect)
+    beyn = BeynSolver(kernel; nlevels=20)
+    cork = CORKSolver(kernel; nlevels=20)
+    eb = ExpandedBIMSolver(kernel)
+    vs = VerginiSaracenoSolver(2.0, 5.0)
+    pw = RealPlaneWaves(6; use_taylor=false)
+    dkf = k -> 0.05 * k^(-1/3)
+
+    @testset "Beyn and CORK" begin
+        for s in (beyn, cork)
+            plan = plan_computation(s, rect, 20.0, 40.0; tune=false)
+            @test plan.memory == estimate_memory(s, plan.windows, plan.expected_total_states)
+            @test plan.memory == estimate_memory(s, rect, 20.0, 40.0)
+            tuned = plan_computation(s, rect, 20.0, 40.0)
+            @test tuned.memory == estimate_memory(tuned.solver, tuned.windows, tuned.expected_total_states)
+            @test tuned.memory == estimate_memory(tuned.solver, rect, 20.0, 40.0)
+        end
+        # the largest window dominates the working set
+        plan = plan_computation(beyn, rect, 20.0, 40.0; tune=false)
+        wmax = argmax(w -> _working_bytes(beyn, Float64(w.dim), Float64(w.matrix_dim)), plan.windows)
+        @test plan.memory.working == _working_bytes(beyn, Float64(wmax.dim), Float64(wmax.matrix_dim))
+    end
+
+    @testset "ExpandedBIMSolver" begin
+        plan = plan_computation(eb, rect, 20.0, 22.0; tune=false)
+        @test plan.memory == estimate_memory(eb, plan.windows, plan.expected_total_states)
+        @test plan.memory == estimate_memory(eb, rect, 20.0, 22.0; dk=dkf)
+        single = estimate_memory(eb, rect, 20.0, 22.0)                        # dk = nothing -> single window at k2
+        @test single == estimate_memory(eb, _single_window(eb, rect, 20.0, 22.0), expected_states(rect, 20.0, 22.0))
+        @test single.working > 0
+        @test estimate_memory(eb, rect, 20.0, 22.0; dk=nothing) == single
+    end
+
+    @testset "VerginiSaracenoSolver" begin
+        plan = plan_computation(vs, pw, rect, 20.0, 22.0, 0.05; tune=false)
+        @test plan.memory == estimate_memory(vs, pw, plan.windows, plan.expected_total_states)
+        @test plan.memory == estimate_memory(vs, pw, rect, 20.0, 22.0, 0.05)
+        single = estimate_memory(vs, pw, rect, 20.0, 22.0)                    # dk = nothing -> single window at k2
+        @test single == estimate_memory(vs, pw, _single_window(vs, rect, 20.0, 22.0; vs_basis=pw), expected_states(rect, 20.0, 22.0))
+        @test single.working > 0
+        @test estimate_memory(vs, pw, rect, 20.0, 22.0, nothing) == single
+    end
+end
+
+@testset "compute_spectrum(plan, ...) methods" begin
+    rect = RectangleBilliard(1.0, 0.5)
+    kernel = DoubleLayerPotentialSolver(4.0, rect)
+    pw = RealPlaneWaves(6; use_taylor=false)
+    vs = VerginiSaracenoSolver(2.0, 5.0)
+    for s in (BeynSolver(kernel; nlevels=20), CORKSolver(kernel; nlevels=20), ExpandedBIMSolver(kernel))
+        PT = typeof(plan_computation(s, rect, 20.0, 22.0; tune=false))
+        @test hasmethod(compute_spectrum, Tuple{PT,typeof(rect)})
+        @test !hasmethod(compute_spectrum, Tuple{PT,typeof(pw),typeof(rect),Float64})
+    end
+    PV = typeof(plan_computation(vs, pw, rect, 20.0, 22.0, 0.05; tune=false))
+    @test hasmethod(compute_spectrum, Tuple{PV,typeof(pw),typeof(rect),Float64})
+    @test hasmethod(compute_spectrum, Tuple{PV,typeof(pw),typeof(rect),Function})
+    @test !hasmethod(compute_spectrum, Tuple{PV,typeof(rect)})
+end

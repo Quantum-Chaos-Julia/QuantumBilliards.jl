@@ -354,7 +354,7 @@ determined from the largest scaling center in the panel.
 * `data`: [`SpectralData`](@ref) containing the merged spectrum and, when requested by the solver, the associated eigenstates.
 """
 function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, k1, k2, dk::Union{Real,Function}; merge_tol::Real = 1e-4, accept_tol::Union{Nothing,Real} = 5e-4, multithreaded::Bool = true, show_progress::Bool = true, max_memory::Real = default_memory_limit())
-    _enforce_memory_limit(max_memory, "Vergini-Saraceno", solver, basis, billiard, k1, k2)
+    _enforce_memory_limit(max_memory, "Vergini-Saraceno", solver, basis, billiard, k1, k2, dk)
     @timeit_debug "compute_spectrum_vs" begin
         centers, widths = sweep_windows(k1, k2, dk)
         T = eltype(centers)
@@ -728,7 +728,7 @@ directly at every expansion center.
 * `data::SpectralData`: Merged and sorted EBIM spectrum with correction magnitudes and merge-control flags.
 """
 function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::Function = (k -> 0.05 * k^(-1/3)), merge_tol = 1e-5, spacing_frac = 0.02, tolmax = 5e-3, local_window::Int = 4, accept_tol::Union{Nothing,Real} = 5e-4, multithreaded::Bool = true, show_progress::Bool = true, max_memory::Real = default_memory_limit()) where {Bi<:AbsBilliard}
-    _enforce_memory_limit(max_memory, "EBIM", solver, billiard, k1, k2)
+    _enforce_memory_limit(max_memory, "EBIM", solver, billiard, k1, k2; dk)
     @timeit_debug "compute_spectrum_ebim" @with_kress_q_floor begin
         centers, dks, nlevels = _ebim_windows(solver, billiard, k1, k2, dk)
         T = eltype(centers); k1T = T(k1); k2T = T(k2)
@@ -954,3 +954,17 @@ function compute_spectrum(solver::CORKSolver, billiard::Bi, N1::Int, N2::Int; ac
     k1, k2 = k_range_for_states(billiard, N1, N2; fundamental_only)
     return compute_spectrum(solver, billiard, k1, k2; accept_tol, multithreaded, show_progress, max_memory)
 end
+
+"""
+    compute_spectrum(plan::ComputationPlan, billiard; kwargs...) -> SpectralData
+    compute_spectrum(plan::ComputationPlan{T,<:AcceleratedBasisSolver}, basis, billiard, dk; kwargs...) -> SpectralData
+
+Run `compute_spectrum` with the solver and interval stored in `plan`. The plan
+does not store the billiard, basis or center spacing, so these are passed again;
+`dk` must be the one used to build the plan for the sweep methods (for
+[`ExpandedBIMSolver`](@ref) pass it as a keyword). Keyword arguments are those
+of the corresponding `compute_spectrum` method.
+"""
+compute_spectrum(plan::ComputationPlan{T,<:Union{BeynSolver,CORKSolver,ExpandedBIMSolver}}, billiard::AbsBilliard; kwargs...) where {T} = compute_spectrum(plan.solver, billiard, plan.k1, plan.k2; kwargs...)
+
+compute_spectrum(plan::ComputationPlan{T,<:AcceleratedBasisSolver}, basis::AbsBasis, billiard::AbsBilliard, dk::Union{Real,Function}; kwargs...) where {T} = compute_spectrum(plan.solver, basis, billiard, plan.k1, plan.k2, dk; kwargs...)
