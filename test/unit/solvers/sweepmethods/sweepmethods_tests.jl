@@ -2,7 +2,9 @@
 #   src/solvers/sweepmethods/sweepmethods.jl   (_fold_boundary, _infer_bim_symmetry, symmetrize_layer_density,
 #                                               _bim_normal_derivative for DLP kernels, _bim_dlp_cross_kernel_entry,
 #                                               _cfie_derivative!, and the symmetric-holes plumbing _orbit_character_args,
-#                                               _fold_group, _bim_node_multiple, _bim_round_nodes)
+#                                               _fold_group, _bim_node_multiple, _bim_round_nodes, _bim_node_count)
+#   _bim_node_count (the shared DLP/CFIE node-count rule) is checked against hand-computed counts and against the number of nodes
+#   evaluate_points returns for DLP and CFIE on a triangle and a rectangle, with and without symmetry, smooth and corner graded.
 # _fold_boundary adapts the exact symmetry-orbit map of BilliardGeometry (symmetry_index_orbits) to the character storage of
 # the BIM solvers: scalar characters for single reflections, one Vector for CompositeReflection and one integer sector for
 # NFoldRotation. _infer_bim_symmetry pairs `sym_characters` with the minimal generators of the billiard.
@@ -23,7 +25,7 @@ using SpecialFunctions: hankelh1
 using StaticArrays: SVector
 using QuantumBilliards: _fold_boundary, _infer_bim_symmetry, symmetrize_layer_density, _bim_normal_derivative,
                         _bim_dlp_cross_kernel_entry, _cfie_derivative!, _orbit_character_args, _fold_group,
-                        _bim_node_multiple, _bim_round_nodes, _bim_solver_node_multiple
+                        _bim_node_multiple, _bim_round_nodes, _bim_solver_node_multiple, _bim_node_count
 
 # Whether two SymmetryOrbitMaps agree in every field.
 sw_same_orbits(a, b) = a.fundamental_indices == b.fundamental_indices && a.orbit_of == b.orbit_of && a.phase == b.phase &&
@@ -34,6 +36,22 @@ sw_same_orbits(a, b) = a.fundamental_indices == b.fundamental_indices && a.orbit
 function sw_orbit_identity_holds(orbits, full, reduced)
     ng, nf = size(orbits.fund_to_full)
     return all(full[orbits.fund_to_full[g, b]] ≈ orbits.fund_to_scale[g, b] * reduced[b] for g in 1:ng, b in 1:nf)
+end
+
+# Minimal SweepBIMSolver without reusable geometry: its matrix records the wavenumber and the multithreaded flag.
+struct sw_ToyBIM <: SweepBIMSolver end
+QuantumBilliards.construct_matrices(::sw_ToyBIM, pts, k; multithreaded::Bool=true) = fill(ComplexF64(k) + (multithreaded ? 0.0 : 0.5), 2, 2)
+
+@testset "_bim_geometry fallback and the geom = nothing construct_matrices method" begin
+    solver = sw_ToyBIM()
+    pts = :pts                                                              # the fallback never inspects the points
+    @test QuantumBilliards._bim_geometry(solver, pts) === nothing
+
+    for k in (2.0, 3.5 + 0.1im)
+        @test construct_matrices(solver, pts, k, nothing) == construct_matrices(solver, pts, k)
+        @test construct_matrices(solver, pts, k, nothing; multithreaded=false) == construct_matrices(solver, pts, k; multithreaded=false)
+    end
+    @test construct_matrices(solver, pts, 2.0, nothing; multithreaded=false) != construct_matrices(solver, pts, 2.0, nothing; multithreaded=true)   # the flag is forwarded
 end
 
 @testset "_fold_boundary" begin
@@ -249,6 +267,164 @@ end
     @test _bim_round_nodes(100, 8, 24) == 24
     @test (@inferred _bim_round_nodes(30, 4, nothing)) isa Int
     @test (@inferred _bim_round_nodes(30, 4, 50)) isa Int
+end
+
+@testset "_bim_node_count" begin
+    circle = CircleBilliard(1.0)
+    c3 = C3Billiard(0.02)
+    rect = RectangleBilliard(1.0, 0.7)
+    L = 2 * pi                                                              # a nominal boundary length, N0 = round(k L ppw / 2 pi) = round(k ppw)
+
+    @testset "no symmetry: max(min_pts, N0) rounded up to an even count" begin
+        solver = DoubleLayerPotentialSolver(5.0, circle; min_pts = 16)
+        @test _bim_node_count(solver, L, 10.0) == 50                        # N0 = 50
+        @test _bim_node_count(solver, L, 1.0) == 16                         # N0 = 5, below min_pts
+        @test _bim_node_count(solver, L, 2.0) == 16                         # N0 = 10, below min_pts
+        odd = DoubleLayerPotentialSolver(5.0, circle; min_pts = 33)
+        @test _bim_node_count(odd, L, 3.0) == 34                            # an odd count is rounded up to even
+        @test _bim_node_count(odd, L, 3.0; graded = true) == 34             # grading alone does not drop the even rule
+        @test _bim_node_count(solver, 2 * L, 10.0) == 100                   # N0 is proportional to the length
+        @test _bim_node_count(DoubleLayerPotentialSolver(10.0, circle; min_pts = 16), L, 10.0) == 100   # and to the scaling factor
+    end
+
+    @testset "multiple and N_override" begin
+        solver = DoubleLayerPotentialSolver(5.0, circle; min_pts = 33)
+        @test _bim_node_count(solver, L, 3.0; multiple = 1) == 34
+        @test _bim_node_count(solver, L, 3.0; multiple = 3) == 36           # lcm(2, 3) = 6
+        @test _bim_node_count(solver, L, 3.0; multiple = 4) == 36           # lcm(2, 4) = 4
+        @test _bim_node_count(solver, L, 3.0; multiple = 5) == 40           # lcm(2, 5) = 10
+        @test _bim_node_count(solver, L, 3.0; N_override = 50) == 50
+        @test _bim_node_count(solver, L, 3.0; N_override = 17) == 17        # forced as given
+        @test _bim_node_count(solver, L, 3.0; multiple = 7, N_override = 50) == 50
+    end
+
+    @testset "symmetry multiple, and the even rule of a graded discretization" begin
+        # C3 rotation: _bim_solver_node_multiple = 3. Ungraded counts are even, so a multiple of lcm(2, 3) = 6; a graded
+        # count with a symmetry needs no extra factor 2, so only a multiple of 3.
+        c3dlp = DoubleLayerPotentialSolver(5.0, c3; min_pts = 33, sym_characters = (1,))
+        c3cfie = CombinedFieldIntegralEquationSolver(5.0, c3; min_pts = 33, sym_characters = (1,))
+        for solver in (c3dlp, c3cfie)
+            @test _bim_solver_node_multiple(solver) == 3
+            @test _bim_node_count(solver, L, 3.0) == 36                     # N0 = 33, lcm(2, 3) = 6
+            @test _bim_node_count(solver, L, 3.0; graded = false) == 36
+            @test _bim_node_count(solver, L, 3.0; graded = true) == 33      # lcm(1, 3) = 3
+            @test _bim_node_count(solver, L, 3.0; graded = true, multiple = 2) == 36     # lcm(1, 3, 2) = 6
+            @test _bim_node_count(solver, L, 3.0; graded = true, multiple = 4) == 36     # lcm(1, 3, 4) = 12
+            @test _bim_node_count(solver, L, 3.0; graded = true, N_override = 50) == 50
+        end
+        big = DoubleLayerPotentialSolver(5.0, c3; min_pts = 16, sym_characters = (1,))
+        @test _bim_node_count(big, L, 10.0) == 54                           # N0 = 50, lcm(2, 3) = 6
+        @test _bim_node_count(big, L, 10.0; graded = true) == 51            # lcm(1, 3) = 3
+
+        # D2 reflections of the rectangle: _bim_solver_node_multiple = 4, which already contains the factor 2
+        rsolver = DoubleLayerPotentialSolver(5.0, rect; min_pts = 33, sym_characters = (1, 1))
+        @test _bim_solver_node_multiple(rsolver) == 4
+        @test _bim_node_count(rsolver, L, 3.0) == 36
+        @test _bim_node_count(rsolver, L, 3.0; graded = true) == 36
+        @test _bim_node_count(rsolver, L, 3.0; multiple = 3) == 36          # lcm(2, 4, 3) = 12
+        @test _bim_node_count(rsolver, L, 3.0; multiple = 5) == 40          # lcm(2, 4, 5) = 20
+    end
+
+    @testset "result is a multiple of the rounding unit and at least N0" begin
+        solver = DoubleLayerPotentialSolver(5.0, c3; min_pts = 16, sym_characters = (1,))
+        for k in (2.0, 5.0, 10.0, 17.0, 40.0), graded in (false, true), multiple in (1, 2, 5)
+            N = _bim_node_count(solver, L, k; graded, multiple)
+            unit = lcm(graded ? 1 : 2, _bim_solver_node_multiple(solver), multiple)
+            N0 = max(16, round(Int, k * 5.0))
+            @test N % unit == 0
+            @test N0 <= N < N0 + unit
+        end
+    end
+
+    @testset "type stability" begin
+        solver = DoubleLayerPotentialSolver(5.0, circle; min_pts = 16)
+        @test (@inferred _bim_node_count(solver, L, 10.0)) isa Int
+        @test (@inferred _bim_node_count(solver, L, 10.0; graded = true, multiple = 3)) isa Int
+        s32 = DoubleLayerPotentialSolver(5f0, circle; min_pts = 16)
+        @test (@inferred _bim_node_count(s32, 2f0 * Float32(pi), 10f0)) isa Int
+        @test _bim_node_count(s32, 2f0 * Float32(pi), 10f0) == 50
+    end
+end
+
+# Boundary length of the full (outer) boundary of a hole-free billiard, as used by the evaluate_points methods.
+sw_boundary_length(billiard) = BilliardGeometry.component_lengths(full_boundary(billiard))[3]
+
+# evaluate_points returns exactly _bim_node_count nodes for each wavenumber in `ks`.
+function sw_node_count_equals_points(solver, billiard, ks; graded::Bool)
+    Ltot = sw_boundary_length(billiard)
+    for k in ks
+        pts = evaluate_points(solver, billiard, k)
+        @test length(pts.xy) == _bim_node_count(solver, Ltot, k; graded)
+    end
+end
+
+@testset "evaluate_points node count equals _bim_node_count" begin
+    triangle = TriangleBilliard(pi / 3, 1.0)
+    rect = RectangleBilliard(1.0, 0.7)
+    ks = (3.0, 7.5, 12.0, 20.0)
+
+    @testset "DLP, SmoothPeriodicGrading, triangle" begin
+        solver = DoubleLayerPotentialSolver(5.0, triangle; min_pts = 17, grading = SmoothPeriodicGrading())
+        sw_node_count_equals_points(solver, triangle, ks; graded = false)
+    end
+    @testset "DLP, GlobalCornerGrading, triangle" begin
+        solver = DoubleLayerPotentialSolver(5.0, triangle; min_pts = 17, grading = GlobalCornerGrading())
+        sw_node_count_equals_points(solver, triangle, ks; graded = true)
+    end
+    @testset "DLP, SmoothPeriodicGrading, rectangle, no symmetry" begin
+        solver = DoubleLayerPotentialSolver(5.0, rect; min_pts = 17, grading = SmoothPeriodicGrading())
+        sw_node_count_equals_points(solver, rect, ks; graded = false)
+    end
+    @testset "DLP, GlobalCornerGrading, rectangle, no symmetry" begin
+        solver = DoubleLayerPotentialSolver(5.0, rect; min_pts = 17, grading = GlobalCornerGrading())
+        sw_node_count_equals_points(solver, rect, ks; graded = true)
+    end
+    @testset "DLP, SmoothPeriodicGrading, rectangle, D2 symmetry" begin
+        solver = DoubleLayerPotentialSolver(5.0, rect; min_pts = 17, grading = SmoothPeriodicGrading(), sym_characters = (1, -1))
+        sw_node_count_equals_points(solver, rect, ks; graded = false)
+    end
+    @testset "DLP, GlobalCornerGrading, rectangle, D2 symmetry" begin
+        solver = DoubleLayerPotentialSolver(5.0, rect; min_pts = 17, grading = GlobalCornerGrading(), sym_characters = (1, -1))
+        sw_node_count_equals_points(solver, rect, ks; graded = true)
+    end
+    @testset "DLP, GlobalCornerGrading, rectangle, single reflection" begin
+        solver = DoubleLayerPotentialSolver(5.0, rect; min_pts = 17, grading = GlobalCornerGrading(), symmetry = YAxisReflection(), sym_characters = (1,))
+        sw_node_count_equals_points(solver, rect, ks; graded = true)
+    end
+
+    @testset "CFIE, SmoothPeriodicGrading, triangle" begin
+        solver = CombinedFieldIntegralEquationSolver(5.0, triangle; min_pts = 17, grading = SmoothPeriodicGrading())
+        sw_node_count_equals_points(solver, triangle, ks; graded = false)
+    end
+    @testset "CFIE, GlobalCornerGrading, triangle" begin
+        solver = CombinedFieldIntegralEquationSolver(5.0, triangle; min_pts = 17, grading = GlobalCornerGrading())
+        sw_node_count_equals_points(solver, triangle, ks; graded = true)
+    end
+    @testset "CFIE, SmoothPeriodicGrading, rectangle, no symmetry" begin
+        solver = CombinedFieldIntegralEquationSolver(5.0, rect; min_pts = 17, grading = SmoothPeriodicGrading())
+        sw_node_count_equals_points(solver, rect, ks; graded = false)
+    end
+    @testset "CFIE, GlobalCornerGrading, rectangle, no symmetry" begin
+        solver = CombinedFieldIntegralEquationSolver(5.0, rect; min_pts = 17, grading = GlobalCornerGrading())
+        sw_node_count_equals_points(solver, rect, ks; graded = true)
+    end
+    @testset "CFIE, SmoothPeriodicGrading, rectangle, D2 symmetry" begin
+        solver = CombinedFieldIntegralEquationSolver(5.0, rect; min_pts = 17, grading = SmoothPeriodicGrading(), sym_characters = (1, -1))
+        sw_node_count_equals_points(solver, rect, ks; graded = false)
+    end
+    @testset "CFIE, GlobalCornerGrading, rectangle, D2 symmetry" begin
+        solver = CombinedFieldIntegralEquationSolver(5.0, rect; min_pts = 17, grading = GlobalCornerGrading(), sym_characters = (1, -1))
+        sw_node_count_equals_points(solver, rect, ks; graded = true)
+    end
+
+    @testset "GlobalCornerGrading on a smooth boundary falls back to the ungraded count" begin
+        # no corners: the discretization is the smooth one, so graded = false applies although the grading is global
+        c3 = C3Billiard(0.02)
+        solver = DoubleLayerPotentialSolver(5.0, c3; min_pts = 33, grading = GlobalCornerGrading(), sym_characters = (1,))
+        sw_node_count_equals_points(solver, c3, (3.0, 8.0, 15.0); graded = false)
+        csolver = CombinedFieldIntegralEquationSolver(5.0, c3; min_pts = 33, grading = GlobalCornerGrading(), sym_characters = (1,))
+        sw_node_count_equals_points(csolver, c3, (3.0, 8.0, 15.0); graded = false)
+    end
 end
 
 @testset "_infer_bim_symmetry" begin

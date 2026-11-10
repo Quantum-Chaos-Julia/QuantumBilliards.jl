@@ -168,7 +168,7 @@ with quantum numbers `[sym_x, sym_x*sym_y, sym_y]`. Symmetry-adapted bases
 require the origin at `(0, 0)` and no rotation.
 
 When `use_taylor = true`, compatible accelerated solvers may construct a
-[`FourierBesselTaylorCache`](@ref) and reuse it for basis evaluations within
+`FourierBesselTaylorCache` and reuse it for basis evaluations within
 `taylor_radius` of its expansion center. If `gradients = true`, caches
 additionally store the angular data required for Cartesian spatial gradients.
 
@@ -193,7 +193,7 @@ The following functions can be evaluated for this type:
 - [`dk_fun`](@ref)
 - [`gradient`](@ref)
 - [`basis_and_gradient`](@ref)
-- [`FourierBesselTaylorCache`](@ref)
+- `FourierBesselTaylorCache`
 """
 struct FourierBessel{T<:Real} <: AbsBasis
     origin::SVector{2,T}

@@ -28,6 +28,31 @@ k1, k2 = k_range_for_states(billiard, 250, 257)
 spectrum = compute_spectrum(solver, billiard, k1, k2)
 ```
 
+The solver structs are immutable. [`with_params`](@ref) returns a copy with some
+fields replaced, for example `with_params(solver; nq = 60)`, and displaying a solver
+at the REPL (or [`log_solver`](@ref)) lists its parameters.
+
+## Planning a computation
+[`plan_computation`](@ref) describes a `compute_spectrum` run without solving:
+the window layout, the expected number of states per window (Weyl law), the
+basis or boundary dimensions, an upper-bound memory estimate and notes about
+parameter adjustments. The resulting [`ComputationPlan`](@ref) stores every
+input of the run, so [`compute_spectrum`](@ref) accepts it directly.
+
+```julia
+plan = plan_computation(solver, billiard, k1, k2)    # or (solver, billiard, N1, N2) with state indices
+plan                                                 # prints windows, dimensions and memory
+spectrum = compute_spectrum(plan; show_progress = false)
+```
+
+For [`VerginiSaracenoSolver`](@ref) pass the basis and the window half-width,
+`plan_computation(solver, basis, billiard, k1, k2, dk)`; for
+[`ExpandedBIMSolver`](@ref) the half-width is the keyword `dk`. `compute_spectrum`
+checks the same estimate before the sweep and throws if it exceeds `max_memory`
+(by default [`default_memory_limit`](@ref), 90% of the physical RAM); pass
+`max_memory = Inf` to disable the check. [`estimate_memory`](@ref) returns the
+estimate alone.
+
 ## Billiards with holes and symmetry
 A billiard with holes has the symmetry group `G'` of the elements of its
 registered group `G` that map every hole onto itself
@@ -61,3 +86,22 @@ and `s = d-k`, so the solve runs in the cyclic sector `s = k`, which contains ev
 b = SinaiBilliard(1.0, 0.3)               # D₄: E₁ is the only 2D irrep
 sector = symmetry_sector(b; irrep2d = 1)
 ```
+
+## Profiling a spectrum computation
+
+The accelerated solvers (`VerginiSaracenoSolver`, `BeynSolver`, `ExpandedBIMSolver`, `CORKSolver`) are instrumented with `@timeit_debug` (TimerOutputs) and `@debug` (Logging). Both are no-ops by default.
+
+```julia
+using TimerOutputs, QuantumBilliards
+TimerOutputs.enable_debug_timings(QuantumBilliards)   # before the first call; triggers recompilation
+reset_timer!()
+ENV["JULIA_DEBUG"] = "QuantumBilliards"               # optional: sizes, ranks, memory markers
+data = compute_spectrum(solver, billiard, k1, k2; show_progress = false)
+print_timer(; allocations = true)
+```
+
+The timer tree is rooted at `compute_spectrum_vs`, `compute_spectrum_beyn`, `compute_spectrum_ebim` or `compute_spectrum_cork`, with three stage children, `preparation` (boundary points, caches, polynomial/degree tuning), `solution` (window solves) and `postprocessing` (state construction, merging, finalization), and the performance-critical steps (matrix assembly, factorizations, eigen/SVD/Krylov) below them. Notes:
+
+* Allocation columns count Julia allocations only; BLAS/LAPACK workspace and peak memory are not included. `@debug` lines report `live_GiB` and `maxrss_GiB` at sweep boundaries, and matrix construction messages report each matrix size and memory in GiB.
+* Each `@debug` call site prints only once per logger (`maxlog=1`), so repeated windows do not flood the output.
+* The default timer is not thread-safe. Timers are placed around whole loops, never inside threaded loop bodies.

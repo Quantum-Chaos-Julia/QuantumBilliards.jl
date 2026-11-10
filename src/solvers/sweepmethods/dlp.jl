@@ -66,6 +66,7 @@ full-boundary Fredholm operator to a selected symmetry sector.
 
 ## Attributes
 * `pts_scaling_factor::Vector{T}`: Boundary-point scaling factors used to determine the discretization size.
+* `billiard::Bi`: Billiard whose boundary is discretized.
 * `min_pts::Int64`: Minimum number of boundary points.
 * `grading::G`: [`BoundaryGrading`](@ref) strategy controlling the periodic boundary parametrization used by the Kress quadrature scheme.
 * `symmetry::Sy`: Optional discrete symmetry used to reduce the Fredholm operator.
@@ -162,10 +163,15 @@ _bim_numeric_type(::DoubleLayerPotentialSolver{T}) where {T} = T
 # This quantity is used only as the physical boundary coordinate `s`; the
 # Nyström quadrature weights are constructed separately from the parametrized
 # tangent and the periodic parameter step.
-function _dlp_composite_arclength(comp::Vector, t::T) where {T<:Real}
-    _, cum, Ltot = component_lengths(comp)
+function _dlp_composite_arclength(comp::Vector, t::Real)
+    _, _, Ltot = component_lengths(comp)
+    return _dlp_composite_arclength(comp, Ltot, t)
+end
+
+function _dlp_composite_arclength(comp::Vector, Ltot, t::Real)
+    T = typeof(float(t))
     twopi = 2*T(pi)
-    τ = mod(t, twopi)
+    τ = mod(T(t), twopi)
     target = Ltot*τ/twopi
     offset = zero(T)
     @inbounds for j in eachindex(comp)
@@ -196,10 +202,8 @@ function _dlp_composite_arclength(comp::Vector, t::T) where {T<:Real}
 # fallback for GlobalCornerGrading when the boundary contains no true corners (stadium).
 function _dlp_evaluate_points(solver::DoubleLayerPotentialSolver, ::SmoothPeriodicGrading, comp::Vector, k::T; multiple::Int=1, N_override::Union{Nothing,Int}=nothing) where {T<:Real}
     twopi = 2*T(pi)
-    _, _, Ltot = component_lengths(comp)
-    scale = solver.pts_scaling_factor[1]
-    N = max(solver.min_pts, round(Int, k*Ltot*scale/twopi))
-    N = _bim_round_nodes(N, lcm(2, _bim_solver_node_multiple(solver), multiple), N_override)
+    lens, cum, Ltot = component_lengths(comp)
+    N = _bim_node_count(solver, Ltot, k; multiple, N_override)
     h = twopi/T(N)
     ts = T[s_mid(j, N) for j in 1:N]
     tphys = copy(ts)
@@ -209,11 +213,11 @@ function _dlp_evaluate_points(solver::DoubleLayerPotentialSolver, ::SmoothPeriod
     s = Vector{T}(undef, N)
     ds = Vector{T}(undef, N)
     @inbounds for i in 1:N
-        q, γt, γtt = BilliardGeometry._eval_composite_geom_global_t(T, comp, tphys[i])
+        q, γt, γtt = BilliardGeometry._eval_composite_geom_global_t(T, comp, lens, cum, Ltot, tphys[i])
         xy[i] = q
         tangent_1st[i] = γt
         tangent_2nd[i] = γtt
-        s[i] = _dlp_composite_arclength(comp, tphys[i])
+        s[i] = _dlp_composite_arclength(comp, Ltot, tphys[i])
         ds[i] = hypot(γt[1], γt[2])*h
     end
     ws = fill(h, N)
@@ -247,10 +251,8 @@ end
 # stores dt/dσ.
 function _dlp_evaluate_points_graded(solver::DoubleLayerPotentialSolver, grading::GlobalCornerGrading, comp::Vector, k::T, corners::Vector{T}; multiple::Int=1, N_override::Union{Nothing,Int}=nothing) where {T<:Real}
     twopi = 2*T(pi)
-    _, _, Ltot = component_lengths(comp)
-    scale = solver.pts_scaling_factor[1]
-    N = max(solver.min_pts, round(Int, k*Ltot*scale/twopi))
-    N = _bim_round_nodes(N, lcm(solver.symmetry === nothing ? 2 : _bim_solver_node_multiple(solver), multiple), N_override)
+    lens, cum, Ltot = component_lengths(comp)
+    N = _bim_node_count(solver, Ltot, k; graded=true, multiple, N_override)
     σ, tmap, jac, jac2, _ = multi_kress_graded_nodes_data(T, N, corners; q=grading.kressq, minsep_tol=T(grading.min_t_spacing))
     tphys = tmap
     xy = Vector{SVector{2,T}}(undef, N)
@@ -260,11 +262,11 @@ function _dlp_evaluate_points_graded(solver::DoubleLayerPotentialSolver, grading
     ds = Vector{T}(undef, N)
     h = twopi/T(N)
     @inbounds for i in 1:N
-        q, γt, γtt = BilliardGeometry._eval_composite_geom_global_t(T, comp, tphys[i])
+        q, γt, γtt = BilliardGeometry._eval_composite_geom_global_t(T, comp, lens, cum, Ltot, tphys[i])
         tangent_1st[i] = γt*jac[i]
         tangent_2nd[i] = γtt*(jac[i]^2) + γt*jac2[i]
         xy[i] = q
-        s[i] = _dlp_composite_arclength(comp, tphys[i])
+        s[i] = _dlp_composite_arclength(comp, Ltot, tphys[i])
         v = tangent_1st[i]
         ds[i] = hypot(v[1], v[2])*h
     end
@@ -477,37 +479,52 @@ phases.
 * `A::Matrix{Complex{T}}`: Full or symmetry-reduced Fredholm matrix `A(k) = I - D(k)`.
 """
 function construct_matrices(solver::DoubleLayerPotentialSolver, pts::BoundaryPoints, k; multithreaded::Bool=true)
+    return construct_matrices(solver, pts, k, _bim_geometry(solver, pts); multithreaded)
+end
+
+"""
+    _bim_geometry(solver::DoubleLayerPotentialSolver, pts::BoundaryPoints)
+
+Wavenumber-independent data of the DLP Fredholm assembly: the boundary geometry cache `G`,
+the Kress matrix `Rmat` and, for a symmetry-reduced solver, the folded boundary `orbits`.
+It is read-only during assembly and can be reused for every wavenumber on the same `pts`.
+"""
+function _bim_geometry(solver::DoubleLayerPotentialSolver, pts::BoundaryPoints)
+    T = _bim_numeric_type(solver)
+    N = length(pts)
+    graded = _is_nontrivial_dlp_grading(pts)
+    G = @timeit_debug "boundary_geom_cache" boundary_geom_cache(pts, graded)
+    Rmat = zeros(T, N, N)
+    kress_R!(Rmat)
+    orbits = solver.symmetry === nothing ? nothing : _fold_boundary(T, solver.billiard, N, solver.symmetry, solver.sym_characters)
+    return (; graded, G, Rmat, orbits)
+end
+
+"""
+    construct_matrices(solver::DoubleLayerPotentialSolver, pts::BoundaryPoints, k, geom; multithreaded::Bool=true)
+
+Assemble the DLP Fredholm matrix with the precomputed geometry `geom = _bim_geometry(solver, pts)`.
+"""
+function construct_matrices(solver::DoubleLayerPotentialSolver, pts::BoundaryPoints, k, geom::NamedTuple; multithreaded::Bool=true)
     @timeit_debug "construct_matrices" begin
         T = _bim_numeric_type(solver)
         kT = _bim_widen_k(T, k)
         N = length(pts)
-        @debug "DLP matrix construction started" N kT symmetry=solver.symmetry sym_characters=solver.sym_characters
-        graded = _is_nontrivial_dlp_grading(pts)
-        @timeit_debug "boundary_geom_cache" begin
-            G = boundary_geom_cache(pts, graded)
-        end
-        Rmat = zeros(T, N, N)
-        @timeit_debug "kress_R" begin
-            kress_R!(Rmat)
-        end
-        @debug "Geometry cache and Kress matrix built" N graded
+        (; graded, G, Rmat, orbits) = geom
         if solver.symmetry === nothing
             A = Matrix{Complex{T}}(undef, N, N)
             @timeit_debug "fredholm_assembly" begin
                 _dlp_fredholm_full!(A, pts, Rmat, G, kT; multithreaded)
             end
-            @debug "DLP Fredholm matrix assembled" size=size(A)
+            @debug "DLP matrix construction" maxlog=1 N graded A=_matinfo(A) R=_matinfo(Rmat)
             return A
         else
-            @timeit_debug "symmetry_orbits" begin
-                orbits = _fold_boundary(T, solver.billiard, N, solver.symmetry, solver.sym_characters)
-            end
             m = fundamental_size(orbits)
             A = Matrix{Complex{T}}(undef, m, m)
             @timeit_debug "reduced_fredholm_assembly" begin
                 _dlp_fredholm_reduced!(A, pts, Rmat, G, orbits, kT; multithreaded)
             end
-            @debug "Symmetry-reduced DLP Fredholm matrix assembled" fundamental_size=m
+            @debug "DLP symmetry-reduced matrix construction" maxlog=1 N graded symmetry=solver.symmetry A=_matinfo(A) R=_matinfo(Rmat)
             return A
         end
     end

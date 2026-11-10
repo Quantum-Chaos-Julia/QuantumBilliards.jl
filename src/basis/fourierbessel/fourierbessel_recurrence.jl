@@ -79,7 +79,7 @@ stored.
 * `multithreaded::Bool = true`: Enable multithreaded cache construction across basis functions.
 
 ## Returns
-* `cache`: [`FourierBesselTaylorCache`](@ref) containing the analytic Taylor representation of the basis.
+* `cache`: `FourierBesselTaylorCache` containing the analytic Taylor representation of the basis.
 """
 function FourierBesselTaylorCache(basis::FourierBessel{T}, k0::T, pts::AbstractArray; multithreaded::Bool = true) where {T<:Real}
     deg = basis.taylor_degree
@@ -125,10 +125,10 @@ Construct the Taylor cache associated with a [`FourierBessel`](@ref) basis.
 * `multithreaded::Bool = true`: Whether cache construction is multithreaded.
 
 ## Returns
-* `cache`: [`FourierBesselTaylorCache`](@ref) associated with `basis`.
+* `cache`: `FourierBesselTaylorCache` associated with `basis`.
 """
 @inline function basis_cache(basis::FourierBessel, k0, pts; multithreaded::Bool = true)
-    return FourierBesselTaylorCache(basis, k0, pts; multithreaded)
+    return @timeit_debug "basis_cache" FourierBesselTaylorCache(basis, k0, pts; multithreaded)
 end
 
 """
@@ -141,7 +141,7 @@ The radial Taylor series stored in `cache` is evaluated at `δ = k - cache.k0`
 using Horner's rule and multiplied by the cached angular factor.
 
 ## Arguments
-* `cache`: [`FourierBesselTaylorCache`](@ref) containing the Taylor coefficients and angular factors.
+* `cache`: `FourierBesselTaylorCache` containing the Taylor coefficients and angular factors.
 * `k`: Wavenumber at which the basis is evaluated.
 
 ## Keyword Arguments
@@ -175,7 +175,7 @@ The radial Taylor series stored in `cache` is differentiated and evaluated at
 cached angular factor.
 
 ## Arguments
-* `cache`: [`FourierBesselTaylorCache`](@ref) containing the Taylor coefficients and angular factors.
+* `cache`: `FourierBesselTaylorCache` containing the Taylor coefficients and angular factors.
 * `k`: Wavenumber at which the derivative is evaluated.
 
 ## Keyword Arguments
@@ -205,7 +205,7 @@ Evaluate a cached Fourier-Bessel basis matrix and its wavenumber derivative
 simultaneously at wavenumber `k`, with rows scaled by `sqrt(nsym * w)`.
 
 ## Arguments
-* `cache`: [`FourierBesselTaylorCache`](@ref) containing the Taylor coefficients and angular factors.
+* `cache`: `FourierBesselTaylorCache` containing the Taylor coefficients and angular factors.
 * `k`: Wavenumber at which the basis and its derivative are evaluated.
 * `w`: Vector of quadrature weights associated with the cached points.
 * `nsym`: = one(eltype(w)) * (isnothing(basis.symmetries) ? 1 : length(basis.symmetries) + 1)
@@ -260,7 +260,7 @@ for the `(1, sin)` mode, with `α` the rotation of the local frame, and zero for
 all other modes. The cache must have been constructed with `gradients = true`.
 
 ## Arguments
-* `cache`: [`FourierBesselTaylorCache`](@ref) containing the Taylor coefficients and spatial-gradient data.
+* `cache`: `FourierBesselTaylorCache` containing the Taylor coefficients and spatial-gradient data.
 * `basis`: [`FourierBessel`](@ref) basis associated with the cache.
 * `k`: Wavenumber at which the spatial gradients are evaluated.
 
@@ -313,11 +313,11 @@ derivatives simultaneously at wavenumber `k`.
 The radial Taylor series and its first wavenumber derivative are evaluated
 simultaneously using Horner's rule, and the cached angular factors are used to
 construct the basis matrix and its Cartesian derivatives as in
-[`gradient_matrices`](@ref). The cache must have been constructed with
+`gradient_matrices`. The cache must have been constructed with
 `gradients = true`.
 
 ## Arguments
-* `cache`: [`FourierBesselTaylorCache`](@ref) containing the Taylor coefficients and spatial-gradient data.
+* `cache`: `FourierBesselTaylorCache` containing the Taylor coefficients and spatial-gradient data.
 * `basis`: [`FourierBessel`](@ref) basis associated with the cache.
 * `k`: Wavenumber at which the basis and spatial gradients are evaluated.
 

@@ -251,10 +251,12 @@ formed once and reused for every source-target pair.
   boundary matrix dimension.
 """
 function _taylor_cache(solver::Union{DoubleLayerPotentialSolver,CombinedFieldIntegralEquationSolver}, pts)
-    N = length(pts.xy)
-    G = boundary_geom_cache(pts,_is_nontrivial_dlp_grading(pts))
-    Rmat = zeros(Float64,N,N); kress_R!(Rmat)
-    return (;solver,pts,Rmat,G,N)
+    return @timeit_debug "taylor_cache" begin
+        N = length(pts.xy)
+        G = boundary_geom_cache(pts,_is_nontrivial_dlp_grading(pts))
+        Rmat = zeros(Float64,N,N); kress_R!(Rmat)
+        (;solver,pts,Rmat,G,N)
+    end
 end
 
 """
@@ -574,10 +576,11 @@ selected automatically.
 - `::Vector{Matrix{ComplexF64}}`: Fredholm matrices evaluated at the requested wavenumbers.
 """
 function _construct_matrices_multi_k_taylor(solver::SweepBIMSolver, pts::BoundaryPoints{Float64}, k0::Float64, ks::AbstractVector{<:Number}, p::Int; multithreaded::Bool = true)::Vector{Matrix{ComplexF64}}
+    @debug "Multi-k Taylor construction" maxlog=1 nk=length(ks) p N=length(pts.xy) reduced=solver.symmetry!==nothing full_matrices_GiB=length(ks)*length(pts.xy)^2*sizeof(ComplexF64)/2^30
     if solver.symmetry === nothing
-        return _construct_matrices_multi_k_taylor_full(solver, pts, k0, ks, p; multithreaded)
+        return @timeit_debug "taylor_full" _construct_matrices_multi_k_taylor_full(solver, pts, k0, ks, p; multithreaded)
     end
-    return _construct_matrices_multi_k_taylor_reduced(solver, pts, k0, ks, p; multithreaded)
+    return @timeit_debug "taylor_reduced" _construct_matrices_multi_k_taylor_reduced(solver, pts, k0, ks, p; multithreaded)
 end
 
 ################################################################################

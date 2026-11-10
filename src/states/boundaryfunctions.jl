@@ -80,11 +80,11 @@ function _rellich(pts::BoundaryPoints{T},u::AbstractVector{N},k::T) where {N<:Nu
 end
 
 """
-    boundary_function(state::S; ppw::Real = 5.0, multithreaded::Bool = true) where {S<:AbsState} → (u::Vector, s::Vector, norm::Real)
+    boundary_function(state::S, billiard::AbsBilliard; ppw::Real = 5.0, multithreaded::Bool = true) where {S<:AbsState} → (u::Vector, s::Vector, norm::Real)
 
 Computes the normal-derivative boundary function \$u(s) = \\partial_n\\psi(s)\$ of
-an eigenstate along its boundary, together with the arc-length coordinate `s`
-and a Rellich-identity normalization check `norm`. The default `ppw = 5.0`
+a basis eigenstate along the boundary of `billiard`, together with the arc-length
+coordinate `s` and a Rellich-identity normalization check `norm`. The default `ppw = 5.0`
 gives roughly `5` boundary sample points per de Broglie wavelength.
 
 ## Description
@@ -105,7 +105,8 @@ boundary via `apply_symmetries_to_boundary_points` and
 `apply_symmetries_to_boundary_function`.
 
 ## Arguments
-* `state`: The eigenstate for which the boundary function is computed.
+* `state`: The basis eigenstate for which the boundary function is computed.
+* `billiard`: The billiard the state was computed on.
 
 ## Keyword arguments
 *  `ppw::Real = 5.0` : Oversampling factor controlling the boundary point
@@ -122,6 +123,12 @@ boundary via `apply_symmetries_to_boundary_points` and
    computed by [`_rellich`](@ref), before any symmetry unfolding; should be
    close to `1` for a correctly normalized eigenstate.
 """
+function boundary_function(state::S, billiard::AbsBilliard; ppw::Real=5.0, multithreaded::Bool=true) where {S<:AbsState}
+    type = eltype(state.vec)
+    u, pts, norm = _basis_boundary_function_pts(state, billiard; ppw, multithreaded)
+    return u, pts.s::Vector{type}, norm
+end
+
 function _basis_boundary_function_pts(state::S, billiard::AbsBilliard; ppw::Real=5.0, multithreaded::Bool=true) where {S<:AbsState}
     let vec = state.vec, k = state.k, k_basis = state.k_basis, new_basis = state.basis
         type = eltype(vec)
@@ -149,24 +156,18 @@ function _basis_boundary_function_pts(state::S, billiard::AbsBilliard; ppw::Real
     end
 end
 
-function boundary_function(state::S, billiard::AbsBilliard; ppw::Real=5.0, multithreaded::Bool=true) where {S<:AbsState}
-    type = eltype(state.vec)
-    u, pts, norm = _basis_boundary_function_pts(state, billiard; ppw, multithreaded)
-    return u, pts.s::Vector{type}, norm
-end
-
 """
     boundary_function(state::BIMEigenstate) → (u::Vector, s::Vector, norm::Real)
 
 Returns the Rellich-normalized boundary normal derivative \$u(s) = \\partial_n\\psi(s)\$
-of a [`BIMEigenstate`](@ref), computed with any [`SweepBIMSolver`](@ref).
+of a [`BIMEigenstate`](@ref) that stores it.
 
 ## Description
-Unlike [`boundary_function(state::S) where {S<:AbsState}`](@ref), `state.vec`
+Unlike the basis-state method [`boundary_function(state, billiard)`](@ref), `state.vec`
 (the *primal* density from [`solve_vect`](@ref)) is not directly usable as
 `∂ₙψ`. Since [`compute_eigenstate`](@ref) already computes the physical
-boundary normal derivative via [`solve_state`](@ref)/[`_bim_normal_derivative`](@ref)
-(from the *same* Krylov solve as `vec`/`ten`, at no extra cost), this is now a
+boundary normal derivative via [`solve_state`](@ref)/`_bim_normal_derivative`
+(from the *same* Krylov solve as `vec`/`ten`, at no extra cost), this is a
 plain read of the precomputed `state.u`/`state.pts`/`state.bnd_norm` fields —
 no matrix is assembled and no solve happens here.
 
@@ -176,7 +177,7 @@ per call.
 
 ## Returns
 *  `u` : The Rellich-normalized physical boundary normal derivative `∂ₙψ`, on the complete physical boundary.
-*  `s` : The arc-length coordinates corresponding to `u`. Not, in general, uniformly spaced (a `GlobalCornerGrading` solver clusters nodes near corners) — see [`husimi_function(state::BIMEigenstate)`](@ref).
+*  `s` : The arc-length coordinates corresponding to `u`. Not, in general, uniformly spaced (a `GlobalCornerGrading` solver clusters nodes near corners) — see [`husimi_function(state, billiard, solver)`](@ref).
 *  `norm` : The Rellich-identity value of the raw (pre-rescaling) density used to normalize `u` (`state.bnd_norm`); kept for interface parity with the basis-solver method, not itself expected to be close to `1`.
 
 Throws an `ArgumentError` when `state.u === nothing` (states produced by accelerated BIM solvers such as [`BeynSolver`](@ref) keep only the layer density); use [`boundary_function(state, billiard, solver)`](@ref) or the [`SpectralData`](@ref) methods, which recompute `u`.
@@ -268,15 +269,16 @@ function momentum_function(u,s)
 end
 
 """
-    momentum_function(state::S; ppw::Real = 5.0, multithreaded::Bool = true) where {S<:AbsState} → (power::Vector, ks::Vector)
+    momentum_function(state::S, billiard::AbsBilliard; ppw::Real = 5.0, multithreaded::Bool = true) where {S<:AbsState} → (power::Vector, ks::Vector)
 
-Computes the momentum-space representation of an eigenstate's boundary
+Computes the momentum-space representation of a basis eigenstate's boundary
 function directly from `state`, by combining [`boundary_function`](@ref) and
 [`momentum_function(u, s)`](@ref momentum_function).
 
 ## Arguments
-* `state`: The eigenstate for which the boundary momentum function is
+* `state`: The basis eigenstate for which the boundary momentum function is
   computed.
+* `billiard`: The billiard the state was computed on.
 
 ## Keyword arguments
 *  `ppw::Real = 5.0` : Oversampling factor passed to [`boundary_function`](@ref)
@@ -355,10 +357,10 @@ function momentum_function(u::AbstractVector{U}, s::AbstractVector{T}, ds::Abstr
 end
 
 """
-    momentum_function(state::BIMEigenstate{K,T,S,Bi}) where {K,T,S<:SweepBIMSolver,Bi} → (power::Vector, ks::Vector)
+    momentum_function(state::BIMEigenstate) → (power::Vector, ks::Vector)
 
 Computes the momentum-space representation of a [`BIMEigenstate`](@ref)
-computed with any [`SweepBIMSolver`](@ref), via the non-uniform-arc-length-
+that stores its boundary normal derivative, via the non-uniform-arc-length-
 aware [`momentum_function(u, s, ds)`](@ref momentum_function) applied
 directly to the precomputed `state.u`/`state.pts`, since the BIM boundary
 discretization is not, in general, uniformly spaced in arc length.

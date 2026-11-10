@@ -405,6 +405,54 @@ end
     end
 end
 
+@testset "_bim_geometry and construct_matrices(solver, pts, k, geom)" begin
+    # The 3-argument method builds the geometry and calls the 4-argument one, so both must agree bitwise; one geometry is reused for
+    # several wavenumbers (real and complex) and is not modified by the assembly.
+    function cf_geom_reuse_checks(solver, billiard)
+        k0 = 3.0
+        pts = evaluate_points(solver, billiard, k0)
+        geom = QuantumBilliards._bim_geometry(solver, pts)
+        Rmat0 = copy(geom.Rmat)
+        @test geom isa NamedTuple
+        @test keys(geom) == (:graded, :G, :Rmat, :orbits)
+        @test size(geom.Rmat) == (length(pts), length(pts))
+        for k in (3.0, 3.4, 2.6 + 0.1im), mt in (false, true)
+            A4 = construct_matrices(solver, pts, k, geom; multithreaded=mt)
+            @test A4 == construct_matrices(solver, pts, k; multithreaded=mt)
+            @test size(A4, 1) == boundary_matrix_size(solver, pts)
+        end
+        @test construct_matrices(solver, pts, 3.0, geom) != construct_matrices(solver, pts, 3.4, geom)   # geom carries no k dependence
+        @test geom.Rmat == Rmat0
+        return geom
+    end
+
+    stadium = StadiumBilliard(0.3)
+
+    @testset "no symmetry" begin
+        geom = cf_geom_reuse_checks(CombinedFieldIntegralEquationSolver(5.0, stadium; min_pts=32), stadium)
+        @test geom.orbits === nothing
+    end
+
+    @testset "no symmetry, corner graded rectangle" begin
+        rect = RectangleBilliard(1.0, 0.6)
+        geom = cf_geom_reuse_checks(CombinedFieldIntegralEquationSolver(5.0, rect; min_pts=32, grading=GlobalCornerGrading()), rect)
+        @test geom.graded
+    end
+
+    @testset "Y reflection" begin
+        solver = CombinedFieldIntegralEquationSolver(5.0, stadium; min_pts=32, symmetry=YAxisReflection(), sym_characters=(-1,))
+        geom = cf_geom_reuse_checks(solver, stadium)
+        @test geom.orbits !== nothing
+        @test fundamental_size(geom.orbits) == length(evaluate_points(solver, stadium, 3.0)) ÷ 2
+    end
+
+    @testset "C3 rotation" begin
+        c3 = C3Billiard(0.02)
+        geom = cf_geom_reuse_checks(CombinedFieldIntegralEquationSolver(5.0, c3; min_pts=36, sym_characters=(1,)), c3)
+        @test geom.orbits !== nothing
+    end
+end
+
 @testset "boundary_matrix_size" begin
     stadium = StadiumBilliard(0.3)
     c3 = C3Billiard(0.02)

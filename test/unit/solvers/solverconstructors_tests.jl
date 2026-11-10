@@ -294,13 +294,15 @@ end
         @test solver.eigenvectors === false
     end
 
-    @testset "solver is mutable" begin
+    @testset "solver is immutable" begin
         solver = VerginiSaracenoSolver(2.0, 5.0)
-        @test ismutabletype(VerginiSaracenoSolver)
-        solver.eigenvectors = false
-        @test solver.eigenvectors === false
-        solver.min_dim = 20
-        @test solver.min_dim == 20
+        @test !ismutabletype(VerginiSaracenoSolver)
+        copy = with_params(solver; eigenvectors=false, min_dim=20)
+        @test copy isa VerginiSaracenoSolver{Float64}
+        @test copy.eigenvectors === false && copy.min_dim == 20
+        @test solver.eigenvectors === true && solver.min_dim == 100
+        @test copy.sampler === solver.sampler
+        @test_throws ArgumentError with_params(solver; nonexistent=1)
     end
 
     @testset "Float32 parameters" begin
@@ -586,7 +588,17 @@ end
         @test solver.imag_k_group_size == 20
         @test solver.eigenvectors === true
         @test _bim_numeric_type(solver) === Float64
-        @test ismutabletype(BeynSolver)
+        @test !ismutabletype(BeynSolver)
+    end
+
+    @testset "with_params" begin
+        solver = BeynSolver(kernel)
+        tuned = with_params(solver; taylor_degree=9, nlevels=50)
+        @test tuned isa typeof(solver)
+        @test tuned.taylor_degree == 9 && tuned.nlevels == 50
+        @test solver.taylor_degree == 14 && solver.nlevels == 100
+        @test tuned.kernel === solver.kernel
+        @test tuned.Rmax == solver.Rmax && tuned.cheb_config === solver.cheb_config
     end
 
     @testset "Chebyshev configuration" begin
@@ -631,7 +643,7 @@ end
         @test_throws MethodError BeynSolver(DecompositionMethodSolver(2.0, 3.0))
         @test_throws MethodError BeynSolver(BeynSolver(kernel))                               # no nesting of accelerated solvers
         @test_throws MethodError BeynSolver()
-        @test_throws TypeError BeynSolver(kernel; nlevels=2.5)
+        @test BeynSolver(kernel; nlevels=2.5).nlevels === 2.5                                 # fractional windows are allowed
         @test_throws TypeError BeynSolver(kernel; nq=2.5)
         @test_throws TypeError BeynSolver(kernel; use_taylor=1)
         @test_throws MethodError BeynSolver(kernel; cheb_config=ChebyshevConfig(Float32))   # wrong element type of the configuration
@@ -745,10 +757,12 @@ end
         @test solver.stable_tol == 1e-9
         @test solver.imag_search_tol == 1e-4
         @test solver.eigenvectors === false
-        @test solver.verbose === false
         @test solver.taylor_tol == 3e-10
         @test _bim_numeric_type(solver) === Float64
-        @test ismutabletype(CORKSolver)
+        @test !ismutabletype(CORKSolver)
+        tuned = with_params(solver; p=8)
+        @test tuned isa typeof(solver) && tuned.p == 8 && solver.p == 12
+        @test tuned.kernel === solver.kernel
     end
 
     @testset "Krylov dimensions follow nlevels and block_size" begin

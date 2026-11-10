@@ -20,6 +20,7 @@ SweepBasisSolver
 AcceleratedBasisSolver
 SweepBIMSolver
 AcceleratedBIMSolver
+AbsState
 ```
 
 ## Utilities
@@ -98,6 +99,19 @@ weyl_window_width
 plan_weyl_windows
 beyn_disks_from_windows
 beyn_buffer_matrices
+log_solver
+```
+
+## Computation planning
+```@docs
+plan_computation
+ComputationPlan
+WindowPlan
+expected_states
+with_params
+estimate_memory
+MemoryEstimate
+default_memory_limit
 ```
 
 ## Spectra

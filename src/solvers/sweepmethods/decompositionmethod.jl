@@ -215,14 +215,12 @@ function construct_matrices(solver::DecompositionMethodSolver,basis::Ba,pts::Bou
         M = length(xy)
         nsym=isnothing(basis.symmetries) ? one(eltype(w)) : one(eltype(w))*(length(basis.symmetries)+1)
 
-        @debug "Matrix construction started" N M k nsym
         @timeit_debug "basis_and_gradient_matrices" begin
             # F = B'*(W*B) and G = Bn'*(Wn*Bn) are formed with syrk on row-scaled copies sqrt(W)*B and
             # sqrt(Wn)*Bn (W is diagonal), which avoids the temporary W*B.
             @blas_1 B,dX,dY=basis_and_gradient_matrices(basis,k,xy;multithreaded)
             _scale_rows_sqrtw!(B,w,nsym)
         end
-        @debug "Basis and gradient matrix computed" size=size(B) 
         @timeit_debug "compute_F" begin
             F=Matrix{eltype(B)}(undef,N,N)
             @blas_multi_then_1 MAX_BLAS_THREADS BLAS.syrk!('U','T',one(eltype(B)),B,zero(eltype(B)),F)
@@ -230,13 +228,12 @@ function construct_matrices(solver::DecompositionMethodSolver,basis::Ba,pts::Bou
             _build_Bn_inplace!(dX,dY,pts.normal)
             _scale_rows_sqrtw!(dX,wn,nsym)
         end
-        @debug "F computed" size=size(F)
         @timeit_debug "compute_G" begin
             G=Matrix{eltype(B)}(undef,N,N)
             @blas_multi_then_1 MAX_BLAS_THREADS BLAS.syrk!('U','T',one(eltype(B)),dX,zero(eltype(B)),G)
             _symmetrize_from_upper!(G)
         end
-        @debug "G computed" size=size(F)
+        @debug "DM matrix construction" maxlog=1 N M k nsym B=_matinfo(B) F=_matinfo(F) G=_matinfo(G)
         return F,G
     end    
 end

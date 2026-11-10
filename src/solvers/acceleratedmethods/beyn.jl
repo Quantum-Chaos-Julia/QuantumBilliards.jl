@@ -53,14 +53,17 @@
 Contour-integral nonlinear eigensolver based on Beyn's method.
 
 The solver computes solutions of `A(k)u = 0` from contour moments on circular
-contours. Matrix construction can use the Chebyshev-accelerated backend.
+contours. Matrix construction uses the analytic Taylor-Horner backend by
+default, the radial-Chebyshev backend when `use_chebyshev=true`, or direct
+construction. The solver is immutable; [`with_params`](@ref) returns a copy with
+selected fields replaced.
 Multi-window spectrum calculations additionally support a global imaginary-`k`
 screening strategy which residual-checks roots in decreasing `abs(imag(k))`
 order and terminates after a prescribed sequence of residual-good roots.
 
 ## Fields
 * `kernel::K`: Boundary-integral solver defining `A(k)`.
-* `nlevels::Int`: Target number of states per Weyl window.
+* `nlevels::T`: Target number of states per Weyl window (may be fractional).
 * `nq::Int`: Number of contour quadrature nodes.
 * `r::Int`: Initial random probing rank.
 * `Rmax::T`: Maximum contour radius in spectrum sweeps.
@@ -77,9 +80,9 @@ order and terminates after a prescribed sequence of residual-good roots.
 * `imag_k_group_size::Int`: Maximum residual-check batch size for imaginary-`k` screening. 
 * `eigenvectors::Bool`: Whether `compute_spectrum` retains the layer densities returned by the Beyn solve.
 """
-mutable struct BeynSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
+struct BeynSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
     kernel::K
-    nlevels::Int
+    nlevels::T
     nq::Int
     r::Int
     Rmax::T
@@ -98,7 +101,7 @@ mutable struct BeynSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
 end
 
 """
-    BeynSolver(kernel::K; nlevels::Int=100, nq::Int=40, r::Int=200, Rmax::Real=0.5, svd_tol::Real=1e-11, res_tol::Real=1e-8, auto_discard_spurious::Bool=true, use_taylor::Bool=true, taylor_degree::Int=14, taylor_tol::Real=1e-12, use_chebyshev::Bool=false, cheb_config::Union{Nothing,ChebyshevConfig}=nothing, imag_k_check::Bool=true, imag_k_pad::Int=20, imag_k_group_size::Int=20, eigenvectors::Bool=true)
+    BeynSolver(kernel::K; nlevels::Real=100, nq::Int=40, r::Int=200, Rmax::Real=0.5, svd_tol::Real=1e-11, res_tol::Real=1e-8, auto_discard_spurious::Bool=true, use_taylor::Bool=true, taylor_degree::Int=14, taylor_tol::Real=1e-12, use_chebyshev::Bool=false, cheb_config::Union{Nothing,ChebyshevConfig}=nothing, imag_k_check::Bool=true, imag_k_pad::Int=20, imag_k_group_size::Int=20, eigenvectors::Bool=true)
 
 Construct a Beyn nonlinear eigensolver.
 
@@ -110,7 +113,7 @@ imaginary-`k` screening by default to verify the spectrum integrity.
 * `kernel::K`: Boundary-integral solver defining the nonlinear matrix `A(k)`.
 
 ## Keyword Arguments
-* `nlevels::Int=100`: Target number of states per Weyl window.
+* `nlevels::Real=100`: Target number of states per Weyl window; fractional values give windows narrower than one mean level spacing.
 * `nq::Int=40`: Number of contour quadrature nodes.
 * `r::Int=200`: Initial random probing rank.
 * `Rmax::Real=0.5`: Maximum contour radius in spectrum sweeps.
@@ -130,9 +133,9 @@ imaginary-`k` screening by default to verify the spectrum integrity.
 ## Returns
 * `BeynSolver{T,K}`: Configured Beyn solver.
 """
-function BeynSolver(kernel::K; nlevels::Int=100, nq::Int=40, r::Int=200, Rmax::Real=0.5, svd_tol::Real=1e-11, res_tol::Real=1e-8, auto_discard_spurious::Bool=true, use_taylor::Bool=true, taylor_degree::Int=14, taylor_tol::Real=1e-12, use_chebyshev::Bool=false, cheb_config::Union{Nothing,ChebyshevConfig}=nothing, imag_k_check::Bool=true, imag_k_pad::Int=20, imag_k_group_size::Int=20, eigenvectors::Bool=true) where {K<:SweepBIMSolver}
+function BeynSolver(kernel::K; nlevels::Real=100, nq::Int=40, r::Int=200, Rmax::Real=0.5, svd_tol::Real=1e-11, res_tol::Real=1e-8, auto_discard_spurious::Bool=true, use_taylor::Bool=true, taylor_degree::Int=14, taylor_tol::Real=1e-12, use_chebyshev::Bool=false, cheb_config::Union{Nothing,ChebyshevConfig}=nothing, imag_k_check::Bool=true, imag_k_pad::Int=20, imag_k_group_size::Int=20, eigenvectors::Bool=true) where {K<:SweepBIMSolver}
     T = _bim_numeric_type(kernel); cfg = cheb_config === nothing ? ChebyshevConfig(T) : cheb_config
-    return BeynSolver{T,K}(kernel, nlevels, nq, r, T(Rmax), T(svd_tol), T(res_tol), auto_discard_spurious, use_taylor, taylor_degree, T(taylor_tol), use_chebyshev, cfg, imag_k_check, imag_k_pad, imag_k_group_size, eigenvectors)
+    return BeynSolver{T,K}(kernel, T(nlevels), nq, r, T(Rmax), T(svd_tol), T(res_tol), auto_discard_spurious, use_taylor, taylor_degree, T(taylor_tol), use_chebyshev, cfg, imag_k_check, imag_k_pad, imag_k_group_size, eigenvectors)
 end
 
 _bim_numeric_type(::BeynSolver{T}) where {T} = T
@@ -146,7 +149,7 @@ according to the leading Weyl law, i.e. `sqrt(k^2 + 4π*nlevels/A) - k`.
 ## Arguments
 * `billiard::Bi`: Billiard geometry.
 * `k::T`: Lower wavenumber.
-* `nlevels::Int`: Target number of levels in the window.
+* `nlevels::Real`: Target number of levels in the window.
 
 ## Keyword Arguments
 * `fundamental_only::Bool=false`: Use the fundamental-domain area instead of the full area.
@@ -154,13 +157,13 @@ according to the leading Weyl law, i.e. `sqrt(k^2 + 4π*nlevels/A) - k`.
 ## Returns
 * `T`: Window width.
 """
-@inline function weyl_window_width(billiard::Bi, k::T, nlevels::Int; fundamental_only::Bool=false) where {T<:Real,Bi<:AbsBilliard}
+@inline function weyl_window_width(billiard::Bi, k::T, nlevels::Real; fundamental_only::Bool=false) where {T<:Real,Bi<:AbsBilliard}
     A = fundamental_only ? fundamental_area(billiard) : area(billiard)
     return sqrt(k^2+T(4pi*nlevels/A))-k
 end
 
 """
-    plan_weyl_windows(billiard::Bi, k1::T, k2::T; nlevels::Int=10, Rmax::Real=1.0, fundamental_only::Bool=false)
+    plan_weyl_windows(billiard::Bi, k1::T, k2::T; nlevels::Real=10, Rmax::Real=1.0, fundamental_only::Bool=false)
 
 Partition `[k1,k2]` into adjacent spectral windows containing approximately
 `nlevels` states according to the leading Weyl law.
@@ -171,14 +174,14 @@ Partition `[k1,k2]` into adjacent spectral windows containing approximately
 * `k2::T`: Upper spectral endpoint.
 
 ## Keyword Arguments
-* `nlevels::Int=10`: Approximate number of states per window.
+* `nlevels::Real=10`: Approximate number of states per window.
 * `Rmax::Real=1.0`: Maximum contour radius.
 * `fundamental_only::Bool=false`: Use the desymmetrized fundamental-domain area (Dirichlet walls).
 
 ## Returns
 * `Vector{Tuple{T,T}}`: Adjacent spectral intervals `(kL,kR)`.
 """
-function plan_weyl_windows(billiard::Bi, k1::T, k2::T; nlevels::Int=10, Rmax::Real=1.0, fundamental_only::Bool=false) where {T<:Real,Bi<:AbsBilliard}
+function plan_weyl_windows(billiard::Bi, k1::T, k2::T; nlevels::Real=10, Rmax::Real=1.0, fundamental_only::Bool=false) where {T<:Real,Bi<:AbsBilliard}
     k2 > k1 || return Tuple{T,T}[]; nlevels > 0 || throw(ArgumentError("nlevels must be positive; received nlevels=$nlevels")); Rmax > 0 || throw(ArgumentError("Rmax must be positive; received Rmax=$Rmax"))
     intervals = Tuple{T,T}[]; maxwidth = T(2Rmax); k = k1
     while k < k2
@@ -250,32 +253,36 @@ end
 # unchanged rather than erroring.
 tune_cheb_config(::CompositeBIMSolver, ::BoundaryPoints, k, cfg::ChebyshevConfig) = cfg
 
-function _construct_matrices_multi_k_cheb(cs::DoubleLayerPotentialSolver, pts::BoundaryPoints{T}, zj::Vector{ComplexF64}, cfg::ChebyshevConfig; multithreaded::Bool = true) where {T<:Real}
+function _construct_matrices_multi_k_cheb(cs::Union{DoubleLayerPotentialSolver,CombinedFieldIntegralEquationSolver}, pts::BoundaryPoints, zj::Vector{ComplexF64}, cfg::ChebyshevConfig; multithreaded::Bool = true)
+    return _construct_matrices_multi_k_cheb(cs, pts, zj, cfg, _bim_geometry(cs, pts); multithreaded)
+end
+
+function _construct_matrices_multi_k_cheb(cs::DoubleLayerPotentialSolver, pts::BoundaryPoints{T}, zj::Vector{ComplexF64}, cfg::ChebyshevConfig, geom::NamedTuple; multithreaded::Bool = true) where {T<:Real}
     T === Float64 || error("Chebyshev-accelerated Beyn evaluation requires Float64")
-    N = length(pts); graded = _is_nontrivial_dlp_grading(pts); G = boundary_geom_cache(pts, graded); Rmat = zeros(T, N, N); kress_R!(Rmat)
+    N = length(pts); (; G, Rmat, orbits) = geom
     rmin, rmax = _cheb_geom_rminmax(G, zj); plans1, plansj1, _ = tune_dlp_cheb_plans(rmin, rmax, zj, cfg)
     C = ChebRadialLookupCache(G, plans1[1], plansj1[1]; multithreaded)
     if cs.symmetry === nothing
         Tbufs = [Matrix{ComplexF64}(undef, N, N) for _ in zj]
         _dlp_fredholm_full_multi_k_cheb!(Tbufs, pts, Rmat, G, C, zj, plans1, plansj1; multithreaded)
     else
-        orbits = _fold_boundary(T, cs.billiard, N, cs.symmetry, cs.sym_characters); M = fundamental_size(orbits)
+        M = fundamental_size(orbits)
         Tbufs = [Matrix{ComplexF64}(undef, M, M) for _ in zj]
         _dlp_fredholm_reduced_multi_k_cheb!(Tbufs, pts, Rmat, G, C, orbits, zj, plans1, plansj1; multithreaded)
     end
     return Tbufs
 end
 
-function _construct_matrices_multi_k_cheb(cs::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints{T}, zj::Vector{ComplexF64}, cfg::ChebyshevConfig; multithreaded::Bool = true) where {T<:Real}
+function _construct_matrices_multi_k_cheb(cs::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints{T}, zj::Vector{ComplexF64}, cfg::ChebyshevConfig, geom::NamedTuple; multithreaded::Bool = true) where {T<:Real}
     T === Float64 || error("Chebyshev-accelerated Beyn evaluation requires Float64")
-    N = length(pts); graded = _is_nontrivial_dlp_grading(pts); G = boundary_geom_cache(pts, graded); Rmat = zeros(T, N, N); kress_R!(Rmat)
+    N = length(pts); (; G, Rmat, orbits) = geom
     rmin, rmax = _cheb_geom_rminmax(G, zj); plans0, plans1, plansj0, plansj1, _ = tune_cfie_cheb_plans(rmin, rmax, zj, cfg)
     C = ChebRadialLookupCache(G, plans1[1], plansj1[1]; multithreaded)
     if cs.symmetry === nothing
         Tbufs = [Matrix{ComplexF64}(undef, N, N) for _ in zj]
         _cfie_fredholm_full_multi_k_cheb!(Tbufs, pts, Rmat, G, C, zj, plans0, plans1, plansj0, plansj1; multithreaded)
     else
-        orbits = _fold_boundary(T, cs.billiard, N, cs.symmetry, cs.sym_characters); M = fundamental_size(orbits)
+        M = fundamental_size(orbits)
         Tbufs = [Matrix{ComplexF64}(undef, M, M) for _ in zj]
         _cfie_fredholm_reduced_multi_k_cheb!(Tbufs, pts, Rmat, G, C, orbits, zj, plans0, plans1, plansj0, plansj1; multithreaded)
     end
@@ -311,30 +318,33 @@ where `Aₚ` is the degree-`p` Taylor approximation about `k0`.
 - `Float64`: Worst relative error over the sampled contour points.
 """
 function validate_beyn_taylor(solver::SweepBIMSolver, pts::BoundaryPoints{Float64}, k0::Float64, R::Float64, p::Int; nsample::Int=5, multithreaded::Bool=true, reference=nothing)::Float64
-    Ap = _construct_matrices_multi_k_taylor(solver, pts, k0, R, nsample, p; multithreaded)
-    ref = reference === nothing ? _beyn_taylor_reference(solver, pts, k0, R, nsample; multithreaded) : reference
-    worst = 0.0
-    for q in 1:nsample
-        Ad = ref[q]
-        worst = max(worst, norm(Ap[q]-Ad)/norm(Ad))
+    @timeit_debug "validate_beyn_taylor" begin
+        Ap = _construct_matrices_multi_k_taylor(solver, pts, k0, R, nsample, p; multithreaded)
+        ref = reference === nothing ? _beyn_taylor_reference(solver, pts, k0, R, nsample; multithreaded) : reference
+        worst = 0.0
+        for q in 1:nsample
+            Ad = ref[q]
+            worst = max(worst, norm(Ap[q]-Ad)/norm(Ad))
+        end
+        worst
     end
-    return worst
 end
 
 function _beyn_taylor_reference(solver::SweepBIMSolver, pts::BoundaryPoints{Float64}, k0::Float64, R::Float64, nsample::Int; multithreaded::Bool=true)
     θ = 2π .* (0:nsample-1) ./ nsample
-    return [construct_matrices(solver, pts, k0+R*cis(θ[q]); multithreaded) for q in 1:nsample]
+    geom = _bim_geometry(solver, pts)
+    return [construct_matrices(solver, pts, k0+R*cis(θ[q]), geom; multithreaded) for q in 1:nsample]
 end
 
 """
-    _tune_beyn_taylor_degree!(solver::BeynSolver, pts, k0, R; multithreaded::Bool=true) -> Int
+    _tune_beyn_taylor_degree(solver::BeynSolver, pts, k0, R; multithreaded::Bool=true) -> Int
 
 Determine the Taylor degree used for Beyn contour-matrix construction.
 
 The degree is validated on the first contour having the largest radius and is
 increased or decreased from `solver.taylor_degree` until the smallest degree
-satisfying `solver.taylor_tol` is found. The resulting degree is stored in
-`solver.taylor_degree`.
+satisfying `solver.taylor_tol` is found. The solver is not modified; the caller
+uses the returned degree, e.g. through [`with_params`](@ref).
 
 ## Arguments
 - `solver::BeynSolver`: Beyn solver and Taylor configuration.
@@ -348,9 +358,9 @@ satisfying `solver.taylor_tol` is found. The resulting degree is stored in
 ## Returns
 - `Int`: Validated Taylor degree.
 """
-function _tune_beyn_taylor_degree!(solver::BeynSolver, pts, k0, R; multithreaded::Bool=true)::Int
+function _tune_beyn_taylor_degree(solver::BeynSolver, pts, k0, R; multithreaded::Bool=true)::Int
     Rcal, ical = findmax(R); kcal = Float64(real(k0[ical])); p0 = solver.taylor_degree; p = p0
-    reference = _beyn_taylor_reference(solver.kernel, pts[ical], kcal, Float64(Rcal), 5; multithreaded)
+    reference = @timeit_debug "taylor_reference" _beyn_taylor_reference(solver.kernel, pts[ical], kcal, Float64(Rcal), 5; multithreaded)
     err = validate_beyn_taylor(solver.kernel, pts[ical], kcal, Float64(Rcal), p; multithreaded, reference)
     if err>solver.taylor_tol
         while err>solver.taylor_tol
@@ -364,7 +374,7 @@ function _tune_beyn_taylor_degree!(solver::BeynSolver, pts, k0, R; multithreaded
             p -= 1; err = err1
         end
     end
-    solver.taylor_degree = p
+    @debug "Beyn Taylor degree tuned" p_initial=p0 p_final=p validation_error=err tolerance=solver.taylor_tol
     return p
 end
 
@@ -374,6 +384,37 @@ function _accumulate_beyn_moments!(A0, A1, X, V, Fs, zj, wj)
         ldiv!(X, Fs[j], V); BLAS.axpy!(wj[j], xv, a0v); BLAS.axpy!(wj[j]*zj[j], xv, a1v)
     end
     return nothing
+end
+
+# Direct-backend moments: each contour matrix is built, factorized, applied to the
+# probes and discarded, so only O(1) matrices are alive instead of nq. The matrices
+# are identical to the stored path; a rank-saturated moment (rare) repeats the sweep
+# with a larger probe rank.
+function _beyn_moments_streaming(solver::BeynSolver, pts, zj, wj, N::Int, rng; multithreaded::Bool=true)
+    T = _bim_numeric_type(solver); r = min(solver.r, N)
+    geom = _bim_geometry(solver.kernel, pts)
+    while true
+        V, X, A0, A1 = beyn_buffer_matrices(T, N, r, rng)
+        xv = reshape(X, :); a0v = reshape(A0, :); a1v = reshape(A1, :)
+        for j in eachindex(zj)
+            Tj = @timeit_debug "multi_k_matrices" construct_matrices(solver.kernel, pts, zj[j], geom; multithreaded)
+            F = nothing
+            @timeit_debug "lu_factorizations" begin
+                @blas_multi_then_1 MAX_BLAS_THREADS F = lu!(Tj; check=false)
+            end
+            @timeit_debug "moment_accumulation" begin
+                @blas_multi_then_1 MAX_BLAS_THREADS ldiv!(X, F, V)
+                BLAS.axpy!(wj[j], xv, a0v); BLAS.axpy!(wj[j]*zj[j], xv, a1v)
+            end
+        end
+        @timeit_debug "moment_svdvals" begin
+            @blas_multi_then_1 MAX_BLAS_THREADS Σ = svdvals(A0)
+        end
+        rk = count(>=(solver.svd_tol), Σ)
+        rk < r && return A0, A1
+        r == N && throw(ArgumentError("Beyn moment remains rank-saturated at maximum probe rank N=$N"))
+        r = min(r+solver.r, N)
+    end
 end
 
 """
@@ -405,30 +446,38 @@ Matrix construction uses the analytic Taylor-Horner backend when
 * `A1::Matrix{Complex{T}}`: First contour moment.
 """
 function construct_matrices(solver::BeynSolver, pts::BoundaryPoints, k0, R; multithreaded::Bool=true, rng=MersenneTwister(0), cheb_config::ChebyshevConfig=solver.cheb_config, taylor_degree::Int=solver.taylor_degree)
-    T = _bim_numeric_type(solver); N = boundary_matrix_size(solver.kernel, pts); k0c = Complex{T}(k0); Rc = T(R); nq = solver.nq
-    θ = range(zero(T), 2T(pi); length=nq+1)[1:end-1]; ej = cis.(θ); zj = k0c .+ Rc.*ej; wj = (Rc/nq).*ej
-    if solver.use_taylor
-        Tbufs = _construct_matrices_multi_k_taylor(solver.kernel, pts, Float64(real(k0c)), Float64(Rc), nq, taylor_degree; multithreaded)
-    elseif solver.use_chebyshev
-        Tbufs = _construct_matrices_multi_k_cheb(solver.kernel, pts, ComplexF64.(zj), cheb_config; multithreaded)
-    else
-        Tbufs = Vector{Matrix{Complex{T}}}(undef, nq)
-        @inbounds for j in eachindex(zj)
-            Tbufs[j] = construct_matrices(solver.kernel, pts, zj[j]; multithreaded)
+    @timeit_debug "beyn_construct_matrices" begin
+        T = _bim_numeric_type(solver); N = boundary_matrix_size(solver.kernel, pts); k0c = Complex{T}(k0); Rc = T(R); nq = solver.nq
+        θ = range(zero(T), 2T(pi); length=nq+1)[1:end-1]; ej = cis.(θ); zj = k0c .+ Rc.*ej; wj = (Rc/nq).*ej
+        backend = solver.use_taylor ? :taylor : solver.use_chebyshev ? :chebyshev : :direct
+        backend === :direct && return _beyn_moments_streaming(solver, pts, zj, wj, N, rng; multithreaded)
+        @timeit_debug "multi_k_matrices" begin
+            if solver.use_taylor
+                Tbufs = _construct_matrices_multi_k_taylor(solver.kernel, pts, Float64(real(k0c)), Float64(Rc), nq, taylor_degree; multithreaded)
+            else
+                Tbufs = _construct_matrices_multi_k_cheb(solver.kernel, pts, ComplexF64.(zj), cheb_config; multithreaded)
+            end
         end
-    end
-    F1 = lu!(Tbufs[1]; check=false); Fs = Vector{typeof(F1)}(undef, nq); Fs[1] = F1
-    @blas_multi_then_1 MAX_BLAS_THREADS @inbounds for j in 2:nq
-        Fs[j] = lu!(Tbufs[j]; check=false)
-    end
-    r = min(solver.r, N)
-    while true
-        V, X, A0, A1 = beyn_buffer_matrices(T, N, r, rng); _accumulate_beyn_moments!(A0, A1, X, V, Fs, zj, wj)
-        @blas_multi_then_1 MAX_BLAS_THREADS Σ = svdvals(A0)
-        rk = count(>=(solver.svd_tol), Σ)
-        rk < r && return A0, A1
-        r == N && throw(ArgumentError("Beyn moment remains rank-saturated at maximum probe rank N=$N"))
-        r = min(r+solver.r, N)
+        @debug "Beyn contour matrices" maxlog=1 N nq backend Tbufs_GiB=nq*N*N*sizeof(Complex{T})/2^30
+        Fs = @timeit_debug "lu_factorizations" begin
+            F1 = lu!(Tbufs[1]; check=false); Fs = Vector{typeof(F1)}(undef, nq); Fs[1] = F1
+            @blas_multi_then_1 MAX_BLAS_THREADS @inbounds for j in 2:nq
+                Fs[j] = lu!(Tbufs[j]; check=false)
+            end
+            Fs
+        end
+        r = min(solver.r, N)
+        while true
+            V, X, A0, A1 = beyn_buffer_matrices(T, N, r, rng)
+            @timeit_debug "moment_accumulation" _accumulate_beyn_moments!(A0, A1, X, V, Fs, zj, wj)
+            @timeit_debug "moment_svdvals" begin
+                @blas_multi_then_1 MAX_BLAS_THREADS Σ = svdvals(A0)
+            end
+            rk = count(>=(solver.svd_tol), Σ)
+            rk < r && return A0, A1
+            r == N && throw(ArgumentError("Beyn moment remains rank-saturated at maximum probe rank N=$N"))
+            r = min(r+solver.r, N)
+        end
     end
 end
 
@@ -456,30 +505,45 @@ outside the contour are discarded.
 * `X::Matrix{Complex{T}}`: Corresponding layer density vectors as columns.
 """
 function _beyn_projected_solve(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, rng=MersenneTwister(0), cheb_config::ChebyshevConfig=solver.cheb_config)
-    T = _bim_numeric_type(solver); k0c = Complex{T}(k0); Rc = T(dk)/2
-    @blas_1 A0, A1 = construct_matrices(solver, pts, k0c, Rc; multithreaded, rng, cheb_config)
-    N = size(A0, 1)
-    @blas_multi_then_1 MAX_BLAS_THREADS U, Σ, W = svd!(A0; full=false)
-    rk = count(>=(solver.svd_tol), Σ)
-    rk == 0 && return Complex{T}[], Matrix{Complex{T}}(undef, N, 0)
-    Uk = @view U[:, 1:rk]; Wk = @view W[:, 1:rk]; Σk = @view Σ[1:rk]; tmp = Matrix{Complex{T}}(undef, N, rk)
-    @blas_multi_then_1 MAX_BLAS_THREADS mul!(tmp, A1, Wk)
-    @inbounds for j in 1:rk
-        @views tmp[:, j] ./= Σk[j]
+    @timeit_debug "beyn_projected_solve" begin
+        T = _bim_numeric_type(solver); k0c = Complex{T}(k0); Rc = T(dk)/2
+        @blas_1 A0, A1 = construct_matrices(solver, pts, k0c, Rc; multithreaded, rng, cheb_config)
+        N = size(A0, 1)
+        @timeit_debug "svd" begin
+            @blas_multi_then_1 MAX_BLAS_THREADS U, Σ, W = svd!(A0; full=false)
+        end
+        rk = count(>=(solver.svd_tol), Σ)
+        rk == 0 && return Complex{T}[], Matrix{Complex{T}}(undef, N, 0)
+        Uk = @view U[:, 1:rk]; Wk = @view W[:, 1:rk]; Σk = @view Σ[1:rk]; tmp = Matrix{Complex{T}}(undef, N, rk)
+        @timeit_debug "projection" begin
+            @blas_multi_then_1 MAX_BLAS_THREADS mul!(tmp, A1, Wk)
+            @inbounds for j in 1:rk
+                @views tmp[:, j] ./= Σk[j]
+            end
+            B = Matrix{Complex{T}}(undef, rk, rk)
+            @blas_multi_then_1 MAX_BLAS_THREADS mul!(B, adjoint(Uk), tmp)
+        end
+        @timeit_debug "reduced_eigen" begin
+            @blas_multi_then_1 MAX_BLAS_THREADS ev = eigen!(B)
+        end
+        ks = ev.values; X = Uk*ev.vectors; idx = findall(j -> abs(ks[j]-k0c)<=Rc, eachindex(ks))
+        @debug "Beyn roots inside contour" maxlog=1 nroots=rk ninside=length(idx)
+        isempty(idx) && return Complex{T}[], Matrix{Complex{T}}(undef, N, 0)
+        return ks[idx], X[:,idx]
     end
-    B = Matrix{Complex{T}}(undef, rk, rk)
-    @blas_multi_then_1 MAX_BLAS_THREADS mul!(B, adjoint(Uk), tmp)
-    @blas_multi_then_1 MAX_BLAS_THREADS ev = eigen!(B)
-    ks = ev.values; X = Uk*ev.vectors; idx = findall(j -> abs(ks[j]-k0c)<=Rc, eachindex(ks))
-    isempty(idx) && return Complex{T}[], Matrix{Complex{T}}(undef, N, 0)
-    return ks[idx], X[:,idx]
 end
 
 # Compute the residual of a candidate root and its corresponding layer density vector.
 @inline function _beyn_residual(solver::BeynSolver, pts, k, x, y; multithreaded::Bool=true)
-    @blas_1 A = construct_matrices(solver.kernel, pts, k; multithreaded)
-    @blas_multi_then_1 MAX_BLAS_THREADS mul!(y, A, x)
-    return norm(y)
+    return _beyn_residual(solver, pts, k, x, y, nothing; multithreaded)
+end
+
+@inline function _beyn_residual(solver::BeynSolver, pts, k, x, y, geom; multithreaded::Bool=true)
+    @timeit_debug "beyn_residual" begin
+        @blas_1 A = construct_matrices(solver.kernel, pts, k, geom; multithreaded)
+        @blas_multi_then_1 MAX_BLAS_THREADS mul!(y, A, x)
+        norm(y)
+    end
 end
 
 """
@@ -510,15 +574,17 @@ function _beyn_solve_core(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multi
     isempty(ks) && return Complex{T}[], T[], Matrix{Complex{T}}(undef, N, 0)
     !solver.auto_discard_spurious && return ks, fill(T(NaN), length(ks)), X
     residuals = Vector{T}(undef, length(ks)); keep = falses(length(ks)); y = Vector{Complex{T}}(undef, N)
+    geom = _bim_geometry(solver.kernel, pts)
     @inbounds for j in eachindex(ks)
-        rj = _beyn_residual(solver, pts, ks[j], @view(X[:,j]), y; multithreaded); residuals[j] = rj; keep[j] = rj<solver.res_tol
+        rj = _beyn_residual(solver, pts, ks[j], @view(X[:,j]), y, geom; multithreaded); residuals[j] = rj; keep[j] = rj<solver.res_tol
     end
     idx = findall(keep)
+    @debug "Beyn residual check" maxlog=1 ncandidates=length(ks) nkept=length(idx)
     return ks[idx], residuals[idx], isempty(idx) ? Matrix{Complex{T}}(undef, N, 0) : X[:,idx]
 end
 
 """
-    _beyn_imag_k_check(solver::BeynSolver, ks_all, X_all, all_pts; pad::Int=solver.imag_k_pad, group_size::Int=solver.imag_k_group_size, multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config)
+    _beyn_imag_k_check(solver::BeynSolver, ks_all, X_all, all_pts; pad::Int=solver.imag_k_pad, group_size::Int=solver.imag_k_group_size, multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config, krange=nothing)
 
 Apply imaginary-`k` screening to projected roots from multiple Beyn
 windows.
@@ -531,7 +597,8 @@ residual tolerance, all remaining roots are accepted without explicit residual
 evaluation.
 
 Candidates from the same spectral window are evaluated together using the
-multi-`k` Chebyshev backend when available.
+multi-`k` Chebyshev backend for DLP and CFIE kernels, independent of the
+backend used for the contour moments. Other kernels use direct construction.
 
 ## Arguments
 * `solver::BeynSolver`: Beyn solver and filtering configuration.
@@ -544,23 +611,28 @@ multi-`k` Chebyshev backend when available.
 * `group_size::Int=solver.imag_k_group_size`: Maximum residual-check batch size.
 * `multithreaded::Bool=true`: Enable multithreaded matrix construction.
 * `cheb_config::ChebyshevConfig=solver.cheb_config`: Chebyshev configuration.
+* `krange::Union{Nothing,Tuple}=nothing`: Requested `(k1, k2)` interval. Roots with `real(k)` outside it are discarded without a residual evaluation and do not take part in the early-termination streak.
 
 ## Returns
 * `idx_keep::Vector{Vector{Int}}`: Retained local root indices for each window.
 * `residuals::Vector{Vector{T}}`: Residuals aligned with retained roots. Roots
   accepted after early termination contain `NaN`.
 """
-function _beyn_imag_k_check(solver::BeynSolver, ks_all, X_all, all_pts; pad::Int=solver.imag_k_pad, group_size::Int=solver.imag_k_group_size, multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config)
+function _beyn_imag_k_check(solver::BeynSolver, ks_all, X_all, all_pts; pad::Int=solver.imag_k_pad, group_size::Int=solver.imag_k_group_size, multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config, krange=nothing)
     T = _bim_numeric_type(solver); nw = length(ks_all)
     keep = [trues(length(ks_all[i])) for i in 1:nw]; residuals = [fill(T(NaN), length(ks_all[i])) for i in 1:nw]; candidates = Tuple{Int,Int,T}[]
     @inbounds for i in 1:nw
         for j in eachindex(ks_all[i])
+            if krange !== nothing && !(krange[1] <= real(ks_all[i][j]) <= krange[2])
+                keep[i][j] = false; continue
+            end
             push!(candidates, (i, j, abs(imag(ks_all[i][j]))))
         end
     end
-    isempty(candidates) && return [Int[] for _ in 1:nw], residuals
+    isempty(candidates) && return [findall(keep[i]) for i in 1:nw], residuals
     sort!(candidates; by=c -> c[3], rev=true)
     window_js = [Int[] for _ in 1:nw]; touched = Int[]; streak = 0; pos = 1; nc = length(candidates)
+    geoms = Vector{Union{Nothing,NamedTuple}}(nothing, nw)
     while pos <= nc
         last = min(pos+group_size-1, nc); empty!(touched)
         @inbounds for q in pos:last
@@ -568,12 +640,13 @@ function _beyn_imag_k_check(solver::BeynSolver, ks_all, X_all, all_pts; pad::Int
         end
         @inbounds for i in touched
             js = window_js[i]; pts = all_pts[i]; N = boundary_matrix_size(solver.kernel, pts); nk = length(js); y = Vector{Complex{T}}(undef, N)
-            if solver.use_chebyshev && solver.kernel isa Union{DoubleLayerPotentialSolver,CombinedFieldIntegralEquationSolver}
+            geoms[i] === nothing && (geoms[i] = _bim_geometry(solver.kernel, pts))
+            if solver.kernel isa Union{DoubleLayerPotentialSolver,CombinedFieldIntegralEquationSolver}
                 zg = Vector{ComplexF64}(undef, nk)
                 for q in 1:nk
                     zg[q] = ComplexF64(ks_all[i][js[q]])
                 end
-                Abufs = _construct_matrices_multi_k_cheb(solver.kernel, pts, zg, cheb_config; multithreaded)
+                Abufs = _construct_matrices_multi_k_cheb(solver.kernel, pts, zg, cheb_config, geoms[i]; multithreaded)
                 for q in 1:nk
                     j = js[q]
                     @blas_multi_then_1 MAX_BLAS_THREADS mul!(y, Abufs[q], @view(X_all[i][:, j]))
@@ -581,7 +654,7 @@ function _beyn_imag_k_check(solver::BeynSolver, ks_all, X_all, all_pts; pad::Int
                 end
             else
                 for j in js
-                    residuals[i][j] = _beyn_residual(solver, pts, ks_all[i][j], @view(X_all[i][:, j]), y; multithreaded)
+                    residuals[i][j] = _beyn_residual(solver, pts, ks_all[i][j], @view(X_all[i][:, j]), y, geoms[i]; multithreaded)
                 end
             end
         end
@@ -604,6 +677,7 @@ function _beyn_imag_k_check(solver::BeynSolver, ks_all, X_all, all_pts; pad::Int
         pos = last+1
     end
     idx_keep = [findall(keep[i]) for i in 1:nw]
+    @debug "Beyn imaginary-k check" maxlog=1 ncandidates=nc nchecked=min(pos, nc) nkept=sum(length, idx_keep)
     return idx_keep, [residuals[i][idx_keep[i]] for i in 1:nw]
 end
 

@@ -485,6 +485,55 @@ end
     end
 end
 
+@testset "_bim_geometry and construct_matrices(solver, pts, k, geom)" begin
+    # The 3-argument method builds the geometry and calls the 4-argument one, so both must agree bitwise; one geometry is reused for
+    # several wavenumbers (real and complex) and is not modified by the assembly.
+    function cb_geom_reuse_checks(solver, billiard)
+        pts = evaluate_points(solver, billiard, 3.0)
+        geom = QuantumBilliards._bim_geometry(solver, pts)
+        Rmats0 = [copy(R) for R in geom.Rmats]
+        nc = length(solver.loop_solver)
+        @test geom isa NamedTuple
+        @test keys(geom) == (:offs, :comp_pts, :Gs, :Rmats, :orbits)
+        @test length(geom.comp_pts) == length(geom.Gs) == length(geom.Rmats) == nc
+        @test sum(length, geom.comp_pts) == length(pts)
+        for k in (3.0, 3.4, 2.6 + 0.1im), mt in (false, true)
+            A4 = construct_matrices(solver, pts, k, geom; multithreaded=mt)
+            @test A4 == construct_matrices(solver, pts, k; multithreaded=mt)
+            @test size(A4, 1) == boundary_matrix_size(solver, pts)
+        end
+        @test construct_matrices(solver, pts, 3.0, geom) != construct_matrices(solver, pts, 3.4, geom)   # geom carries no k dependence
+        @test geom.Rmats == Rmats0
+        return geom
+    end
+
+    annulus = AnnularBilliard(0.3, 0.1)
+
+    @testset "annulus (hole), no symmetry" begin
+        solver = CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, annulus; min_pts=32), CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=24))
+        geom = cb_geom_reuse_checks(solver, annulus)
+        @test length(geom.comp_pts) == 2
+        @test geom.orbits === nothing
+    end
+
+    @testset "annulus (hole), X reflection" begin
+        # the since-B7 annulus carries an X axis reflection registry; the composite orbits are assembled block by block
+        solver = CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, annulus; min_pts=32, symmetry=XAxisReflection(), sym_characters=(-1,)),
+                                    CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=32, symmetry=XAxisReflection(), sym_characters=(-1,)))
+        geom = cb_geom_reuse_checks(solver, annulus)
+        @test geom.orbits !== nothing
+        @test fundamental_size(geom.orbits) == boundary_matrix_size(solver, evaluate_points(solver, annulus, 3.0))
+    end
+
+    @testset "hole free rectangle, XY reflection" begin
+        rect = RectangleBilliard(1.0, 0.6)
+        solver = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, rect; min_pts=32, symmetry=XYAxisReflection(), sym_characters=(-1, 1)))
+        geom = cb_geom_reuse_checks(solver, rect)
+        @test length(geom.comp_pts) == 1
+        @test geom.orbits !== nothing
+    end
+end
+
 @testset "argument validation" begin
     annulus = AnnularBilliard(0.3, 0.1)
     sinai = SinaiBilliard(1.0, 0.25)

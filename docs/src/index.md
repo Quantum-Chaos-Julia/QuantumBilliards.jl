@@ -23,6 +23,7 @@ See the API section for the complete documentation on all the exported types and
 - Eigenstates, wavefunctions, boundary functions, and Husimi (phase-space) representations.
 - Highly tunable numerical parameters, integration schemes and basis constructions for fine tuning to specific geometries.
 - Discrete symmetry reduction schemes, allows separation of spectral symmetry sectors and improved computation efficiency.  
+- Computation planning: window layout, expected number of states and an upper-bound memory estimate before any eigen-solve (`plan_computation`).
 - Extensible API ready for future updates to related problems like microwave resonators, neutrino billiards etc.
 
 ## Contents

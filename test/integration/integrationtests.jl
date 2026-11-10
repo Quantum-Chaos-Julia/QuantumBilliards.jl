@@ -23,6 +23,7 @@ end
     include("accelerated/beyn_isospectral_spectra.jl")
     include("accelerated/ebim_spectra.jl")
     include("accelerated/cork_spectra.jl")
+    include("accelerated/profiling_timers.jl")
 end
 
 @group "backends" begin

@@ -172,10 +172,8 @@ _bim_numeric_type(::CombinedFieldIntegralEquationSolver{T}) where {T} = T
 # quadrature scheme during CFIE Fredholm matrix assembly.
 function _cfie_evaluate_points(solver::CombinedFieldIntegralEquationSolver, ::SmoothPeriodicGrading, comp::Vector, k::T; multiple::Int=1, N_override::Union{Nothing,Int}=nothing) where {T<:Real}
     twopi = 2*T(pi)
-    _, _, Ltot = component_lengths(comp)
-    scale = solver.pts_scaling_factor[1]
-    N = max(solver.min_pts, round(Int, k*Ltot*scale/twopi))
-    N = _bim_round_nodes(N, lcm(2, _bim_solver_node_multiple(solver), multiple), N_override)
+    lens, cum, Ltot = component_lengths(comp)
+    N = _bim_node_count(solver, Ltot, k; multiple, N_override)
     h = twopi/T(N)
     ts = T[s_mid(j, N) for j in 1:N]
     tphys = copy(ts)
@@ -185,11 +183,11 @@ function _cfie_evaluate_points(solver::CombinedFieldIntegralEquationSolver, ::Sm
     s = Vector{T}(undef, N)
     ds = Vector{T}(undef, N)
     @inbounds for i in 1:N
-        q, γt, γtt = BilliardGeometry._eval_composite_geom_global_t(T, comp, tphys[i])
+        q, γt, γtt = BilliardGeometry._eval_composite_geom_global_t(T, comp, lens, cum, Ltot, tphys[i])
         xy[i] = q
         tangent_1st[i] = γt
         tangent_2nd[i] = γtt
-        s[i] = _dlp_composite_arclength(comp, tphys[i])
+        s[i] = _dlp_composite_arclength(comp, Ltot, tphys[i])
         ds[i] = hypot(γt[1], γt[2])*h
     end
     ws = fill(h, N)
@@ -225,9 +223,7 @@ function _cfie_evaluate_points(solver::CombinedFieldIntegralEquationSolver, grad
     crv = comp[1]
     twopi = 2*T(pi)
     L = T(crv.length)
-    scale = solver.pts_scaling_factor[1]
-    N = max(solver.min_pts, round(Int, k*L*scale/twopi))
-    N = _bim_round_nodes(N, lcm(2, _bim_solver_node_multiple(solver), multiple), N_override)
+    N = _bim_node_count(solver, L, k; multiple, N_override)
     σ, tmap, jac, jac2, _ = kress_graded_nodes_data(T, N; q=grading.kressq, minsep_tol=T(grading.min_t_spacing))
     tphys = tmap./twopi
     xy = curve(crv, tphys)
@@ -277,10 +273,8 @@ end
 # the same Kress quadrature scheme as in the smooth case.
 function _cfie_evaluate_points_graded(solver::CombinedFieldIntegralEquationSolver, grading::GlobalCornerGrading, comp::Vector, k::T, corners::Vector{T}; multiple::Int=1, N_override::Union{Nothing,Int}=nothing) where {T<:Real}
     twopi = 2*T(pi)
-    _, _, Ltot = component_lengths(comp)
-    scale = solver.pts_scaling_factor[1]
-    N = max(solver.min_pts, round(Int, k*Ltot*scale/twopi))
-    N = _bim_round_nodes(N, lcm(solver.symmetry === nothing ? 2 : _bim_solver_node_multiple(solver), multiple), N_override)
+    lens, cum, Ltot = component_lengths(comp)
+    N = _bim_node_count(solver, Ltot, k; graded=true, multiple, N_override)
     σ, tmap, jac, jac2, _ = multi_kress_graded_nodes_data(T, N, corners; q=grading.kressq, minsep_tol=T(grading.min_t_spacing))
     tphys = tmap
     xy = Vector{SVector{2,T}}(undef, N)
@@ -290,11 +284,11 @@ function _cfie_evaluate_points_graded(solver::CombinedFieldIntegralEquationSolve
     ds = Vector{T}(undef, N)
     h = twopi/T(N)
     @inbounds for i in 1:N
-        q, γt, γtt = BilliardGeometry._eval_composite_geom_global_t(T, comp, tphys[i])
+        q, γt, γtt = BilliardGeometry._eval_composite_geom_global_t(T, comp, lens, cum, Ltot, tphys[i])
         tangent_1st[i] = γt*jac[i]
         tangent_2nd[i] = γtt*(jac[i]^2) + γt*jac2[i]
         xy[i] = q
-        s[i] = _dlp_composite_arclength(comp, tphys[i])
+        s[i] = _dlp_composite_arclength(comp, Ltot, tphys[i])
         v = tangent_1st[i]
         ds[i] = hypot(v[1], v[2])*h
     end
@@ -558,37 +552,52 @@ is folded over source symmetry orbits with the prescribed character phases.
 * `A::Matrix{Complex{T}}`: Full or symmetry-reduced Fredholm matrix `A(k) = I - (D(k) + i k S(k))`.
 """
 function construct_matrices(solver::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints, k; multithreaded::Bool=true)
+    return construct_matrices(solver, pts, k, _bim_geometry(solver, pts); multithreaded)
+end
+
+"""
+    _bim_geometry(solver::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints)
+
+Wavenumber-independent data of the CFIE Fredholm assembly: the boundary geometry cache `G`,
+the Kress matrix `Rmat` and, for a symmetry-reduced solver, the folded boundary `orbits`.
+It is read-only during assembly and can be reused for every wavenumber on the same `pts`.
+"""
+function _bim_geometry(solver::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints)
+    T = _bim_numeric_type(solver)
+    N = length(pts)
+    graded = _is_nontrivial_dlp_grading(pts)
+    G = @timeit_debug "boundary_geom_cache" boundary_geom_cache(pts, graded)
+    Rmat = zeros(T, N, N)
+    kress_R!(Rmat)
+    orbits = solver.symmetry === nothing ? nothing : _fold_boundary(T, solver.billiard, N, solver.symmetry, solver.sym_characters)
+    return (; graded, G, Rmat, orbits)
+end
+
+"""
+    construct_matrices(solver::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints, k, geom; multithreaded::Bool=true)
+
+Assemble the CFIE Fredholm matrix with the precomputed geometry `geom = _bim_geometry(solver, pts)`.
+"""
+function construct_matrices(solver::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints, k, geom::NamedTuple; multithreaded::Bool=true)
     @timeit_debug "construct_matrices" begin
         T = _bim_numeric_type(solver)
         kT = _bim_widen_k(T, k)
         N = length(pts)
-        @debug "CFIE matrix construction started" N kT symmetry=solver.symmetry sym_characters=solver.sym_characters
-        graded = _is_nontrivial_dlp_grading(pts)
-        @timeit_debug "boundary_geom_cache" begin
-            G = boundary_geom_cache(pts, graded)
-        end
-        Rmat = zeros(T, N, N)
-        @timeit_debug "kress_R" begin
-            kress_R!(Rmat)
-        end
-        @debug "Geometry cache and Kress matrix built" N graded
+        (; graded, G, Rmat, orbits) = geom
         if solver.symmetry === nothing
             A = Matrix{Complex{T}}(undef, N, N)
             @timeit_debug "fredholm_assembly" begin
                 _cfie_fredholm_full!(A, pts, Rmat, G, kT; multithreaded)
             end
-            @debug "CFIE Fredholm matrix assembled" size=size(A)
+            @debug "CFIE matrix construction" maxlog=1 N graded A=_matinfo(A) R=_matinfo(Rmat)
             return A
         else
-            @timeit_debug "symmetry_orbits" begin
-                orbits = _fold_boundary(T, solver.billiard, N, solver.symmetry, solver.sym_characters)
-            end
             m = fundamental_size(orbits)
             A = Matrix{Complex{T}}(undef, m, m)
             @timeit_debug "reduced_fredholm_assembly" begin
                 _cfie_fredholm_reduced!(A, pts, Rmat, G, orbits, kT; multithreaded)
             end
-            @debug "Symmetry-reduced CFIE Fredholm matrix assembled" fundamental_size=m
+            @debug "CFIE symmetry-reduced matrix construction" maxlog=1 N graded symmetry=solver.symmetry A=_matinfo(A) R=_matinfo(Rmat)
             return A
         end
     end

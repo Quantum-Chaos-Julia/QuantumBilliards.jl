@@ -130,7 +130,7 @@ If `gradients = true`, the additional factors `sin(φ + rot_angle)`, `cos(φ + r
 * `multithreaded::Bool = true`: Enable multithreaded cache construction across basis functions.
 
 ## Returns
-* `cache`: [`CornerAdaptedTaylorCache`](@ref) containing the analytic Taylor representation of the basis.
+* `cache`: `CornerAdaptedTaylorCache` containing the analytic Taylor representation of the basis.
 """
 function CornerAdaptedTaylorCache(basis::CornerAdaptedFourierBessel{T}, k0::T, pts::AbstractArray; multithreaded::Bool = true) where {T<:Real}
     p = basis.taylor_degree
@@ -177,10 +177,10 @@ Construct the Taylor cache associated with a [`CornerAdaptedFourierBessel`](@ref
 * `multithreaded::Bool = true`: Whether cache construction is multithreaded.
 
 ## Returns
-* `cache`: [`CornerAdaptedTaylorCache`](@ref) associated with `basis`.
+* `cache`: `CornerAdaptedTaylorCache` associated with `basis`.
 """
 @inline function basis_cache(basis::CornerAdaptedFourierBessel, k0, pts; multithreaded::Bool = true)
-    return CornerAdaptedTaylorCache(basis, k0, pts; multithreaded)
+    return @timeit_debug "basis_cache" CornerAdaptedTaylorCache(basis, k0, pts; multithreaded)
 end
 
 
@@ -199,7 +199,7 @@ The radial Taylor series stored in `cache` is evaluated at
 factor `sin(mφ)`.
 
 ## Arguments
-* `cache`: [`CornerAdaptedTaylorCache`](@ref) containing the Taylor coefficients and angular factors.
+* `cache`: `CornerAdaptedTaylorCache` containing the Taylor coefficients and angular factors.
 * `k`: Wavenumber at which the basis is evaluated.
 
 ## Keyword Arguments
@@ -237,7 +237,7 @@ The radial Taylor series stored in `cache` is differentiated and evaluated at
 derivative is multiplied by the cached angular factor `sin(mφ)`.
 
 ## Arguments
-* `cache`: [`CornerAdaptedTaylorCache`](@ref) containing the Taylor coefficients and angular factors.
+* `cache`: `CornerAdaptedTaylorCache` containing the Taylor coefficients and angular factors.
 * `k`: Wavenumber at which the derivative is evaluated.
 
 ## Keyword Arguments
@@ -280,7 +280,7 @@ wavenumber derivative are required, since both are obtained in a single
 traversal of the Taylor coefficients.
 
 ## Arguments
-* `cache`: [`CornerAdaptedTaylorCache`](@ref) containing the Taylor coefficients and angular factors.
+* `cache`: `CornerAdaptedTaylorCache` containing the Taylor coefficients and angular factors.
 * `k`: Wavenumber at which the basis and its derivative are evaluated.
 * `w`: Vector of quadrature weights associated with the cached points.
 * `nsym`: = one(eltype(w)) * (isnothing(basis.symmetries) ? 1 : length(basis.symmetries) + 1)
@@ -340,7 +340,7 @@ Cartesian `x` and `y` derivatives.
 The cache must have been constructed with `gradients = true`.
 
 ## Arguments
-* `cache`: [`CornerAdaptedTaylorCache`](@ref) containing the Taylor coefficients and spatial-gradient data.
+* `cache`: `CornerAdaptedTaylorCache` containing the Taylor coefficients and spatial-gradient data.
 * `basis`: [`CornerAdaptedFourierBessel`](@ref) basis associated with the cache.
 * `k`: Wavenumber at which the spatial gradients are evaluated.
 
@@ -403,7 +403,7 @@ For `r > 0`, the radial spatial derivative is obtained from
 The cache must have been constructed with `gradients = true`.
 
 ## Arguments
-* `cache`: [`CornerAdaptedTaylorCache`](@ref) containing the Taylor coefficients and spatial-gradient data.
+* `cache`: `CornerAdaptedTaylorCache` containing the Taylor coefficients and spatial-gradient data.
 * `basis`: [`CornerAdaptedFourierBessel`](@ref) basis associated with the cache.
 * `k`: Wavenumber at which the basis and spatial gradients are evaluated.
 

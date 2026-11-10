@@ -33,6 +33,7 @@ end
 
 @group "solvers: basis methods" begin
     include("solvers/solverconstructors_tests.jl")
+    include("solvers/computationplan_tests.jl")
     include("solvers/matrixconstructors_tests.jl")
     include("solvers/sweepmethods/sweepmethods_tests.jl")
     include("solvers/sweepmethods/decompositionmethod_tests.jl")

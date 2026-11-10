@@ -12,11 +12,11 @@ macro maybe_showprogress(show_progress, loop)
     return esc(:($show_progress ? (@showprogress $loop) : $loop))
 end
 """
-    use_threads(args...)
-    
+    @use_threads [multithreading=true|false] for ...
+
 The macro expects either:
 (a) A keyword argument "multithreading" followed by a loop expression, or
-b) A lone loop expression (in which case multithreading defaults to true).
+(b) A lone loop expression (in which case multithreading defaults to true).
 NOTE: Already @inbounds 
 """
 macro use_threads(args...)
@@ -55,7 +55,7 @@ macro use_threads(args...)
 end
 
 """
-    @blas_threads n expr
+    @blas_multi n expr
 
 Temporarily set BLAS threads to `n` for `expr`, then restore the previous value.
 """
@@ -71,7 +71,7 @@ end
 """
     @blas_1 expr
 
-Temporarily set BLAS threads to `1` for `expr`.
+Set BLAS threads to `1` for `expr`. The previous thread count is not restored.
 """
 macro blas_1(expr)
     quote
@@ -112,3 +112,18 @@ function try_MKL!()
         @info "Not on x86_64 architecture ($(Sys.ARCH)), defaulting to stock BLAS backend: $(BLAS.vendor())"
     end
 end
+
+"""
+    _gib(A)
+
+Memory footprint of `A` in GiB.
+"""
+_gib(A::DenseArray) = sizeof(A) / 2^30
+_gib(A) = Base.summarysize(A) / 2^30
+
+"""
+    _matinfo(A)
+
+Size and memory in GiB of `A`, for `@debug` messages.
+"""
+_matinfo(A) = (size=size(A), GiB=_gib(A))

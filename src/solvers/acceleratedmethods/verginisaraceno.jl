@@ -65,7 +65,7 @@ The following functions can be evaluated for this type:
 - [`solve_wavenumber`](@ref)
 - [`solve_spectrum`](@ref)
 """
-mutable struct VerginiSaracenoSolver{T} <: AcceleratedBasisSolver where {T<:Real}
+struct VerginiSaracenoSolver{T} <: AcceleratedBasisSolver where {T<:Real}
     dim_scaling_factor::T
     pts_scaling_factor::Vector{T}
     sampler::Vector
@@ -89,7 +89,7 @@ curve.
 ## Keyword Arguments
 * `min_dim::Int=100`: Minimum basis dimension.
 * `min_pts::Int=500`: Minimum number of boundary sampling points.
-* `eigenvectors::Bool`: Whether `compute_spectrum` retains the basis eigenvectors returned by the scaling solve.
+* `eigenvectors::Bool=true`: Whether `compute_spectrum` retains the basis eigenvectors returned by the scaling solve.
 
 ## Returns
 * `VerginiSaracenoSolver{T}`: Configured solver.
@@ -113,7 +113,7 @@ each fundamental boundary curve.
 ## Keyword Arguments
 * `min_dim::Int=100`: Minimum basis dimension.
 * `min_pts::Int=500`: Minimum number of boundary sampling points.
-* `eigenvectors::Bool`: Whether `compute_spectrum` retains the basis eigenvectors returned by the scaling solve.
+* `eigenvectors::Bool=true`: Whether `compute_spectrum` retains the basis eigenvectors returned by the scaling solve.
 
 ## Returns
 * `VerginiSaracenoSolver{T}`: Configured solver.
@@ -154,26 +154,29 @@ that the curve parameter is proportional to arclength.
 * `pts::BoundaryPoints`: Boundary points with `xy` and `w_vs` populated.
 """
 function evaluate_points(solver::VerginiSaracenoSolver, billiard::Bi, k) where {Bi<:AbsBilliard}
-    _require_no_holes(solver, billiard)
-    bs, samplers = adjust_scaling_and_samplers(solver, billiard)
-    curves = get_boundary_curves(billiard)
-    T = eltype(solver.pts_scaling_factor)
-    Ns = _determine_bp_sizes(curves, bs, k)
-    M = length(Ns)
-    xy_all = Vector{Vector{SVector{2,T}}}(undef, M)
-    w_all = Vector{Vector{T}}(undef, M)
-    for i in eachindex(curves)
-        crv = curves[i]; sampler = samplers[i]
-        t, dt = sample_points(sampler, Ns[i])
-        xy = curve(crv, t)
-        ds = norm.(tangent(crv, t)) .* dt
-        normal = domain_gradient_vector(crv, xy)
-        normal ./= norm.(normal)
-        rn = dot.(xy, normal)
-        w = ds ./ rn
-        xy_all[i] = xy; w_all[i] = w
+    @timeit_debug "vs_evaluate_points" begin
+        _require_no_holes(solver, billiard)
+        bs, samplers = adjust_scaling_and_samplers(solver, billiard)
+        curves = get_boundary_curves(billiard)
+        T = eltype(solver.pts_scaling_factor)
+        Ns = _determine_bp_sizes(curves, bs, k)
+        M = length(Ns)
+        xy_all = Vector{Vector{SVector{2,T}}}(undef, M)
+        w_all = Vector{Vector{T}}(undef, M)
+        for i in eachindex(curves)
+            crv = curves[i]; sampler = samplers[i]
+            t, dt = sample_points(sampler, Ns[i])
+            xy = curve(crv, t)
+            ds = norm.(tangent(crv, t)) .* dt
+            normal = domain_gradient_vector(crv, xy)
+            normal ./= norm.(normal)
+            rn = dot.(xy, normal)
+            w = ds ./ rn
+            xy_all[i] = xy; w_all[i] = w
+        end
+        @debug "VS boundary points evaluated" maxlog=1 k npts=sum(Ns)
+        BoundaryPoints(vcat(xy_all...); w_vs=vcat(w_all...))
     end
-    return BoundaryPoints(vcat(xy_all...); w_vs=vcat(w_all...))
 end
 
 """
@@ -212,19 +215,15 @@ function construct_matrices(solver::VerginiSaracenoSolver, basis::Ba, pts::Bound
         M = length(xy)
         nsym = one(eltype(w)) * (isnothing(basis.symmetries) ? 1 : length(basis.symmetries) + 1)
         
-        @debug "Matrix construction started" N M k nsym
-        
         # Compute basis matrix G
         @timeit_debug "basis_matrix" begin
             G = basis_matrix(basis, k, xy; multithreaded)
         end
-        @debug "Basis matrix computed" size=size(G) 
         
         # Compute derivative matrix dG
         @timeit_debug "dk_matrix" begin
             dG = dk_matrix(basis, k, xy; multithreaded)
         end
-        @debug "Derivative matrix computed" size=size(dG)
         
         # Compute F = G' * W * G
         @timeit_debug "compute_F" begin
@@ -233,7 +232,6 @@ function construct_matrices(solver::VerginiSaracenoSolver, basis::Ba, pts::Bound
             @blas_multi MAX_BLAS_THREADS BLAS.syrk!('U', 'T', one(eltype(G)), G, zero(eltype(G)), F)
             _symmetrize_from_upper!(F)
         end
-        @debug "F computed" size=size(F)
         
         # Compute Fk = G' * W * dG + dG' * W * G
         @timeit_debug "compute_Fk" begin
@@ -242,7 +240,7 @@ function construct_matrices(solver::VerginiSaracenoSolver, basis::Ba, pts::Bound
             @blas_multi_then_1 MAX_BLAS_THREADS BLAS.syr2k!('U', 'T', one(eltype(G)), G, dG, zero(eltype(G)), Fk)
             _symmetrize_from_upper!(Fk)
         end
-        @debug "Fk computed" size=size(Fk) 
+        @debug "VS matrix construction" maxlog=1 N M k nsym G=_matinfo(G) dG=_matinfo(dG) F=_matinfo(F) Fk=_matinfo(Fk)
         
         return F, Fk
     end
@@ -256,7 +254,7 @@ representation of the basis.
 
 ## Description
 The basis matrix `B` and its wavenumber derivative `dB/dk` are evaluated
-simultaneously from `cache` using [`basis_and_dk_matrices`](@ref). The
+simultaneously from `cache` using `basis_and_dk_matrices`. The
 Vergini–Saraceno matrices are then constructed as `F = B' * W * B` and
 `Fk = B' * W * dB/dk + (dB/dk)' * W * B`, where `W` is the diagonal
 quadrature weight matrix built from `pts.w_vs` and normalized by the number
@@ -269,7 +267,7 @@ the upper triangle, which is subsequently mirrored to the lower triangle.
 * `solver`: The [`VerginiSaracenoSolver`](@ref) whose matrices are constructed.
 * `basis`: Basis associated with `cache`.
 * `pts`: [`BoundaryPoints`](@ref) containing the Vergini–Saraceno quadrature weights.
-* `cache`: [`BasisCache`](@ref) used to evaluate the basis and its wavenumber derivative.
+* `cache`: `BasisCache` used to evaluate the basis and its wavenumber derivative.
 * `k`: Wavenumber at which the cached representation is evaluated.
 
 ## Keyword Arguments
@@ -285,19 +283,16 @@ function construct_matrices(solver::VerginiSaracenoSolver, basis::Ba, pts::Bound
         N = basis.dim
         M = length(pts.xy)
         nsym = one(eltype(w)) * (isnothing(basis.symmetries) ? 1 : length(basis.symmetries) + 1)
-        @debug "Cached matrix construction started" N M k nsym
 
         @timeit_debug "basis_and_dk_matrices" begin
             G, dG = _weight_scaled_basis_and_dk_matrices(cache, k, w, nsym; multithreaded)
         end
-        @debug "Cached basis matrices computed" size=size(G)
 
         @timeit_debug "compute_F" begin
             F = Matrix{eltype(G)}(undef, N, N)
             @blas_multi MAX_BLAS_THREADS BLAS.syrk!('U', 'T', one(eltype(G)), G, zero(eltype(G)), F)
             _symmetrize_from_upper!(F)
         end
-        @debug "F computed" size=size(F)
 
         @timeit_debug "compute_Fk" begin
             Fk = Matrix{eltype(G)}(undef, N, N)
@@ -305,7 +300,7 @@ function construct_matrices(solver::VerginiSaracenoSolver, basis::Ba, pts::Bound
             _symmetrize_from_upper!(Fk)
         end
 
-        @debug "Fk computed" size=size(Fk)
+        @debug "VS cached matrix construction" maxlog=1 N M k nsym G=_matinfo(G) dG=_matinfo(dG) F=_matinfo(F) Fk=_matinfo(Fk)
         return F, Fk
     end
 end
@@ -395,7 +390,7 @@ Only candidates satisfying `abs(ks - k) < dk` are retained.
 * `solver`: The [`VerginiSaracenoSolver`](@ref) used to solve the generalized eigenvalue problem.
 * `basis`: Basis associated with `cache`.
 * `pts`: The [`BoundaryPoints`](@ref) containing the Vergini–Saraceno quadrature weights.
-* `cache`: [`BasisCache`](@ref) used to evaluate the basis and its wavenumber derivative.
+* `cache`: `BasisCache` used to evaluate the basis and its wavenumber derivative.
 * `k`: Scaling wavenumber around which the generalized eigenvalue problem is constructed.
 * `dk`: Half-width of the wavenumber window around `k` used to filter candidates.
 
@@ -481,14 +476,16 @@ rescaled by `sqrt.(ten)`.
 """
 function solve_vectors(solver::VerginiSaracenoSolver, basis::Ba, pts::BoundaryPoints, k, dk; multithreaded = true) where {Ba<:AbsBasis}
     F, Fk = construct_matrices(solver, basis, pts, k; multithreaded)
-    @blas_multi_then_1 MAX_BLAS_THREADS mu, Z, C = generalized_eigen(Symmetric(F),Symmetric(Fk); eig_tol = solver.eig_tol)
+    @blas_multi_then_1 MAX_BLAS_THREADS mu, Z, C = generalized_eigen!(Symmetric(F),Symmetric(Fk); eig_tol = solver.eig_tol)
     ks, ten = sm_results(mu,k)
     idx = abs.(ks.-k) .< dk
     ks = ks[idx]
     ten = ten[idx]
     Z = Z[:,idx]
-    X = C*Z #transform into original basis 
-    X = (sqrt.(ten))' .* X
+    @timeit_debug "eigenvector_transform" begin
+        X = C*Z #transform into original basis 
+        X = (sqrt.(ten))' .* X
+    end
     p = sortperm(ks)
     return  ks[p], ten[p], X[:,p]
 end
@@ -517,7 +514,7 @@ original basis as `X = C * Z` and rescaled by `sqrt.(ten)`.
 * `solver`: The [`VerginiSaracenoSolver`](@ref) used to solve the generalized eigenvalue problem.
 * `basis`: Basis associated with `cache`.
 * `pts`: The [`BoundaryPoints`](@ref) containing the Vergini–Saraceno quadrature weights.
-* `cache`: [`BasisCache`](@ref) used to evaluate the basis and its wavenumber derivative.
+* `cache`: `BasisCache` used to evaluate the basis and its wavenumber derivative.
 * `k`: Scaling wavenumber around which the generalized eigenvalue problem is constructed.
 * `dk`: Half-width of the wavenumber window around `k` used to filter candidates.
 
@@ -531,14 +528,16 @@ original basis as `X = C * Z` and rescaled by `sqrt.(ten)`.
 """
 function solve_vectors(solver::VerginiSaracenoSolver, basis::Ba, pts::BoundaryPoints, cache::Ca, k, dk; multithreaded::Bool = true) where {Ba<:AbsBasis,Ca<:BasisCache}
     F, Fk = construct_matrices(solver, basis, pts, cache, k; multithreaded)
-    @blas_multi_then_1 MAX_BLAS_THREADS mu, Z, C = generalized_eigen(Symmetric(F), Symmetric(Fk); eig_tol = solver.eig_tol)
+    @blas_multi_then_1 MAX_BLAS_THREADS mu, Z, C = generalized_eigen!(Symmetric(F), Symmetric(Fk); eig_tol = solver.eig_tol)
     ks, ten = sm_results(mu, k)
     idx = abs.(ks .- k) .< dk
     ks = ks[idx]
     ten = ten[idx]
     Z = Z[:, idx]
-    X = C * Z
-    X = sqrt.(ten)' .* X
+    @timeit_debug "eigenvector_transform" begin
+        X = C * Z
+        X = sqrt.(ten)' .* X
+    end
     p = sortperm(ks)
     return ks[p], ten[p], X[:, p]
 end

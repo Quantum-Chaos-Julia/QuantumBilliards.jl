@@ -8,7 +8,7 @@
 # No eigen-solves: every expected value is analytic or built by hand.
 
 using Random: MersenneTwister
-using QuantumBilliards: match_wavenumbers, is_equal, _local_gap, _require_states
+using QuantumBilliards: match_wavenumbers, is_equal, _local_gap, _require_states, _sweep_windows, _check_window_overlap
 
 # Minimal stand-in eigenstate; `id` lets tests track which state survived a merge.
 struct SpectraTestState <: QuantumBilliards.AbsState
@@ -450,6 +450,108 @@ end
         @test_throws ArgumentError sweep_windows(0.0, 1.0, 0.0)
         @test_throws ArgumentError sweep_windows(0.0, 1.0, -0.1)
         @test_throws ArgumentError sweep_windows(0.0, 1.0, k -> -1.0)
+        @test_throws "dk(k) must be positive" sweep_windows(0.0, 1.0, 0.0)
+        @test_throws "dk(k) must be positive" sweep_windows(0.0, 1.0, k -> -1.0; window_overlap=0.0)
+    end
+
+    @testset "window_overlap: default equals old behaviour" begin
+        # old placement: c[i] = c[i-1] + w[i-1]
+        @test sweep_windows(0.0, 1.0, 0.25; window_overlap=0.5) == sweep_windows(0.0, 1.0, 0.25)
+        @test sweep_windows(1.0, 4.0, k -> k / 2; window_overlap=0.5) == sweep_windows(1.0, 4.0, k -> k / 2)
+        centers, widths = sweep_windows(1.0, 4.0, k -> k / 2)
+        @test all(centers[i] == centers[i-1] + widths[i-1] for i in 2:length(centers))
+        @test centers == [1.0, 1.5, 2.25, 3.375]
+    end
+
+    @testset "window_overlap: overlap fraction property" begin
+        # neighbours overlap by o * (window width 2w[i]): (c[i-1]+w[i-1]) - (c[i]-w[i]) == 2*o*w[i]
+        for o in (0.0, 0.1, 0.25, 0.4, 0.5)
+            for dk in (0.25, k -> 0.1 * k)
+                centers, widths = sweep_windows(1.0, 6.0, dk; window_overlap=o)
+                @test length(centers) == length(widths) > 1
+                @test centers[1] == 1.0
+                @test all(widths .> 0)
+                for i in 2:length(centers)
+                    @test (centers[i-1] + widths[i-1]) - (centers[i] - widths[i]) ≈ 2 * o * widths[i] atol = 1e-12
+                end
+            end
+        end
+    end
+
+    @testset "window_overlap: constant step values" begin
+        centers, widths = sweep_windows(0.0, 1.0, 0.25; window_overlap=0.0)
+        @test centers ≈ [0.0, 0.5, 1.0]
+        @test widths == fill(0.25, 3)
+        centers, widths = sweep_windows(0.0, 1.0, 0.25; window_overlap=0.25)
+        @test centers ≈ [0.0, 0.375, 0.75]
+        @test widths == fill(0.25, 3)
+        # constant dk: spacing 2*(1-o)*dk
+        centers, _ = sweep_windows(0.0, 5.0, 0.2; window_overlap=0.1)
+        @test all(diff(centers) .≈ 2 * (1 - 0.1) * 0.2)
+    end
+
+    @testset "window_overlap: zero overlap adjacency and coverage" begin
+        centers, widths = sweep_windows(1.0, 4.0, k -> k / 2; window_overlap=0.0)
+        @test centers ≈ [1.0, 2.5, 5.75]
+        @test widths ≈ [0.5, 1.0, 2.25]
+        # adjacent: right edge of window i-1 equals left edge of window i
+        @test centers[2:end] .- widths[2:end] ≈ centers[1:end-1] .+ widths[1:end-1]
+        # coverage of [k1, k2] without gaps
+        @test centers[1] == 1.0
+        @test centers[end] + widths[end] >= 4.0
+        @test centers[end-1] + widths[end-1] < 4.0
+    end
+
+    @testset "window_overlap: coverage at every overlap" begin
+        for o in (0.0, 0.2, 0.5)
+            centers, widths = sweep_windows(3.0, 10.0, 0.3; window_overlap=o)
+            @test centers[1] == 3.0
+            @test centers[end] + widths[end] >= 10.0
+            @test centers[end-1] + widths[end-1] < 10.0       # no superfluous trailing window
+            @test issorted(centers)
+        end
+    end
+
+    @testset "window_overlap: fewer windows for smaller overlap" begin
+        counts = [length(first(sweep_windows(0.0, 10.0, 0.25; window_overlap=o))) for o in (0.5, 0.25, 0.0)]
+        @test counts[1] > counts[2] > counts[3]
+        counts_f = [length(first(sweep_windows(1.0, 20.0, k -> 0.1 * k; window_overlap=o))) for o in (0.5, 0.25, 0.0)]
+        @test counts_f[1] > counts_f[2] > counts_f[3]
+    end
+
+    @testset "window_overlap: type stability and types" begin
+        @test @inferred(sweep_windows(0.0, 1.0, 0.25; window_overlap=0.25)) isa Tuple{Vector{Float64},Vector{Float64}}
+        @test eltype(first(sweep_windows(1.0f0, 2.0f0, 0.5f0; window_overlap=0.25))) == Float32
+        @test sweep_windows(0.0, 1.0, 0.25; window_overlap=0) == sweep_windows(0.0, 1.0, 0.25; window_overlap=0.0)
+    end
+
+    @testset "window_overlap: invalid values throw" begin
+        @test_throws ArgumentError sweep_windows(0.0, 1.0, 0.25; window_overlap=-0.1)
+        @test_throws ArgumentError sweep_windows(0.0, 1.0, 0.25; window_overlap=0.6)
+        @test_throws ArgumentError sweep_windows(0.0, 1.0, 0.25; window_overlap=1.0)
+        @test_throws ArgumentError sweep_windows(0.0, 1.0, k -> 0.25; window_overlap=NaN)
+        @test_throws "window_overlap must lie in [0, 0.5]" sweep_windows(0.0, 1.0, 0.25; window_overlap=0.6)
+        # boundary values accepted
+        @test sweep_windows(0.0, 1.0, 0.25; window_overlap=0.0) isa Tuple
+        @test sweep_windows(0.0, 1.0, 0.25; window_overlap=0.5) isa Tuple
+    end
+
+    @testset "_check_window_overlap" begin
+        @test _check_window_overlap(0.0) === nothing
+        @test _check_window_overlap(0.5) === nothing
+        @test _check_window_overlap(0.25) === nothing
+        @test_throws ArgumentError _check_window_overlap(-1e-9)
+        @test_throws ArgumentError _check_window_overlap(0.5 + 1e-9)
+    end
+
+    @testset "_sweep_windows inclusive flag" begin
+        # o = 0, dk = 0.25: second window ends exactly at k2 = 0.75
+        @test _sweep_windows(0.0, 0.75, 0.25, 0.0, false) == ([0.0, 0.5], [0.25, 0.25])
+        @test _sweep_windows(0.0, 0.75, 0.25, 0.0, true) == ([0.0, 0.5, 1.0], [0.25, 0.25, 0.25])
+        # no exact edge hit: both flags agree
+        @test _sweep_windows(0.0, 0.9, 0.25, 0.25, false) == _sweep_windows(0.0, 0.9, 0.25, 0.25, true)
+        @test _sweep_windows(0.0, 1.0, 0.25, 0.5, false) == sweep_windows(0.0, 1.0, 0.25)
+        @test_throws ArgumentError _sweep_windows(0.0, 1.0, 0.25, 0.7, true)
     end
 end
 

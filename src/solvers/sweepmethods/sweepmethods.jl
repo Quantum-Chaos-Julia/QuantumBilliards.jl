@@ -32,7 +32,7 @@ function solve_wavenumber(solver::SweepBasisSolver,basis::AbsBasis, billiard::Ab
 end
 
 """
-    k_sweep(solver::SweepBasisSolver, basis::AbsBasis, billiard::AbsBilliard, ks; multithreaded::Bool = true) 
+    k_sweep(solver::SweepBasisSolver, basis::AbsBasis, billiard::AbsBilliard, ks; multithreaded::Bool = true, show_progress::Bool = false)
 
 Computes the tension of the sweep `solver` at every wavenumber in `ks`, using a
 single basis resized to the largest wavenumber in `ks`.
@@ -45,10 +45,10 @@ single basis resized to the largest wavenumber in `ks`.
 
 ## Keyword Arguments
 * `multithreaded::Bool = true`: Whether the matrix construction is multithreaded.
+* `show_progress::Bool = false`: Whether a progress bar is displayed during the sweep.
 
 ## Returns
 * `res::AbstractVector`: Tensions corresponding to the wavenumbers in `ks`.
-* `show_progress::Bool`: Whether a progress bar was displayed during the sweep.
 """
 function k_sweep(solver::SweepBasisSolver, basis::AbsBasis, billiard::AbsBilliard, ks; multithreaded=true, show_progress=false)
     k = maximum(ks)
@@ -62,6 +62,16 @@ function k_sweep(solver::SweepBasisSolver, basis::AbsBasis, billiard::AbsBilliar
     end
     return res
 end
+
+"""
+    _bim_geometry(solver::SweepBIMSolver, pts::BoundaryPoints)
+
+Wavenumber-independent data reused across calls of `construct_matrices(solver, pts, k, geom)`.
+Solvers without reusable geometry return `nothing`, for which `construct_matrices` falls back to the
+three-argument method.
+"""
+_bim_geometry(::SweepBIMSolver, pts) = nothing
+construct_matrices(solver::SweepBIMSolver, pts, k, ::Nothing; multithreaded::Bool=true) = construct_matrices(solver, pts, k; multithreaded)
 
 """
     solve_wavenumber(solver::SweepBIMSolver, billiard::AbsBilliard, k, dk; multithreaded::Bool = true, pts::Union{Nothing,BoundaryPoints} = nothing) → (k0::Real, t0::Real)
@@ -182,6 +192,14 @@ _bim_solver_node_multiple(solver) = isnothing(solver.symmetry) ? 1 : lcm(_bim_no
 # Round `N` up to a multiple of `needed`, or return the forced count `N_override`.
 @inline _bim_round_nodes(N::Int, needed::Int, ::Nothing) = cld(N, needed) * needed
 @inline _bim_round_nodes(::Int, ::Int, N_override::Int) = N_override
+
+# Number of boundary nodes of a DLP/CFIE discretization of a component of length `Ltot` at wavenumber `k`.
+# A globally graded discretization with a symmetry does not force an even count.
+@inline function _bim_node_count(solver, Ltot::Real, k::T; graded::Bool=false, multiple::Int=1, N_override::Union{Nothing,Int}=nothing) where {T<:Real}
+    N = max(solver.min_pts, round(Int, k*Ltot*solver.pts_scaling_factor[1]/(2*T(pi))))
+    even = graded && solver.symmetry !== nothing ? 1 : 2
+    return _bim_round_nodes(N, lcm(even, _bim_solver_node_multiple(solver), multiple), N_override)
+end
 
 
 # Infer the discrete symmetry used to fold the full-boundary Fredholm operator
@@ -310,7 +328,7 @@ and the physical boundary normal derivative `u = ∂ₙψ`.
 The DLP Fredholm matrix `A(k)` is assembled once and its smallest singular
 triplet is computed with a single `KrylovKit.svdsolve` call. The right singular
 vector gives the native DLP layer density. The left singular vector is converted
-to the physical normal derivative using [`_bim_normal_derivative`](@ref).
+to the physical normal derivative using `_bim_normal_derivative`.
 
 Both quantities are expanded onto the complete physical boundary when symmetry
 reduction is active. The physical normal derivative is then normalized using

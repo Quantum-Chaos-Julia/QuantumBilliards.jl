@@ -1,17 +1,17 @@
 """
-    adapt_basis(triangle::Triangle, i::Integer) -> Tuple{Real, SVector{2}, Real, Nothing}
+    adapt_basis(triangle::TriangleBilliard, i::Integer) -> Tuple{Real, SVector{2}, Real, Nothing}
 
 Construct the local polar frame centered at the `i`-th corner of a triangle for use in corner-adapted basis functions.
 
 # Arguments
-- `triangle::Triangle`: The triangle geometry object.
-- `i::Integer`: The index of the edge (1-based) for which to compute the adapted frame.
+- `triangle::TriangleBilliard`: The triangle billiard.
+- `i::Integer`: The index of the corner (1-based, taken modulo 3) at which to compute the adapted frame.
 
 # Returns
 - `angle::Real`: The internal angle at the selected corner.
 - `origin::SVector{2}`: The position of the corner.
 - `rot_angle::Real`: The rotation of the local polar axis, aligned with the edge leaving the corner.
-- `symmetry::Nothing`: Placeholder for symmetry information (not used currently).
+- `symmetry::Nothing`: Always `nothing`; the corner-adapted frame of a triangle carries no symmetry.
 """
 function adapt_basis(triangle::T,i::Ti) where {T<:BilliardGeometry.TriangleBilliard,Ti<:Integer}
     N=3
@@ -25,9 +25,9 @@ function adapt_basis(triangle::T,i::Ti) where {T<:BilliardGeometry.TriangleBilli
 end
 
 """
-    make_triangle_and_basis(gamma, chi; edge_i=1) -> Tuple{Triangle, CornerAdaptedFourierBessel}
+    make_triangle_and_basis(gamma, chi; edge_i=1) -> Tuple{TriangleBilliard, CornerAdaptedFourierBessel}
 
-Convenience function to create a triangle and construct a corner-adapted Fourier-Bessel basis at a selected edge.
+Convenience function to create a triangle billiard and construct a corner-adapted Fourier-Bessel basis at a selected edge.
 
 # Arguments
 - `gamma::Real`: Internal angle at the base corner (γ).
@@ -35,7 +35,7 @@ Convenience function to create a triangle and construct a corner-adapted Fourier
 - `edge_i::Integer=1`: Index of the real edge used to place and adapt the basis.
 
 # Returns
-- `tr::Triangle`: The constructed triangle object with virtual edges applied.
+- `tr::TriangleBilliard`: The constructed triangle billiard; every edge except `edge_i` uses `QuantumSolverIgnore` boundary conditions.
 - `basis::CornerAdaptedFourierBessel`: A Fourier-Bessel basis adapted to the corner opposite edge `edge_i`.
 """
 function make_triangle_and_basis(gamma,chi; edge_i=1)
