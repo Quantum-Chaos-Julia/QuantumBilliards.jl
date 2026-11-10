@@ -643,7 +643,7 @@ end
         @test_throws MethodError BeynSolver(DecompositionMethodSolver(2.0, 3.0))
         @test_throws MethodError BeynSolver(BeynSolver(kernel))                               # no nesting of accelerated solvers
         @test_throws MethodError BeynSolver()
-        @test_throws TypeError BeynSolver(kernel; nlevels=2.5)
+        @test BeynSolver(kernel; nlevels=2.5).nlevels === 2.5                                 # fractional windows are allowed
         @test_throws TypeError BeynSolver(kernel; nq=2.5)
         @test_throws TypeError BeynSolver(kernel; use_taylor=1)
         @test_throws MethodError BeynSolver(kernel; cheb_config=ChebyshevConfig(Float32))   # wrong element type of the configuration

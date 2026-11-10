@@ -1094,7 +1094,7 @@ struct CORKSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
     kernel::K
     p::Int
     guard::T
-    nlevels::Int
+    nlevels::T
     Rmax::T
     block_size::Int
     mstart::Int
@@ -1110,7 +1110,7 @@ struct CORKSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
 end
 
 """
-    CORKSolver(kernel::K; p::Int=12, guard::Real=0.05, nlevels::Int=100, Rmax::Real=0.6, block_size::Int=10, mstart::Int=block_size*ceil(Int,5.0nlevels/block_size), mstep::Int=block_size*ceil(Int,50/block_size), stable_checks::Int=1, imag_tol::Real=1e-4, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, eigenvectors::Bool=false, taylor_tol::Real=3e-10) where {K<:SweepBIMSolver}
+    CORKSolver(kernel::K; p::Int=12, guard::Real=0.05, nlevels::Real=100, Rmax::Real=0.6, block_size::Int=10, mstart::Int=block_size*ceil(Int,5.0nlevels/block_size), mstep::Int=block_size*ceil(Int,50/block_size), stable_checks::Int=1, imag_tol::Real=1e-4, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, eigenvectors::Bool=false, taylor_tol::Real=3e-10) where {K<:SweepBIMSolver}
 
 Construct a Chebyshev-CORK eigensolver for a BIM Fredholm nonlinear
 eigenvalue problem `A(k)u=0`.
@@ -1136,7 +1136,7 @@ of each window.
 ## Keyword Arguments
 - `p::Int=12`: Degree of the Chebyshev matrix polynomial.
 - `guard::Real=0.05`: Relative enlargement of the requested interval used for polynomial construction and Ritz discovery.
-- `nlevels::Int=100`: Target number of physical levels per spectral window.
+- `nlevels::Real=100`: Target number of physical levels per spectral window; fractional values give narrower windows.
 - `Rmax::Real=0.6`: Maximum requested half-width `Δ` of a spectral window.
 - `block_size::Int=10`: Block-Arnoldi block size.
 - `mstart::Int=block_size*ceil(Int,5.0nlevels/block_size)`: Initial compact Krylov dimension.
@@ -1153,12 +1153,13 @@ of each window.
 ## Returns
 - `CORKSolver`: Configured Chebyshev-CORK solver.
 """
-function CORKSolver(kernel::K; p::Int=12, guard::Real=0.05, nlevels::Int=100, Rmax::Real=0.6, block_size::Int=10, mstart::Int=block_size*ceil(Int,5.0nlevels/block_size), mstep::Int=block_size*ceil(Int,50/block_size), stable_checks::Int=1, imag_tol::Real=1e-4, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, eigenvectors::Bool=false, taylor_tol::Real=3e-10) where {K<:SweepBIMSolver}
+function CORKSolver(kernel::K; p::Int=12, guard::Real=0.05, nlevels::Real=100, Rmax::Real=0.6, block_size::Int=10, mstart::Int=block_size*ceil(Int,5.0nlevels/block_size), mstep::Int=block_size*ceil(Int,50/block_size), stable_checks::Int=1, imag_tol::Real=1e-4, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, eigenvectors::Bool=false, taylor_tol::Real=3e-10) where {K<:SweepBIMSolver}
     T = _bim_numeric_type(kernel)
     T === Float64 || throw(ArgumentError("CORKSolver currently requires a Float64 BIM kernel"))
+    nlevels > 0 || throw(ArgumentError("nlevels must be positive; received nlevels=$nlevels"))
     mstart % block_size == 0 || throw(ArgumentError("mstart must be divisible by block_size"))
     mstep % block_size == 0 || throw(ArgumentError("mstep must be divisible by block_size"))
-    return CORKSolver{T,K}(kernel,p,T(guard),nlevels,T(Rmax),block_size,mstart,mstep,stable_checks,T(imag_tol),T(edge_tol),T(res_tol),T(stable_tol),T(imag_search_tol),eigenvectors,T(taylor_tol))
+    return CORKSolver{T,K}(kernel,p,T(guard),T(nlevels),T(Rmax),block_size,mstart,mstep,stable_checks,T(imag_tol),T(edge_tol),T(res_tol),T(stable_tol),T(imag_search_tol),eigenvectors,T(taylor_tol))
 end
 
 _bim_numeric_type(::CORKSolver{T}) where {T} = T

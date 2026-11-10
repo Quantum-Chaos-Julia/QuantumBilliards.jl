@@ -60,7 +60,7 @@ order and terminates after a prescribed sequence of residual-good roots.
 
 ## Fields
 * `kernel::K`: Boundary-integral solver defining `A(k)`.
-* `nlevels::Int`: Target number of states per Weyl window.
+* `nlevels::T`: Target number of states per Weyl window (may be fractional).
 * `nq::Int`: Number of contour quadrature nodes.
 * `r::Int`: Initial random probing rank.
 * `Rmax::T`: Maximum contour radius in spectrum sweeps.
@@ -79,7 +79,7 @@ order and terminates after a prescribed sequence of residual-good roots.
 """
 struct BeynSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
     kernel::K
-    nlevels::Int
+    nlevels::T
     nq::Int
     r::Int
     Rmax::T
@@ -98,7 +98,7 @@ struct BeynSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
 end
 
 """
-    BeynSolver(kernel::K; nlevels::Int=100, nq::Int=40, r::Int=200, Rmax::Real=0.5, svd_tol::Real=1e-11, res_tol::Real=1e-8, auto_discard_spurious::Bool=true, use_taylor::Bool=true, taylor_degree::Int=14, taylor_tol::Real=1e-12, use_chebyshev::Bool=false, cheb_config::Union{Nothing,ChebyshevConfig}=nothing, imag_k_check::Bool=true, imag_k_pad::Int=20, imag_k_group_size::Int=20, eigenvectors::Bool=true)
+    BeynSolver(kernel::K; nlevels::Real=100, nq::Int=40, r::Int=200, Rmax::Real=0.5, svd_tol::Real=1e-11, res_tol::Real=1e-8, auto_discard_spurious::Bool=true, use_taylor::Bool=true, taylor_degree::Int=14, taylor_tol::Real=1e-12, use_chebyshev::Bool=false, cheb_config::Union{Nothing,ChebyshevConfig}=nothing, imag_k_check::Bool=true, imag_k_pad::Int=20, imag_k_group_size::Int=20, eigenvectors::Bool=true)
 
 Construct a Beyn nonlinear eigensolver.
 
@@ -110,7 +110,7 @@ imaginary-`k` screening by default to verify the spectrum integrity.
 * `kernel::K`: Boundary-integral solver defining the nonlinear matrix `A(k)`.
 
 ## Keyword Arguments
-* `nlevels::Int=100`: Target number of states per Weyl window.
+* `nlevels::Real=100`: Target number of states per Weyl window; fractional values give windows narrower than one mean level spacing.
 * `nq::Int=40`: Number of contour quadrature nodes.
 * `r::Int=200`: Initial random probing rank.
 * `Rmax::Real=0.5`: Maximum contour radius in spectrum sweeps.
@@ -130,9 +130,9 @@ imaginary-`k` screening by default to verify the spectrum integrity.
 ## Returns
 * `BeynSolver{T,K}`: Configured Beyn solver.
 """
-function BeynSolver(kernel::K; nlevels::Int=100, nq::Int=40, r::Int=200, Rmax::Real=0.5, svd_tol::Real=1e-11, res_tol::Real=1e-8, auto_discard_spurious::Bool=true, use_taylor::Bool=true, taylor_degree::Int=14, taylor_tol::Real=1e-12, use_chebyshev::Bool=false, cheb_config::Union{Nothing,ChebyshevConfig}=nothing, imag_k_check::Bool=true, imag_k_pad::Int=20, imag_k_group_size::Int=20, eigenvectors::Bool=true) where {K<:SweepBIMSolver}
+function BeynSolver(kernel::K; nlevels::Real=100, nq::Int=40, r::Int=200, Rmax::Real=0.5, svd_tol::Real=1e-11, res_tol::Real=1e-8, auto_discard_spurious::Bool=true, use_taylor::Bool=true, taylor_degree::Int=14, taylor_tol::Real=1e-12, use_chebyshev::Bool=false, cheb_config::Union{Nothing,ChebyshevConfig}=nothing, imag_k_check::Bool=true, imag_k_pad::Int=20, imag_k_group_size::Int=20, eigenvectors::Bool=true) where {K<:SweepBIMSolver}
     T = _bim_numeric_type(kernel); cfg = cheb_config === nothing ? ChebyshevConfig(T) : cheb_config
-    return BeynSolver{T,K}(kernel, nlevels, nq, r, T(Rmax), T(svd_tol), T(res_tol), auto_discard_spurious, use_taylor, taylor_degree, T(taylor_tol), use_chebyshev, cfg, imag_k_check, imag_k_pad, imag_k_group_size, eigenvectors)
+    return BeynSolver{T,K}(kernel, T(nlevels), nq, r, T(Rmax), T(svd_tol), T(res_tol), auto_discard_spurious, use_taylor, taylor_degree, T(taylor_tol), use_chebyshev, cfg, imag_k_check, imag_k_pad, imag_k_group_size, eigenvectors)
 end
 
 _bim_numeric_type(::BeynSolver{T}) where {T} = T
@@ -146,7 +146,7 @@ according to the leading Weyl law, i.e. `sqrt(k^2 + 4π*nlevels/A) - k`.
 ## Arguments
 * `billiard::Bi`: Billiard geometry.
 * `k::T`: Lower wavenumber.
-* `nlevels::Int`: Target number of levels in the window.
+* `nlevels::Real`: Target number of levels in the window.
 
 ## Keyword Arguments
 * `fundamental_only::Bool=false`: Use the fundamental-domain area instead of the full area.
@@ -154,13 +154,13 @@ according to the leading Weyl law, i.e. `sqrt(k^2 + 4π*nlevels/A) - k`.
 ## Returns
 * `T`: Window width.
 """
-@inline function weyl_window_width(billiard::Bi, k::T, nlevels::Int; fundamental_only::Bool=false) where {T<:Real,Bi<:AbsBilliard}
+@inline function weyl_window_width(billiard::Bi, k::T, nlevels::Real; fundamental_only::Bool=false) where {T<:Real,Bi<:AbsBilliard}
     A = fundamental_only ? fundamental_area(billiard) : area(billiard)
     return sqrt(k^2+T(4pi*nlevels/A))-k
 end
 
 """
-    plan_weyl_windows(billiard::Bi, k1::T, k2::T; nlevels::Int=10, Rmax::Real=1.0, fundamental_only::Bool=false)
+    plan_weyl_windows(billiard::Bi, k1::T, k2::T; nlevels::Real=10, Rmax::Real=1.0, fundamental_only::Bool=false)
 
 Partition `[k1,k2]` into adjacent spectral windows containing approximately
 `nlevels` states according to the leading Weyl law.
@@ -171,14 +171,14 @@ Partition `[k1,k2]` into adjacent spectral windows containing approximately
 * `k2::T`: Upper spectral endpoint.
 
 ## Keyword Arguments
-* `nlevels::Int=10`: Approximate number of states per window.
+* `nlevels::Real=10`: Approximate number of states per window.
 * `Rmax::Real=1.0`: Maximum contour radius.
 * `fundamental_only::Bool=false`: Use the desymmetrized fundamental-domain area (Dirichlet walls).
 
 ## Returns
 * `Vector{Tuple{T,T}}`: Adjacent spectral intervals `(kL,kR)`.
 """
-function plan_weyl_windows(billiard::Bi, k1::T, k2::T; nlevels::Int=10, Rmax::Real=1.0, fundamental_only::Bool=false) where {T<:Real,Bi<:AbsBilliard}
+function plan_weyl_windows(billiard::Bi, k1::T, k2::T; nlevels::Real=10, Rmax::Real=1.0, fundamental_only::Bool=false) where {T<:Real,Bi<:AbsBilliard}
     k2 > k1 || return Tuple{T,T}[]; nlevels > 0 || throw(ArgumentError("nlevels must be positive; received nlevels=$nlevels")); Rmax > 0 || throw(ArgumentError("Rmax must be positive; received Rmax=$Rmax"))
     intervals = Tuple{T,T}[]; maxwidth = T(2Rmax); k = k1
     while k < k2

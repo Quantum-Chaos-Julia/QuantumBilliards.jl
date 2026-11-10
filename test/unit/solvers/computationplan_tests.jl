@@ -3,7 +3,7 @@
 # `with_params` is covered in solvers/solverconstructors_tests.jl. Plans are built by hand; no eigen solves.
 # Helper definitions use the prefix `cp_`.
 
-using QuantumBilliards: expected_states, WindowPlan, ComputationPlan, MemoryEstimate
+using QuantumBilliards: expected_states, WindowPlan, ComputationPlan, MemoryEstimate, default_memory_limit
 
 cp_show(plan) = sprint(show, MIME("text/plain"), plan)
 
@@ -54,7 +54,7 @@ end
     circle = CircleBilliard(1.0)
     solver = BeynSolver(DoubleLayerPotentialSolver(10.0, circle))
     mem = MemoryEstimate(2.0^30, 2.0^29)
-    mkplan(windows, notes=String[]) = ComputationPlan(solver, circle, nothing, 10.0, 12.0, 7.25, 3.0, 4.0, windows, mem, 4, notes)
+    mkplan(windows, notes=String[]) = ComputationPlan(solver, circle, nothing, 10.0, 12.0, nothing, 0.5, 1e15, 7.25, 3.0, 4.0, windows, mem, 4, notes)
 
     @testset "constructor and field types" begin
         ws = [WindowPlan(10.5, 0.5, 2.0, 40, 80), WindowPlan(11.5, 0.5, 3.0, 50, 100)]
@@ -76,7 +76,34 @@ end
         @test fieldtype(typeof(plan), :notes) === Vector{String}
         @test fieldtype(typeof(plan), :nthreads) === Int
         @test @inferred(mkplan(ws)) isa ComputationPlan
-        @test_throws MethodError ComputationPlan(solver, circle, nothing, 10.0, 12.0, 7.25, 3.0, 4.0, WindowPlan{Float32}[], mem, 4, String[])
+        @test_throws MethodError ComputationPlan(solver, circle, nothing, 10.0, 12.0, nothing, 0.5, 1e15, 7.25, 3.0, 4.0, WindowPlan{Float32}[], mem, 4, String[])
+    end
+
+    @testset "dk, window_overlap and max_memory fields" begin
+        ws = [WindowPlan(10.5, 0.5, 2.0, 40, 80)]
+        plan = mkplan(ws)
+        @test plan.dk === nothing
+        @test plan.window_overlap === 0.5
+        @test plan.max_memory === 1e15
+        @test plan isa ComputationPlan{Float64,typeof(solver),typeof(circle),Nothing,Nothing}
+        @test fieldtype(typeof(plan), :dk) === Nothing
+        @test fieldtype(typeof(plan), :window_overlap) === Float64
+        @test fieldtype(typeof(plan), :max_memory) === Float64
+        @test fieldnames(ComputationPlan)[6:8] == (:dk, :window_overlap, :max_memory)
+
+        # dk is stored as given; the type parameter D follows it
+        dkf = k -> 0.1 * k^(-1/3)
+        plan_f = ComputationPlan(solver, circle, nothing, 10.0, 12.0, dkf, 0.25, 2.0^30, 7.25, 3.0, 4.0, ws, mem, 4, String[])
+        @test plan_f.dk === dkf
+        @test plan_f isa ComputationPlan{Float64,typeof(solver),typeof(circle),Nothing,typeof(dkf)}
+        @test isconcretetype(typeof(plan_f))
+        @test (plan_f.window_overlap, plan_f.max_memory) === (0.25, 2.0^30)
+        plan_r = ComputationPlan(solver, circle, nothing, 10.0, 12.0, 0.05, 0.0, 2.0^30, 7.25, 3.0, 4.0, ws, mem, 4, String[])
+        @test plan_r.dk === 0.05
+        @test plan_r isa ComputationPlan{Float64,typeof(solver),typeof(circle),Nothing,Float64}
+
+        # the default constructor does not convert: Int overlap or memory limit is rejected
+        @test_throws MethodError ComputationPlan(solver, circle, nothing, 10.0, 12.0, nothing, 1, 10^9, 7.25, 3.0, 4.0, ws, mem, 4, String[])
     end
 
     @testset "show text/plain: odd window count" begin
@@ -127,6 +154,24 @@ end
         @test occursin("\n  - second warning", out)
         @test count("\n  - ", out) == 2
         @test endswith(out, "second warning")
+    end
+
+    @testset "show text/plain: overlap line" begin
+        ws = [WindowPlan(10.5, 0.5, 2.0, 40, 80), WindowPlan(11.5, 0.5, 3.0, 50, 100)]
+        # dk === nothing (Beyn, CORK): no overlap line
+        @test !occursin("overlap", cp_show(mkplan(ws)))
+        # dk set (sweep methods): overlap line in the Windows section
+        plan_f = ComputationPlan(solver, circle, nothing, 10.0, 12.0, k -> 0.1, 0.25, 1e15, 7.25, 3.0, 4.0, ws, mem, 4, String[])
+        out = cp_show(plan_f)
+        @test occursin("  overlap         : 0.25", out)
+        @test count("overlap", out) == 1
+        windows_section = split(split(out, "\nWindows\n")[2], "\nDiscretization")[1]
+        @test occursin("  overlap         : 0.25", windows_section)
+        plan_r = ComputationPlan(solver, circle, nothing, 10.0, 12.0, 0.05, 0.0, 1e15, 7.25, 3.0, 4.0, ws, mem, 4, String[])
+        @test occursin("  overlap         : 0.0\n", cp_show(plan_r))
+        # zero windows: no Windows details, so no overlap line even with dk set
+        plan_empty = ComputationPlan(solver, circle, nothing, 10.0, 12.0, 0.05, 0.5, 1e15, 7.25, 3.0, 4.0, WindowPlan{Float64}[], mem, 4, String[])
+        @test !occursin("overlap", cp_show(plan_empty))
     end
 
     @testset "show compact" begin
@@ -229,6 +274,28 @@ using QuantumBilliards: plan_computation, plan_weyl_windows, k_range_for_states,
             @test any(occursin("max_memory", n) for n in tight.notes)
             loose = plan_computation(s, rect, 20.0, 40.0; max_memory=1e15)
             @test !any(occursin("max_memory", n) for n in loose.notes)
+        end
+    end
+
+    @testset "stored dk, window_overlap and max_memory" begin
+        for s in (beyn, cork)
+            plan = plan_computation(s, rect, 20.0, 40.0; tune=false)
+            @test plan.dk === nothing
+            @test plan.window_overlap === 0.5
+            @test plan.max_memory === default_memory_limit()
+            @test plan.max_memory isa Float64
+            @test fieldtype(typeof(plan), :dk) === Nothing
+            @test !occursin("overlap", cp_show(plan))
+
+            custom = plan_computation(s, rect, 20.0, 40.0; tune=false, max_memory=2^35)
+            @test custom.max_memory === Float64(2^35)
+            @test custom.dk === nothing
+
+            # N1,N2 form and tuned plan forward max_memory too
+            @test plan_computation(s, rect, 10, 60; max_memory=1e12).max_memory === 1e12
+            @test plan_computation(s, rect, 20.0, 40.0; max_memory=1e12).max_memory === 1e12
+            # stored even when it triggers the note
+            @test plan_computation(s, rect, 20.0, 40.0; max_memory=1.0).max_memory === 1.0
         end
     end
 
@@ -374,6 +441,41 @@ end
         @test_throws ArgumentError plan_computation(vs, basis, rect, 20.0, 22.0, 0.05; window_overlap=0.6)
         @test_throws ArgumentError plan_computation(vs, basis, rect, 20.0, 22.0, 0.05; window_overlap=-0.1)
         @test_throws ArgumentError plan_computation(vs, basis, rect, 10, 30; window_overlap=0.6)
+    end
+
+    @testset "stored dk, window_overlap and max_memory" begin
+        # constant dk
+        plan = plan_computation(vs, basis, rect, 20.0, 22.0, 0.05)
+        @test plan.dk === 0.05
+        @test plan.window_overlap === 0.5
+        @test plan.max_memory === default_memory_limit()
+        @test plan isa ComputationPlan{Float64,typeof(vs),typeof(rect),typeof(basis),Float64}
+        @test occursin("  overlap         : 0.5", cp_show(plan))
+
+        # function dk
+        dkf = k -> 0.05 * k^(-1/3)
+        plan_f = plan_computation(vs, basis, rect, 20.0, 22.0, dkf)
+        @test plan_f.dk === dkf
+        @test fieldtype(typeof(plan_f), :dk) === typeof(dkf)
+
+        # custom window_overlap and max_memory
+        plan_c = plan_computation(vs, basis, rect, 20.0, 22.0, 0.05; window_overlap=0.25, max_memory=2^35)
+        @test plan_c.window_overlap === 0.25
+        @test plan_c.max_memory === Float64(2^35)
+        @test plan_c.dk === 0.05
+        @test occursin("  overlap         : 0.25", cp_show(plan_c))
+        # integer overlap is stored as Float64
+        @test plan_computation(vs, basis, rect, 20.0, 22.0, 0.05; window_overlap=0).window_overlap === 0.0
+
+        # N1,N2 form stores the resolved dk function and the keywords
+        fo = basis.symmetries !== nothing
+        plan_n = plan_computation(vs, basis, rect, 10, 30; nlevels=0.35, window_overlap=0.25, max_memory=1e12)
+        @test plan_n.dk isa Function
+        @test plan_n.dk(15.0) ≈ 0.35 / (2 * spectral_density(15.0, rect; fundamental_only=fo))
+        @test plan_n.window_overlap === 0.25
+        @test plan_n.max_memory === 1e12
+        @test plan_computation(vs, basis, rect, 10, 30).dk isa Function
+        @test plan_computation(vs, basis, rect, 10, 30).window_overlap === 0.5
     end
 
     @testset "N1,N2 nlevels is levels in the full window" begin
@@ -523,6 +625,48 @@ end
         @test_throws ArgumentError plan_computation(eb, rect, 10, 30; window_overlap=0.6)
     end
 
+    @testset "stored dk, window_overlap and max_memory" begin
+        # default dk is stored as the resolved Function
+        plan = plan_computation(eb, rect, 20.0, 22.0)
+        @test plan.dk isa Function
+        @test plan.dk(21.0) ≈ dkf(21.0)
+        @test plan.window_overlap === 0.5
+        @test plan.max_memory === default_memory_limit()
+        @test occursin("  overlap         : 0.5", cp_show(plan))
+
+        # custom dk, window_overlap, max_memory
+        mydk = k -> 0.2
+        plan_c = plan_computation(eb, rect, 20.0, 22.0; dk=mydk, window_overlap=0.25, max_memory=2^35)
+        @test plan_c.dk === mydk
+        @test plan_c.window_overlap === 0.25
+        @test plan_c.max_memory === Float64(2^35)
+        @test occursin("  overlap         : 0.25", cp_show(plan_c))
+        @test plan_computation(eb, rect, 20.0, 22.0; window_overlap=0).window_overlap === 0.0
+
+        # N1,N2 without nlevels keeps the default dk and forwards keywords
+        plan_n = plan_computation(eb, rect, 10, 30; window_overlap=0.1, max_memory=1e12)
+        @test plan_n.dk isa Function
+        @test plan_n.dk(15.0) ≈ dkf(15.0)
+        @test plan_n.window_overlap === 0.1
+        @test plan_n.max_memory === 1e12
+
+        # N1,N2 with nlevels: dk = nlevels / (2 * spectral_density)
+        for nl in (1.0, 2.5)
+            p = plan_computation(eb, rect, 10, 30; nlevels=nl, window_overlap=0.25, max_memory=1e12)
+            @test p.dk isa Function
+            for k in (10.0, 17.3, 25.0)
+                @test p.dk(k) ≈ nl / (2 * spectral_density(k, rect))
+            end
+            @test p.window_overlap === 0.25
+            @test p.max_memory === 1e12
+            # with overlap != 0.5 the local half-width only follows dk approximately (see the window_overlap testset)
+            @test all(isapprox(w.halfwidth, p.dk(w.kcenter); rtol=0.05) for w in p.windows)
+            @test all(isapprox(w.halfwidth, nl / (2 * spectral_density(w.kcenter, rect)); rtol=1e-10) for w in plan_computation(eb, rect, 10, 30; nlevels=nl).windows)
+        end
+        # nlevels=nothing is the same as omitting it
+        @test plan_computation(eb, rect, 10, 30; nlevels=nothing).dk(15.0) ≈ dkf(15.0)
+    end
+
     @testset "N1,N2 nlevels is levels in the full window" begin
         dens(k) = spectral_density(k, rect)
         for nl in (1.0, 2.0)
@@ -577,6 +721,22 @@ end
     @test isempty(plan.notes)
     tight = _assemble_plan(beyn, rect, 20.0, 22.0, ws, mem, 1.0, String[]; fundamental_only=false)
     @test length(tight.notes) == 1 && occursin("max_memory", tight.notes[1])
+
+    @testset "dk, window_overlap and max_memory" begin
+        @test plan.dk === nothing
+        @test plan.window_overlap === 0.5
+        @test plan.max_memory === 1e15
+        @test tight.max_memory === 1.0
+        dkf = k -> 0.1
+        p = _assemble_plan(beyn, rect, 20.0, 22.0, ws, mem, 2^30, String[]; fundamental_only=false, dk=dkf, window_overlap=0.25)
+        @test p.dk === dkf
+        @test p.window_overlap === 0.25
+        @test p.max_memory === Float64(2^30)
+        @test fieldtype(typeof(p), :dk) === typeof(dkf)
+        p0 = _assemble_plan(beyn, rect, 20.0, 22.0, ws, mem, 1e15, String[]; fundamental_only=false, dk=0.05, window_overlap=0)
+        @test p0.dk === 0.05
+        @test p0.window_overlap === 0.0
+    end
 end
 
 # Memory estimates: _working_bytes, _persistent_bytes (src/solvers/memoryestimates.jl), estimate_memory, window-plan helpers
@@ -1034,7 +1194,7 @@ end
     end
 
     @testset "empty window list" begin
-        plan = ComputationPlan(beyn, rect, nothing, 20.0, 40.0, 5.0, 1.0, 2.0, WindowPlan{Float64}[], MemoryEstimate(2.0^20, 2.0^10), 1, String[])
+        plan = ComputationPlan(beyn, rect, nothing, 20.0, 40.0, nothing, 0.5, 1e15, 5.0, 1.0, 2.0, WindowPlan{Float64}[], MemoryEstimate(2.0^20, 2.0^10), 1, String[])
         out = cp_show(plan)
         @test occursin("Memory (upper-bound estimate)", out)
         @test occursin("  working         : 1.0 MiB", out)
@@ -1051,11 +1211,33 @@ end
     vs = VerginiSaracenoSolver(2.0, 5.0)
     for s in (BeynSolver(kernel; nlevels=20), CORKSolver(kernel; nlevels=20), ExpandedBIMSolver(kernel))
         PT = typeof(plan_computation(s, rect, 20.0, 22.0; tune=false))
-        @test hasmethod(compute_spectrum, Tuple{PT,typeof(rect)})
-        @test !hasmethod(compute_spectrum, Tuple{PT,typeof(pw),typeof(rect),Float64})
+        @test hasmethod(compute_spectrum, Tuple{PT})
     end
     PV = typeof(plan_computation(vs, pw, rect, 20.0, 22.0, 0.05; tune=false))
-    @test hasmethod(compute_spectrum, Tuple{PV,typeof(pw),typeof(rect),Float64})
-    @test hasmethod(compute_spectrum, Tuple{PV,typeof(pw),typeof(rect),Function})
-    @test !hasmethod(compute_spectrum, Tuple{PV,typeof(rect)})
+    @test hasmethod(compute_spectrum, Tuple{PV})
+    @test !hasmethod(compute_spectrum, Tuple{PV,typeof(pw),typeof(rect),Float64})
+end
+
+# Tiny end-to-end check: compute_spectrum(plan) forwards exactly the stored inputs.
+@testset "compute_spectrum(plan) equals direct call" begin
+    rect = RectangleBilliard(1.0, 0.5)
+    vs = VerginiSaracenoSolver(2.0, 5.0)
+    pw = RealPlaneWaves(6; use_taylor=false)
+    k1, k2, dk = 20.0, 20.4, 0.1
+    plan = plan_computation(vs, pw, rect, k1, k2, dk; window_overlap=0.25, tune=false)
+    via_plan = compute_spectrum(plan; show_progress=false, multithreaded=false)
+    direct = compute_spectrum(vs, pw, rect, k1, k2, dk; window_overlap=0.25, show_progress=false, multithreaded=false)
+    @test via_plan isa SpectralData
+    @test length(direct.k) > 0
+    @test via_plan.k == direct.k
+
+    # keyword override of window_overlap changes the window layout, hence is forwarded
+    plan_default = plan_computation(vs, pw, rect, k1, k2, dk; tune=false)
+    over = compute_spectrum(plan_default; window_overlap=0.25, show_progress=false, multithreaded=false)
+    @test over.k == direct.k
+
+    # stored max_memory is enforced, and a keyword overrides it
+    tight = plan_computation(vs, pw, rect, k1, k2, dk; tune=false, max_memory=1.0)
+    @test_throws ErrorException compute_spectrum(tight; show_progress=false)
+    @test_throws ErrorException compute_spectrum(plan_default; max_memory=1.0, show_progress=false)
 end

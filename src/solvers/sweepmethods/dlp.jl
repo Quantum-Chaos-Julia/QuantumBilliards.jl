@@ -162,14 +162,15 @@ _bim_numeric_type(::DoubleLayerPotentialSolver{T}) where {T} = T
 # This quantity is used only as the physical boundary coordinate `s`; the
 # Nyström quadrature weights are constructed separately from the parametrized
 # tangent and the periodic parameter step.
-function _dlp_composite_arclength(comp::Vector, t::T) where {T<:Real}
+function _dlp_composite_arclength(comp::Vector, t::Real)
     _, _, Ltot = component_lengths(comp)
     return _dlp_composite_arclength(comp, Ltot, t)
 end
 
-function _dlp_composite_arclength(comp::Vector, Ltot, t::T) where {T<:Real}
+function _dlp_composite_arclength(comp::Vector, Ltot, t::Real)
+    T = typeof(float(t))
     twopi = 2*T(pi)
-    τ = mod(t, twopi)
+    τ = mod(T(t), twopi)
     target = Ltot*τ/twopi
     offset = zero(T)
     @inbounds for j in eachindex(comp)

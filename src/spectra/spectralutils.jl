@@ -984,15 +984,16 @@ function compute_spectrum(solver::CORKSolver, billiard::Bi, N1::Int, N2::Int; ac
 end
 
 """
-    compute_spectrum(plan::ComputationPlan, billiard; kwargs...) -> SpectralData
-    compute_spectrum(plan::ComputationPlan{T,<:AcceleratedBasisSolver}, basis, billiard, dk; kwargs...) -> SpectralData
+    compute_spectrum(plan::ComputationPlan; kwargs...) -> SpectralData
 
-Run `compute_spectrum` with the solver and interval stored in `plan`. The plan
-does not store the billiard, basis or center spacing, so these are passed again;
-`dk` must be the one used to build the plan for the sweep methods (for
-[`ExpandedBIMSolver`](@ref) pass it as a keyword). Keyword arguments are those
-of the corresponding `compute_spectrum` method.
+Run `compute_spectrum` with the solver, billiard, basis, interval, window
+half-width `dk`, `window_overlap` and `max_memory` stored in `plan`. Keyword
+arguments are those of the corresponding `compute_spectrum` method (for example
+`accept_tol`, `merge_tol`, `multithreaded`, `show_progress`) and override the
+stored `window_overlap` and `max_memory` when given.
 """
-compute_spectrum(plan::ComputationPlan{T,<:Union{BeynSolver,CORKSolver,ExpandedBIMSolver}}, billiard::AbsBilliard; kwargs...) where {T} = compute_spectrum(plan.solver, billiard, plan.k1, plan.k2; kwargs...)
+compute_spectrum(plan::ComputationPlan{T,<:Union{BeynSolver,CORKSolver}}; kwargs...) where {T} = compute_spectrum(plan.solver, plan.billiard, plan.k1, plan.k2; max_memory=plan.max_memory, kwargs...)
 
-compute_spectrum(plan::ComputationPlan{T,<:AcceleratedBasisSolver}, basis::AbsBasis, billiard::AbsBilliard, dk::Union{Real,Function}; kwargs...) where {T} = compute_spectrum(plan.solver, basis, billiard, plan.k1, plan.k2, dk; kwargs...)
+compute_spectrum(plan::ComputationPlan{T,<:ExpandedBIMSolver}; kwargs...) where {T} = compute_spectrum(plan.solver, plan.billiard, plan.k1, plan.k2; dk=plan.dk, window_overlap=plan.window_overlap, max_memory=plan.max_memory, kwargs...)
+
+compute_spectrum(plan::ComputationPlan{T,<:AcceleratedBasisSolver}; kwargs...) where {T} = compute_spectrum(plan.solver, plan.basis, plan.billiard, plan.k1, plan.k2, plan.dk; window_overlap=plan.window_overlap, max_memory=plan.max_memory, kwargs...)
