@@ -193,6 +193,14 @@ _bim_solver_node_multiple(solver) = isnothing(solver.symmetry) ? 1 : lcm(_bim_no
 @inline _bim_round_nodes(N::Int, needed::Int, ::Nothing) = cld(N, needed) * needed
 @inline _bim_round_nodes(::Int, ::Int, N_override::Int) = N_override
 
+# Number of boundary nodes of a DLP/CFIE discretization of a component of length `Ltot` at wavenumber `k`.
+# A globally graded discretization with a symmetry does not force an even count.
+@inline function _bim_node_count(solver, Ltot::Real, k::T; graded::Bool=false, multiple::Int=1, N_override::Union{Nothing,Int}=nothing) where {T<:Real}
+    N = max(solver.min_pts, round(Int, k*Ltot*solver.pts_scaling_factor[1]/(2*T(pi))))
+    even = graded && solver.symmetry !== nothing ? 1 : 2
+    return _bim_round_nodes(N, lcm(even, _bim_solver_node_multiple(solver), multiple), N_override)
+end
+
 
 # Infer the discrete symmetry used to fold the full-boundary Fredholm operator
 # directly from `billiard`'s minimal registered symmetry generators

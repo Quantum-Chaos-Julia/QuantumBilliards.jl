@@ -17,13 +17,15 @@
 #     geometry is verified on the nodes;
 #   * boundary_matrix_size and threaded = serial assembly;
 #   * the keywords `multiple` and `N_override` of _dlp_evaluate_points (node count a multiple of lcm(...) with `multiple`, forced node
-#     count, unchanged defaults) for the smooth and the corner graded discretization; the node counts follow from the rounding rule.
+#     count, unchanged defaults) for the smooth and the corner graded discretization; the node counts follow from the rounding rule;
+#   * _dlp_composite_arclength: the method with a precomputed total length equals the one that computes it, and the closed forms
+#     s = L t / 2 pi for a polygon and the arc plus diameter of a half disk.
 # Helper definitions use the prefix `dlp_`.
 
 using LinearAlgebra: norm, diag
 using SpecialFunctions: besselj1, besselh
 using StaticArrays: SVector
-using QuantumBilliards: _construct_matrices_multi_k_taylor, _is_nontrivial_dlp_grading, _dlp_evaluate_points
+using QuantumBilliards: _construct_matrices_multi_k_taylor, _is_nontrivial_dlp_grading, _dlp_evaluate_points, _dlp_composite_arclength
 
 # Explicit Kress matrix of the periodic kernel log(4 sin^2((t - tau) / 2)) for the N = 2n midpoint nodes.
 function dlp_kress_matrix(N::Int)
@@ -139,6 +141,37 @@ end
     @test issorted(pts.s; lt=<=)                                        # strictly increasing arc length along the full boundary
     @test 0 < first(pts.s) && last(pts.s) < L
     @test pts.s ≈ [L * (j - 1 / 2) / length(pts) for j in 1:length(pts)]
+end
+
+@testset "_dlp_composite_arclength" begin
+    # the method taking the precomputed total length Ltot equals the method that computes it
+    square = [LineSegment([0.0, 0.0], [1.0, 0.0]), LineSegment([1.0, 0.0], [1.0, 1.0]),
+              LineSegment([1.0, 1.0], [0.0, 1.0]), LineSegment([0.0, 1.0], [0.0, 0.0])]
+    half_disk = AbsCurve[CircleSegment(1.0, pi, 0.0, [0.0, 0.0]), LineSegment([-1.0, 0.0], [1.0, 0.0])]
+    uneven = [LineSegment([0.0, 0.0], [1.0, 0.0]), LineSegment([1.0, 0.0], [1.0, 3.0]), LineSegment([1.0, 3.0], [0.0, 0.0])]
+    for comp in (square, half_disk, uneven)
+        _, _, Ltot = BilliardGeometry.component_lengths(comp)
+        for t in (0.0, 1e-9, 0.3, 1.0, pi / 2, pi, 4.4, 2π - 1e-9, 2π, 2π + 0.5)
+            @test _dlp_composite_arclength(comp, Ltot, t) == _dlp_composite_arclength(comp, t)
+        end
+    end
+
+    # a polygon is parametrized proportionally to arc length: s = L t / 2 pi, and the period wraps modulo 2 pi
+    _, _, Lsq = BilliardGeometry.component_lengths(square)
+    @test Lsq == 4.0
+    @test _dlp_composite_arclength(square, Lsq, 0.0) == 0.0
+    @test _dlp_composite_arclength(square, Lsq, π / 4) ≈ 0.5
+    @test _dlp_composite_arclength(square, Lsq, π) ≈ 2.0
+    @test _dlp_composite_arclength(square, Lsq, 3π / 2 + π / 4) ≈ 3.5
+    @test _dlp_composite_arclength(square, Lsq, 2π) ≈ 0.0 atol = 1e-12
+    @test _dlp_composite_arclength(square, Lsq, 2π + π / 4) ≈ 0.5
+
+    # a half disk: the arc has length pi, the diameter 2, so the junction is at s = pi
+    _, _, Lhd = BilliardGeometry.component_lengths(half_disk)
+    tj = 2π * π / Lhd
+    @test _dlp_composite_arclength(half_disk, Lhd, tj / 2) ≈ π / 2
+    @test _dlp_composite_arclength(half_disk, Lhd, (tj + 2π) / 2) ≈ π + 1
+    @test (@inferred _dlp_composite_arclength(square, Lsq, 1.0)) isa Float64
 end
 
 @testset "evaluate_points: node count with symmetry" begin

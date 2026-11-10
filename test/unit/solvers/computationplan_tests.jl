@@ -51,9 +51,10 @@ end
 end
 
 @testset "ComputationPlan" begin
-    solver = BeynSolver(DoubleLayerPotentialSolver(10.0, CircleBilliard(1.0)))
+    circle = CircleBilliard(1.0)
+    solver = BeynSolver(DoubleLayerPotentialSolver(10.0, circle))
     mem = MemoryEstimate(2.0^30, 2.0^29)
-    mkplan(windows, notes=String[]) = ComputationPlan(solver, 10.0, 12.0, 7.25, 3.0, 4.0, windows, mem, 4, notes)
+    mkplan(windows, notes=String[]) = ComputationPlan(solver, circle, nothing, 10.0, 12.0, 7.25, 3.0, 4.0, windows, mem, 4, notes)
 
     @testset "constructor and field types" begin
         ws = [WindowPlan(10.5, 0.5, 2.0, 40, 80), WindowPlan(11.5, 0.5, 3.0, 50, 100)]
@@ -61,6 +62,8 @@ end
         @test plan isa ComputationPlan{Float64,typeof(solver)}
         @test isconcretetype(typeof(plan))
         @test plan.solver === solver
+        @test plan.billiard === circle
+        @test plan.basis === nothing
         @test (plan.k1, plan.k2) == (10.0, 12.0)
         @test plan.expected_total_states == 7.25
         @test (plan.density_k1, plan.density_k2) == (3.0, 4.0)
@@ -73,7 +76,7 @@ end
         @test fieldtype(typeof(plan), :notes) === Vector{String}
         @test fieldtype(typeof(plan), :nthreads) === Int
         @test @inferred(mkplan(ws)) isa ComputationPlan
-        @test_throws MethodError ComputationPlan(solver, 10.0, 12.0, 7.25, 3.0, 4.0, WindowPlan{Float32}[], mem, 4, String[])
+        @test_throws MethodError ComputationPlan(solver, circle, nothing, 10.0, 12.0, 7.25, 3.0, 4.0, WindowPlan{Float32}[], mem, 4, String[])
     end
 
     @testset "show text/plain: odd window count" begin
@@ -81,35 +84,49 @@ end
         out = cp_show(mkplan(ws))
         @test occursin("ComputationPlan for BeynSolver", out)
         @test occursin("[10.0, 12.0]", out)
-        @test occursin("windows         : 3", out)
+        for section in ("Solver", "Spectrum", "Windows", "Discretization", "Memory (upper-bound estimate)", "Resources")
+            @test occursin("\n" * section, out)
+        end
+        @test occursin("  count           : 3", out)
         @test occursin("min 1.0, median 3.0, max 5.0", out)
-        @test occursin("dim             : 40 to 60", out)
-        @test occursin("matrix dim      : 80 to 120", out)
-        @test occursin("threads         : 4", out)
-        @test !occursin("note", out)
+        @test occursin("  boundary pts    : 40 to 60  (full boundary)", out)
+        @test occursin("  matrix dim      : 80 to 120", out)
+        @test occursin("  julia threads   : 4", out)
+        @test occursin("  blas threads ", out)
+        @test !occursin("Notes", out)
+        @test occursin("  working peak    : ", out)
+        @test occursin("  retained        : ", out)
+        @test occursin("<- peak", out)
     end
 
     @testset "show text/plain: even window count" begin
         ws = [WindowPlan(10.5, 0.5, 4.0, 40, 80), WindowPlan(11.0, 0.5, 1.0, 60, 120),
               WindowPlan(11.5, 0.5, 2.0, 50, 100), WindowPlan(12.0, 0.5, 8.0, 50, 100)]
         out = cp_show(mkplan(ws))
-        @test occursin("windows         : 4", out)
+        @test occursin("  count           : 4", out)
         @test occursin("min 1.0, median 3.0, max 8.0", out)   # median of (1,2,4,8) = (2+4)/2
     end
 
     @testset "show text/plain: zero windows" begin
         out = cp_show(mkplan(WindowPlan{Float64}[]))
-        @test occursin("windows         : 0", out)
+        @test occursin("  count           : 0", out)
         @test !occursin("states/window", out)
         @test !occursin("matrix dim", out)
-        @test occursin("threads         : 4", out)
+        @test !occursin("Discretization", out)
+        @test occursin("Memory (upper-bound estimate)", out)
+        @test occursin("  working         : ", out)       # no stage breakdown without windows
+        @test occursin("  retained        : ", out)
+        @test !occursin("working peak", out)
+        @test !occursin("<- peak", out)
+        @test occursin("  julia threads   : 4", out)
     end
 
     @testset "show text/plain: notes" begin
         out = cp_show(mkplan(WindowPlan{Float64}[], ["first adjustment", "second warning"]))
-        @test occursin("note            : first adjustment", out)
-        @test occursin("note            : second warning", out)
-        @test count("note            :", out) == 2
+        @test occursin("\nNotes\n  - first adjustment", out)
+        @test occursin("\n  - second warning", out)
+        @test count("\n  - ", out) == 2
+        @test endswith(out, "second warning")
     end
 
     @testset "show compact" begin
@@ -328,6 +345,69 @@ end
         @test plan_small.k1 ≈ k1
     end
 
+    @testset "window_overlap" begin
+        default = plan_computation(vs, basis, rect, 20.0, 22.0, 0.05)
+        explicit = plan_computation(vs, basis, rect, 20.0, 22.0, 0.05; window_overlap=0.5)
+        @test [w.kcenter for w in explicit.windows] == [w.kcenter for w in default.windows]
+        @test [w.halfwidth for w in explicit.windows] == [w.halfwidth for w in default.windows]
+
+        for o in (0.0, 0.25)
+            plan = plan_computation(vs, basis, rect, 20.0, 22.0, 0.05; window_overlap=o)
+            centers, widths = sweep_windows(20.0, 22.0, 0.05; window_overlap=o)
+            @test [w.kcenter for w in plan.windows] == centers
+            @test [w.halfwidth for w in plan.windows] == widths
+            @test all(w.halfwidth == 0.05 for w in plan.windows)
+            @test all(w.dim == vsdim(vs, w.kcenter) for w in plan.windows)
+        end
+
+        zero_overlap = plan_computation(vs, basis, rect, 20.0, 22.0, 0.05; window_overlap=0.0)
+        quarter = plan_computation(vs, basis, rect, 20.0, 22.0, 0.05; window_overlap=0.25)
+        @test length(zero_overlap.windows) < length(quarter.windows) < length(default.windows)
+        # o = 0: windows are spaced 2*halfwidth apart and adjacent
+        kc = [w.kcenter for w in zero_overlap.windows]
+        @test all(diff(kc) .≈ 2 * 0.05)
+        @test kc[end] + zero_overlap.windows[end].halfwidth >= 22.0
+        # same interval, same expected total states
+        @test zero_overlap.expected_total_states ≈ default.expected_total_states
+        @test zero_overlap.memory == QuantumBilliards.estimate_memory(vs, basis, rect, 20.0, 22.0, 0.05; window_overlap=0.0)
+
+        @test_throws ArgumentError plan_computation(vs, basis, rect, 20.0, 22.0, 0.05; window_overlap=0.6)
+        @test_throws ArgumentError plan_computation(vs, basis, rect, 20.0, 22.0, 0.05; window_overlap=-0.1)
+        @test_throws ArgumentError plan_computation(vs, basis, rect, 10, 30; window_overlap=0.6)
+    end
+
+    @testset "N1,N2 nlevels is levels in the full window" begin
+        fo = basis.symmetries !== nothing
+        dens(k) = spectral_density(k, rect; fundamental_only=fo)
+        for nl in (0.35, 0.7)
+            plan = plan_computation(vs, basis, rect, 10, 30; nlevels=nl)
+            # default overlap: widths[i] = dk(centers[i]) exactly, half-width = nlevels / (2 density)
+            @test all(isapprox(w.halfwidth, nl / (2 * dens(w.kcenter)); rtol=1e-10) for w in plan.windows)
+            # a full window holds about nlevels mean levels (area-only Weyl count vs density with perimeter term: ~20% at k ~ 10)
+            @test all(isapprox(w.expected_states, nl; rtol=0.3) for w in plan.windows)
+        end
+        p035 = plan_computation(vs, basis, rect, 10, 30; nlevels=0.35)
+        p070 = plan_computation(vs, basis, rect, 10, 30; nlevels=0.7)
+        @test p070.windows[1].halfwidth ≈ 2 * p035.windows[1].halfwidth
+        @test length(p070.windows) < length(p035.windows)
+
+        # first window is centered at k1 with half-width nlevels / (2 density(k1))
+        @test p035.windows[1].kcenter ≈ p035.k1
+
+        # default nlevels is 6
+        pdef = plan_computation(vs, basis, rect, 10, 30)
+        p6 = plan_computation(vs, basis, rect, 10, 30; nlevels=6)
+        @test [w.kcenter for w in pdef.windows] == [w.kcenter for w in p6.windows]
+        @test [w.halfwidth for w in pdef.windows] == [w.halfwidth for w in p6.windows]
+        @test pdef.windows[1].halfwidth ≈ 6 / (2 * dens(pdef.k1))
+
+        # window_overlap is forwarded in the N1,N2 form
+        p_o0 = plan_computation(vs, basis, rect, 10, 30; nlevels=0.35, window_overlap=0.0)
+        @test length(p_o0.windows) < length(p035.windows)
+        @test p_o0.windows[1].halfwidth ≈ p035.windows[1].halfwidth
+        @test all(isapprox(w.halfwidth, 0.35 / (2 * dens(w.kcenter)); rtol=0.05) for w in p_o0.windows)
+    end
+
     @testset "Taylor panels" begin
         R = 0.5
         tbasis = RealPlaneWaves(6; use_taylor=true, taylor_radius=R)
@@ -393,6 +473,71 @@ end
         @test all(w.halfwidth == 0.2 for w in plan.windows)
         @test length(plan.windows) < length(plan_computation(eb, rect, 20.0, 22.0).windows)
         @test_throws ArgumentError plan_computation(eb, rect, 20.0, 22.0; dk=k -> 0.0)
+    end
+
+    @testset "window_overlap" begin
+        default = plan_computation(eb, rect, 20.0, 22.0)
+        explicit = plan_computation(eb, rect, 20.0, 22.0; window_overlap=0.5)
+        @test [w.kcenter for w in explicit.windows] == [w.kcenter for w in default.windows]
+
+        # _ebim_windows: inclusive layout, overlap property, forwarded keyword
+        for o in (0.0, 0.25, 0.5)
+            centers, dks, nl = _ebim_windows(eb, rect, 20.0, 22.0, dkf; window_overlap=o)
+            @test centers[1] == 20.0
+            @test centers[end] + dks[end] >= 22.0
+            @test all(nl .>= 1)
+            for i in 2:length(centers)
+                @test (centers[i-1] + dks[i-1]) - (centers[i] - dks[i]) ≈ 2 * o * dks[i] atol = 1e-12
+            end
+        end
+        c_inc, _, _ = _ebim_windows(eb, rect, 20.0, 22.0, k -> 0.5; window_overlap=0.0)
+        @test c_inc == [20.0, 21.0, 22.0]
+        # exact edge: the EBIM layout adds one more window than sweep_windows
+        @test length(first(_ebim_windows(eb, rect, 20.0, 21.0, k -> 1.0; window_overlap=0.0))) ==
+              length(first(sweep_windows(20.0, 21.0, k -> 1.0; window_overlap=0.0))) + 1
+        @test_throws ArgumentError _ebim_windows(eb, rect, 20.0, 22.0, dkf; window_overlap=0.6)
+
+        # plan windows
+        zero_overlap = plan_computation(eb, rect, 20.0, 22.0; window_overlap=0.0)
+        quarter = plan_computation(eb, rect, 20.0, 22.0; window_overlap=0.25)
+        centers0, dks0, _ = _ebim_windows(eb, rect, 20.0, 22.0, dkf; window_overlap=0.0)
+        @test [w.kcenter for w in zero_overlap.windows] == centers0
+        @test [w.halfwidth for w in zero_overlap.windows] ≈ dks0
+        @test length(zero_overlap.windows) < length(quarter.windows) < length(default.windows)
+        @test zero_overlap.expected_total_states ≈ default.expected_total_states
+        @test all(w.dim == w.matrix_dim && w.dim > 0 for w in zero_overlap.windows)
+        for w in zero_overlap.windows
+            @test w.expected_states ≈ weyl_window_count(rect, w.kcenter - w.halfwidth, 2 * w.halfwidth)
+        end
+
+        # constant dk: spacing 2*(1-o)*dk
+        plan = plan_computation(eb, rect, 20.0, 22.0; dk=k -> 0.2, window_overlap=0.25)
+        @test all(diff([w.kcenter for w in plan.windows]) .≈ 2 * (1 - 0.25) * 0.2)
+
+        # memory estimate follows the same layout
+        @test zero_overlap.memory == QuantumBilliards.estimate_memory(eb, zero_overlap.windows, zero_overlap.expected_total_states)
+        @test zero_overlap.memory == QuantumBilliards.estimate_memory(eb, rect, 20.0, 22.0; dk=dkf, window_overlap=0.0)
+
+        @test_throws ArgumentError plan_computation(eb, rect, 20.0, 22.0; window_overlap=0.6)
+        @test_throws ArgumentError plan_computation(eb, rect, 20.0, 22.0; window_overlap=-0.1)
+        @test_throws ArgumentError plan_computation(eb, rect, 10, 30; window_overlap=0.6)
+    end
+
+    @testset "N1,N2 nlevels is levels in the full window" begin
+        dens(k) = spectral_density(k, rect)
+        for nl in (1.0, 2.0)
+            plan = plan_computation(eb, rect, 10, 30; nlevels=nl)
+            # default overlap: widths[i] = dk(centers[i]), half-width = nlevels / (2 density)
+            @test all(isapprox(w.halfwidth, nl / (2 * dens(w.kcenter)); rtol=1e-10) for w in plan.windows)
+            @test all(isapprox(w.expected_states, nl; rtol=0.3) for w in plan.windows)
+        end
+        p1 = plan_computation(eb, rect, 10, 30; nlevels=1.0)
+        p2 = plan_computation(eb, rect, 10, 30; nlevels=2.0)
+        @test p2.windows[1].halfwidth ≈ 2 * p1.windows[1].halfwidth
+        @test length(p2.windows) < length(p1.windows)
+        p1_o0 = plan_computation(eb, rect, 10, 30; nlevels=1.0, window_overlap=0.0)
+        @test length(p1_o0.windows) < length(p1.windows)
+        @test p1_o0.windows[1].halfwidth ≈ p1.windows[1].halfwidth
     end
 
     @testset "N1,N2 form" begin
@@ -513,7 +658,8 @@ end
             @test e_big.working > e_small.working                              # monotone in window dims
             @test e_small.working ≈ _working_bytes(s, 40.0, 80.0)
             e_mix = estimate_memory(s, [small, big, small], 6.0)
-            @test e_mix.working == e_big.working                                # max over windows
+            @test e_mix.working >= e_big.working                                # max over windows, window count only enters through nw
+            @test e_mix.working == _working_bytes(s, 80.0, 160.0; nw=3)
             @test e_mix.working == estimate_memory(s, [big, small, small], 6.0).working
             @test e_mix.persistent ≈ _persistent_bytes(s, 3, 6.0, 80.0, 160.0)  # totals / max dims
             e0 = estimate_memory(s, ws, 0.0)
@@ -593,8 +739,8 @@ end
         end
         # the largest window dominates the working set
         plan = plan_computation(beyn, rect, 20.0, 40.0; tune=false)
-        wmax = argmax(w -> _working_bytes(beyn, Float64(w.dim), Float64(w.matrix_dim)), plan.windows)
-        @test plan.memory.working == _working_bytes(beyn, Float64(wmax.dim), Float64(wmax.matrix_dim))
+        wmax = argmax(w -> _working_bytes(beyn, Float64(w.dim), Float64(w.matrix_dim); nw=length(plan.windows)), plan.windows)
+        @test plan.memory.working == _working_bytes(beyn, Float64(wmax.dim), Float64(wmax.matrix_dim); nw=length(plan.windows))
     end
 
     @testset "ExpandedBIMSolver" begin
@@ -615,6 +761,286 @@ end
         @test single == estimate_memory(vs, pw, _single_window(vs, rect, 20.0, 22.0; vs_basis=pw), expected_states(rect, 20.0, 22.0))
         @test single.working > 0
         @test estimate_memory(vs, pw, rect, 20.0, 22.0, nothing) == single
+    end
+end
+
+# Per-solver memory breakdown (src/solvers/memoryestimates.jl) and its use in the ComputationPlan memory section.
+using QuantumBilliards: _memory_stages, _memory_retained, _stage_peak, _format_bytes, _plan_memory_items
+
+cp_stage_labels(stages) = first.(stages)
+cp_valid_items(items) = all(!isempty(first(x)) && isfinite(last(x)) && last(x) > 0 for x in items)
+
+@testset "_memory_stages and _memory_retained" begin
+    rect = RectangleBilliard(1.0, 0.5)
+    kernel = DoubleLayerPotentialSolver(4.0, rect)
+    beyn = BeynSolver(kernel; nlevels=20)
+    cork = CORKSolver(kernel; nlevels=20)
+    eb = ExpandedBIMSolver(kernel)
+    vs = VerginiSaracenoSolver(2.0, 5.0)
+    pw = RealPlaneWaves(6; use_taylor=false)
+    tpw = RealPlaneWaves(6; use_taylor=true, taylor_radius=0.5)
+    Nf, M, ns = 200.0, 100.0, 10.0
+
+    @testset "stage and retained entries are well formed" begin
+        for s in (beyn, cork, eb)
+            stages = _memory_stages(s, Nf, M)
+            @test stages isa Vector{Pair{String,Float64}}
+            @test !isempty(stages)
+            @test cp_valid_items(stages)
+            retained = _memory_retained(s, 3, ns, Nf, M)
+            @test retained isa Vector{Pair{String,Float64}}
+            @test cp_valid_items(retained)
+        end
+        for b in (pw, tpw)
+            stages = _memory_stages(vs, b, Nf, M)
+            @test stages isa Vector{Pair{String,Float64}}
+            @test !isempty(stages)
+            @test cp_valid_items(stages)
+            @test cp_valid_items(_memory_retained(with_params(vs; eigenvectors=true), b, ns, Nf))
+        end
+    end
+
+    @testset "_stage_peak" begin
+        @test _stage_peak(Pair{String,Float64}[]) == 0.0
+        @test _stage_peak(["a" => 1.0, "b" => 5.0, "c" => 3.0]) == 5.0
+        for s in (beyn, cork, eb)
+            @test _stage_peak(_memory_stages(s, Nf, M)) == _working_bytes(s, Nf, M)
+            @test _stage_peak(_memory_stages(s, Nf, M; nw=4)) == _working_bytes(s, Nf, M; nw=4)
+        end
+        for b in (pw, tpw)
+            @test _stage_peak(_memory_stages(vs, b, Nf, M)) == _working_bytes(vs, b, Nf, M)
+        end
+    end
+
+    @testset "retained sum equals _persistent_bytes" begin
+        for s in (beyn, cork, eb)
+            @test sum(last, _memory_retained(s, 3, ns, Nf, M); init=0.0) == _persistent_bytes(s, 3, ns, Nf, M)
+        end
+        for b in (pw, tpw), ev in (true, false)
+            v = with_params(vs; eigenvectors=ev)
+            @test sum(last, _memory_retained(v, b, ns, Nf); init=0.0) == _persistent_bytes(v, b, ns, Nf)
+        end
+    end
+
+    @testset "Beyn stages" begin
+        taylor = with_params(beyn; use_taylor=true, use_chebyshev=false)
+        direct = with_params(beyn; use_taylor=false, use_chebyshev=false)
+        lt = cp_stage_labels(_memory_stages(taylor, Nf, M))
+        ld = cp_stage_labels(_memory_stages(direct, Nf, M))
+        @test lt != ld
+        @test any(startswith("degree tuning"), lt)
+        @test any(startswith("contour matrices"), lt)
+        @test any(startswith("streamed contour sweep"), ld)
+        @test !any(startswith("degree tuning"), ld)
+        @test !any(startswith("streamed contour sweep"), lt)
+
+        cheb = with_params(beyn; use_taylor=false, use_chebyshev=true)
+        lc = cp_stage_labels(_memory_stages(cheb, Nf, M))
+        @test any(startswith("contour matrices"), lc)
+        @test !any(startswith("degree tuning"), lc)
+        @test !any(startswith("streamed contour sweep"), lc)
+
+        for s in (taylor, direct, cheb)
+            on = cp_stage_labels(_memory_stages(with_params(s; imag_k_check=true), Nf, M))
+            off = cp_stage_labels(_memory_stages(with_params(s; imag_k_check=false), Nf, M))
+            @test any(startswith("imaginary-k check"), on)
+            @test !any(startswith("imaginary-k check"), off)
+            @test length(on) == length(off) + 1
+        end
+    end
+
+    @testset "Beyn imaginary-k stage grows with window count" begin
+        s = with_params(beyn; imag_k_check=true)
+        imag(nw) = last(only(filter(p -> startswith(first(p), "imaginary-k check"), _memory_stages(s, Nf, M; nw=nw))))
+        @test imag(4) > imag(1)
+        @test imag(8) > imag(4)
+        @test _working_bytes(s, Nf, M; nw=1000) > _working_bytes(s, Nf, M; nw=1)
+        off = with_params(beyn; imag_k_check=false)
+        @test _working_bytes(off, Nf, M; nw=1000) == _working_bytes(off, Nf, M; nw=1)
+        # the other stages do not depend on nw
+        other(nw) = [p for p in _memory_stages(s, Nf, M; nw=nw) if !startswith(first(p), "imaginary-k check")]
+        @test other(1) == other(7)
+    end
+
+    @testset "Beyn retained" begin
+        base = with_params(beyn; imag_k_check=false, eigenvectors=false)
+        r0 = _memory_retained(base, 3, ns, Nf, M)
+        @test length(r0) == 1                                     # boundary points are always retained
+        r_imag = _memory_retained(with_params(base; imag_k_check=true), 3, ns, Nf, M)
+        r_vec = _memory_retained(with_params(base; eigenvectors=true), 3, ns, Nf, M)
+        @test length(r_imag) == 2
+        @test length(r_vec) == 3
+        @test sum(last, r_vec) > sum(last, r_imag) > sum(last, r0)
+        @test sum(last, _memory_retained(base, 6, ns, Nf, M)) > sum(last, r0)    # boundary points scale with the window count
+    end
+
+    @testset "CORK" begin
+        labels = cp_stage_labels(_memory_stages(cork, Nf, M))
+        @test length(labels) == 2
+        @test any(startswith("polynomial tuning"), labels)
+        @test any(startswith("Krylov solve"), labels)
+        @test isempty(_memory_retained(with_params(cork; eigenvectors=false), 3, ns, Nf, M))
+        @test !isempty(_memory_retained(with_params(cork; eigenvectors=true), 3, ns, Nf, M))
+    end
+
+    @testset "ExpandedBIMSolver" begin
+        taylor = with_params(eb; use_taylor=true)
+        direct = with_params(eb; use_taylor=false)
+        lt = cp_stage_labels(_memory_stages(taylor, Nf, M))
+        ld = cp_stage_labels(_memory_stages(direct, Nf, M))
+        @test length(lt) == 2
+        @test any(startswith("panel assembly"), lt)
+        @test any(startswith("Horner evaluation"), lt)
+        @test length(ld) == 1
+        @test startswith(only(ld), "direct assembly")
+        @test isempty(_memory_retained(taylor, 3, ns, Nf, M))
+        @test isempty(_memory_retained(direct, 3, ns, Nf, M))
+    end
+
+    @testset "VerginiSaraceno" begin
+        lp = cp_stage_labels(_memory_stages(vs, pw, Nf, M))
+        lt = cp_stage_labels(_memory_stages(vs, tpw, Nf, M))
+        @test length(lp) == 1
+        @test startswith(only(lp), "window solve")
+        @test length(lt) == 2
+        @test any(startswith("Taylor validation"), lt)
+        @test any(startswith("panel solve"), lt)
+        @test isempty(_memory_retained(with_params(vs; eigenvectors=false), pw, ns, Nf))
+        @test isempty(_memory_retained(with_params(vs; eigenvectors=false), tpw, ns, Nf))
+        for b in (pw, tpw)
+            r = _memory_retained(with_params(vs; eigenvectors=true), b, ns, Nf)
+            @test length(r) == 1
+            @test startswith(only(r).first, "eigenstates")
+        end
+    end
+
+    @testset "working set is monotone in Nf and M" begin
+        for s in (beyn, cork, eb, with_params(beyn; use_taylor=false), with_params(eb; use_taylor=false))
+            w = _working_bytes(s, Nf, M)
+            @test _working_bytes(s, 2Nf, M) >= w
+            @test _working_bytes(s, Nf, 2M) > w
+            @test _working_bytes(s, 4Nf, 4M) > w
+        end
+        for b in (pw, tpw)
+            w = _working_bytes(vs, b, Nf, M)
+            @test _working_bytes(vs, b, 2Nf, M) > w
+            @test _working_bytes(vs, b, Nf, 2M) > w
+        end
+    end
+end
+
+@testset "_format_bytes" begin
+    @test _format_bytes(0.0) == "0 B"
+    @test _format_bytes(512.0) == "512 B"
+    @test _format_bytes(2.0^10 - 1) == "1023 B"
+    @test _format_bytes(2.0^10) == "1.0 KiB"
+    @test _format_bytes(1.5 * 2.0^10) == "1.5 KiB"
+    @test _format_bytes(2.0^20) == "1.0 MiB"
+    @test _format_bytes(2.5 * 2.0^20) == "2.5 MiB"
+    @test _format_bytes(2.0^30) == "1.0 GiB"
+    @test _format_bytes(3.25 * 2.0^30) == "3.25 GiB"
+    @test _format_bytes(2.0^40) == "1024.0 GiB"                # no unit above GiB
+    @test _format_bytes(2^20) == "1.0 MiB"                      # integer input
+    @test _format_bytes(2.0^20 - 2.0^10) isa String
+    @test endswith(_format_bytes(2.0^20 - 2.0^10), " KiB")
+    @test endswith(_format_bytes(2.0^30 - 2.0^20), " MiB")
+    @test sprint(show, MemoryEstimate(2.0^30, 2.0^20)) == "MemoryEstimate(working = 1.0 GiB, persistent = 1.0 MiB)"
+end
+
+@testset "_plan_memory_items and the show memory section" begin
+    rect = RectangleBilliard(1.0, 0.5)
+    kernel = DoubleLayerPotentialSolver(4.0, rect)
+    beyn = BeynSolver(kernel; nlevels=20)
+    cork = CORKSolver(kernel; nlevels=20)
+    eb = ExpandedBIMSolver(kernel)
+    vs = VerginiSaracenoSolver(2.0, 5.0)
+    pw = RealPlaneWaves(6; use_taylor=false)
+    tpw = RealPlaneWaves(6; use_taylor=true, taylor_radius=0.5)
+
+    function check_memory_plan(plan)
+        stages, retained = _plan_memory_items(plan)
+        @test !isempty(plan.windows)
+        @test !isempty(stages)
+        @test cp_valid_items(stages)
+        @test cp_valid_items(retained)
+        @test _stage_peak(stages) == plan.memory.working
+        @test sum(last, retained; init=0.0) ≈ plan.memory.persistent
+        out = cp_show(plan)
+        @test occursin("Memory (upper-bound estimate)", out)
+        @test occursin("<- peak", out)
+        @test occursin("working peak", out)
+        @test occursin("  total           : ", out)
+        @test occursin("GC slack", out)
+        @test count("<- peak", out) >= 1
+        for (label, _) in stages
+            @test occursin(label, out)
+        end
+        if isempty(retained)
+            @test !occursin("retained until the sweep ends", out)
+        else
+            @test occursin("retained until the sweep ends", out)
+            for (label, _) in retained
+                @test occursin(label, out)
+            end
+        end
+        # the peak marker sits on a stage line that holds the largest stage
+        peak_lines = filter(l -> occursin("<- peak", l), split(out, '\n'))
+        @test all(any(occursin(first(st), l) for st in stages if last(st) == _stage_peak(stages)) for l in peak_lines)
+        return stages, retained
+    end
+
+    @testset "Beyn" begin
+        for s in (beyn, with_params(beyn; use_taylor=false), with_params(beyn; eigenvectors=false, imag_k_check=false))
+            plan = plan_computation(s, rect, 20.0, 40.0; tune=false)
+            @test length(plan.windows) > 1
+            stages, retained = check_memory_plan(plan)
+            @test plan.memory.working == _working_bytes(plan.solver, Float64(maximum(w -> w.dim, plan.windows)), Float64(maximum(w -> w.matrix_dim, plan.windows)); nw=length(plan.windows))
+            @test !isempty(retained)                      # boundary points are always retained
+        end
+        plan = plan_computation(beyn, rect, 20.0, 40.0; tune=false)
+        stages, _ = _plan_memory_items(plan)
+        @test any(startswith("imaginary-k check"), cp_stage_labels(stages))
+    end
+
+    @testset "CORK" begin
+        for ev in (true, false)
+            plan = plan_computation(with_params(cork; eigenvectors=ev), rect, 20.0, 40.0; tune=false)
+            _, retained = check_memory_plan(plan)
+            @test isempty(retained) == !ev
+        end
+    end
+
+    @testset "ExpandedBIMSolver" begin
+        for s in (eb, with_params(eb; use_taylor=false))
+            plan = plan_computation(s, rect, 20.0, 22.0; tune=false)
+            _, retained = check_memory_plan(plan)
+            @test isempty(retained)
+            @test plan.memory.persistent == 0.0
+        end
+    end
+
+    @testset "VerginiSaraceno" begin
+        for b in (pw, tpw)
+            plan = plan_computation(vs, b, rect, 20.0, 22.0, 0.05; tune=false)
+            stages, _ = check_memory_plan(plan)
+            @test plan.basis === b
+            @test (length(stages) == 2) == QuantumBilliards.uses_taylor(b)
+            for ev in (true, false)
+                p = plan_computation(with_params(vs; eigenvectors=ev), b, rect, 20.0, 22.0, 0.05; tune=false)
+                _, retained = check_memory_plan(p)
+                @test isempty(retained) == !ev
+            end
+        end
+    end
+
+    @testset "empty window list" begin
+        plan = ComputationPlan(beyn, rect, nothing, 20.0, 40.0, 5.0, 1.0, 2.0, WindowPlan{Float64}[], MemoryEstimate(2.0^20, 2.0^10), 1, String[])
+        out = cp_show(plan)
+        @test occursin("Memory (upper-bound estimate)", out)
+        @test occursin("  working         : 1.0 MiB", out)
+        @test occursin("  retained        : 1.0 KiB", out)
+        @test !occursin("<- peak", out)
+        @test !occursin("working peak", out)
     end
 end
 

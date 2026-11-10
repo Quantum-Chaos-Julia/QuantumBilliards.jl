@@ -65,6 +65,14 @@ function _hole_group_wall_length(billiard::AbsBilliard, ::Type{T}) where {T<:Rea
     return sum(_hole_group_wall_length(leaf, keys, T) for h in billiard.fundamental_domain.holes for leaf in hole_leaves(h); init=zero(T))
 end
 
+# Length of the outer `QuantumSolverIgnore` curves of the fundamental frame. They are Dirichlet walls that the
+# basis satisfies automatically, so they belong to the Weyl boundary length although solvers skip them.
+_ignored_curves(domain::AbsSimpleDomain) = domain.boundary
+_ignored_curves(domain::AbsCompositeDomain) = AbsCurve[crv for sd in domain.subdomains for crv in sd.boundary]
+_ignored_curves(domain::AbsMultiplyConnectedDomain) = AbsCurve[crv for sd in domain.subdomains for crv in sd.boundary]
+_ignored_length(billiard::AbsBilliard, ::Type{T}) where {T<:Real} =
+    sum(crv.length for crv in _ignored_curves(billiard.fundamental_domain) if crv.bc isa QuantumSolverIgnore; init=zero(T))
+
 # Area `A` and boundary length `L` of the Weyl law. With `fundamental_only` the domain is the desymmetrized
 # fundamental domain with Dirichlet conditions on the symmetry walls, so the wall cuts add to `L`. For holes
 # with a nonempty outer registry the tessellation identity gives
@@ -72,15 +80,16 @@ end
 function _weyl_area_length(billiard::AbsBilliard, fundamental_only::Bool)
     A = fundamental_only ? fundamental_area(billiard) : area(billiard)
     T = typeof(A)
+    ignored = _ignored_length(billiard, T)
     if !fundamental_only
-        L = _boundary_length(full_boundary(billiard))
+        L = _boundary_length(full_boundary(billiard)) + (length(billiard.symmetries) + 1) * ignored
     elseif _has_reduced_holes(billiard) && isempty(get_symmetry_group(billiard))
-        L = _boundary_length(full_boundary(billiard))
+        L = _boundary_length(full_boundary(billiard)) + ignored
     elseif _has_reduced_holes(billiard)
         n = length(get_symmetry_group(billiard)) + 1
-        L = (_boundary_length(full_boundary(billiard)) - _hole_group_wall_length(billiard, T)) / n + _outer_wall_length(billiard, T)
+        L = (_boundary_length(full_boundary(billiard)) - _hole_group_wall_length(billiard, T)) / n + _outer_wall_length(billiard, T) + ignored
     else
-        L = _boundary_length(get_boundary_curves(billiard)) + _outer_wall_length(billiard, T)
+        L = _boundary_length(get_boundary_curves(billiard)) + _outer_wall_length(billiard, T) + ignored
     end
     return A, L::T
 end

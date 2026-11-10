@@ -17,7 +17,7 @@
 # Dirichlet-desymmetrized Weyl law: RectangleBilliard(1.0, 0.5) with fundamental_only = true against the exact all-Dirichlet quadrant count.
 
 using StaticArrays: SVector
-using QuantumBilliards: k_at_state, corner_correction, _has_reduced_holes, _weyl_area_length, _weyl_angles, _weyl_inputs
+using QuantumBilliards: k_at_state, corner_correction, _has_reduced_holes, _weyl_area_length, _weyl_angles, _weyl_inputs, _ignored_length
 
 @testset "corner_correction" begin
     # per-corner term (pi^2 - c^2)/(24 pi c)
@@ -272,6 +272,29 @@ end
     @test k_range_for_states(r, 10, 50) == k_range_for_states(r, 10, 50; fundamental_only=false)
     @test _weyl_inputs(r, false)[1:2] == (2.0, 6.0)
     @test k_at_state(30, r) != k_at_state(30, r; fundamental_only=true)
+end
+
+@testset "Weyl boundary length includes QuantumSolverIgnore edges" begin
+    # TriangleBilliard(pi/2, 1.0): right isosceles triangle with legs 1 and hypotenuse sqrt(2), perimeter 2 + sqrt(2).
+    # Ignored edges are Dirichlet walls the basis satisfies automatically, so L stays the full perimeter whichever edge is virtual.
+    perimeter = 2 + sqrt(2)
+    Sp, Ig = SpecularReflection(), QuantumSolverIgnore()
+    for bcs in ([Sp, Sp, Sp], [Ig, Sp, Sp], [Sp, Ig, Sp], [Sp, Sp, Ig], [Ig, Ig, Sp])
+        tri = TriangleBilliard(pi / 2, 1.0; bcs)
+        for fo in (false, true)
+            A, L = _weyl_area_length(tri, fo)
+            @test L ≈ perimeter
+            @test _weyl_inputs(tri, fo)[2] ≈ perimeter
+        end
+        # the ignored length is exactly what the physical boundary is missing
+        n_ign = count(==(Ig), bcs)
+        @test _ignored_length(tri, Float64) <= perimeter + 1e-12
+        @test (n_ign == 0) == iszero(_ignored_length(tri, Float64))
+    end
+    @test _weyl_area_length(TriangleBilliard(pi / 2, 1.0), false)[1] ≈ 1 / 2
+    # one virtual leg of length 1 or the hypotenuse sqrt(2): the ignored length is that edge
+    ign = [_ignored_length(TriangleBilliard(pi / 2, 1.0; bcs=circshift([Ig, Sp, Sp], s)), Float64) for s in 0:2]
+    @test sort(ign) ≈ sort([1.0, 1.0, sqrt(2)])
 end
 
 ################################################################################

@@ -61,12 +61,14 @@ struct WindowPlan{T<:Real}
 end
 
 """
-    ComputationPlan{T<:Real,S}
+    ComputationPlan{T<:Real,S,B,Ba}
 
 Side-effect-free description of a `compute_spectrum` run.
 
 ## Fields
 * `solver::S`: Solver with resolved parameters.
+* `billiard::B`: Billiard geometry.
+* `basis::Ba`: Basis for basis methods, `nothing` for boundary-integral methods.
 * `k1::T`, `k2::T`: Requested interval.
 * `expected_total_states::Float64`: Weyl estimate for the whole interval.
 * `density_k1::Float64`, `density_k2::Float64`: Mean density of states at the interval ends.
@@ -75,8 +77,10 @@ Side-effect-free description of a `compute_spectrum` run.
 * `nthreads::Int`: Julia threads available.
 * `notes::Vector{String}`: Parameter adjustments and warnings.
 """
-struct ComputationPlan{T<:Real,S}
+struct ComputationPlan{T<:Real,S,B<:AbsBilliard,Ba}
     solver::S
+    billiard::B
+    basis::Ba
     k1::T
     k2::T
     expected_total_states::Float64
@@ -88,23 +92,104 @@ struct ComputationPlan{T<:Real,S}
     notes::Vector{String}
 end
 
+_plan_symmetry_label(::Nothing) = "none (full domain)"
+_plan_symmetry_label(sym) = "fundamental domain, " * string(nameof(typeof(sym)))
+
+_plan_range(x) = minimum(x) == maximum(x) ? string(minimum(x)) : string(minimum(x), " to ", maximum(x))
+
+_plan_kernel(solver::AcceleratedBasisSolver) = nothing
+_plan_kernel(solver) = string(nameof(typeof(solver.kernel)))
+
+_plan_backend(::AcceleratedBasisSolver) = nothing
+_plan_backend(s::BeynSolver) = s.use_chebyshev ? "Chebyshev interpolation, degrees $(s.cheb_config.M_h)/$(s.cheb_config.M_j) (Hankel/Bessel-J)" : s.use_taylor ? "Taylor-Horner, degree $(s.taylor_degree)" : "direct"
+_plan_backend(s::CORKSolver) = "Chebyshev CORK, degree $(s.p)"
+_plan_backend(s::ExpandedBIMSolver) = s.use_taylor ? "Taylor panels, degree $(s.taylor_degree)" : "direct derivatives"
+
+# Stage and retained-result breakdown behind `plan.memory`, sized by the window with the largest working set.
+function _plan_memory_items(plan::ComputationPlan)
+    w = plan.windows; ns = Float64(plan.expected_total_states)
+    if plan.solver isa AcceleratedBasisSolver
+        big = argmax(x -> _working_bytes(plan.solver, plan.basis, Float64(x.dim), Float64(x.matrix_dim)), w)
+        dim = maximum(x -> Float64(x.dim), w)
+        return _memory_stages(plan.solver, plan.basis, Float64(big.dim), Float64(big.matrix_dim)), _memory_retained(plan.solver, plan.basis, ns, dim)
+    end
+    nw = length(w)
+    big = argmax(x -> _working_bytes(plan.solver, Float64(x.dim), Float64(x.matrix_dim); nw), w)
+    Nf = maximum(x -> Float64(x.dim), w); M = maximum(x -> Float64(x.matrix_dim), w)
+    return _memory_stages(plan.solver, Float64(big.dim), Float64(big.matrix_dim); nw), _memory_retained(plan.solver, nw, ns, Nf, M)
+end
+
+function _write_plan_memory!(io::IO, plan::ComputationPlan)
+    println(io, "Memory (upper-bound estimate)")
+    if isempty(plan.windows)
+        println(io, "  working         : ", _format_bytes(plan.memory.working))
+        println(io, "  retained        : ", _format_bytes(plan.memory.persistent))
+        return nothing
+    end
+    stages, retained = _plan_memory_items(plan)
+    peak = _stage_peak(stages)
+    width = maximum(length(first(x)) for x in Iterators.flatten((stages, retained)))
+    println(io, "  working stages (alive at once; largest window)")
+    for (label, bytes) in stages
+        println(io, "    ", rpad(label, width), " : ", lpad(_format_bytes(bytes), 10), bytes == peak ? "  <- peak" : "")
+    end
+    if !isempty(retained)
+        println(io, "  retained until the sweep ends")
+        for (label, bytes) in retained
+            println(io, "    ", rpad(label, width), " : ", lpad(_format_bytes(bytes), 10))
+        end
+    end
+    println(io, "  working peak    : ", _format_bytes(plan.memory.working))
+    println(io, "  retained        : ", _format_bytes(plan.memory.persistent))
+    println(io, "  total           : ", _format_bytes(total_bytes(plan.memory)), "  (", _format_bytes(_MEMORY_SLACK * total_bytes(plan.memory)), " with GC slack)")
+end
+
 function Base.show(io::IO, ::MIME"text/plain", plan::ComputationPlan)
     w = plan.windows; n = length(w)
+    is_basis = plan.solver isa AcceleratedBasisSolver
     println(io, "ComputationPlan for ", nameof(typeof(plan.solver)))
+    println(io, "Solver")
+    kernel = _plan_kernel(plan.solver)
+    kernel === nothing || println(io, "  kernel          : ", kernel)
+    plan.basis === nothing || println(io, "  basis           : ", nameof(typeof(plan.basis)))
+    println(io, "  billiard        : ", nameof(typeof(plan.billiard)))
+    backend = _plan_backend(plan.solver)
+    backend === nothing || println(io, "  backend         : ", backend)
+    is_basis || println(io, "  symmetry        : ", _plan_symmetry_label(plan.solver.kernel.symmetry))
+    println(io, "Spectrum")
     println(io, "  interval        : [", plan.k1, ", ", plan.k2, "]")
+    fundamental_only = is_basis ? plan.basis.symmetries !== nothing : plan.solver.kernel.symmetry !== nothing
+    N1 = Float64(state_at_k(plan.k1, plan.billiard; fundamental_only)); N2 = Float64(state_at_k(plan.k2, plan.billiard; fundamental_only))
+    println(io, "  state numbers   : ", round(Int, N1), " to ", round(Int, N2) )
     println(io, "  expected states : ", round(plan.expected_total_states; digits=1), "  (density ", round(plan.density_k1; digits=2), " to ", round(plan.density_k2; digits=2), ")")
-    println(io, "  windows         : ", n)
     if n > 0
-        s = sort!([x.expected_states for x in w]); d = [x.dim for x in w]; m = [x.matrix_dim for x in w]
+        s = sort!([x.expected_states for x in w]); d = [x.dim for x in w]; m = [x.matrix_dim for x in w]; h = [x.halfwidth for x in w]
         smed = isodd(n) ? s[(n+1)÷2] : (s[n÷2] + s[n÷2+1]) / 2
+        println(io, "Windows")
+        println(io, "  count           : ", n)
         println(io, "  states/window   : min ", round(first(s); digits=1), ", median ", round(smed; digits=1), ", max ", round(last(s); digits=1))
-        println(io, "  dim             : ", minimum(d), " to ", maximum(d))
-        println(io, "  matrix dim      : ", minimum(m), " to ", maximum(m))
+        any(>(0), h) && println(io, "  half-width      : ", round(minimum(h); sigdigits=3), " to ", round(maximum(h); sigdigits=3))
+        println(io, "Discretization")
+        if is_basis
+            println(io, "  basis dim       : ", _plan_range(d), "  (square matrices, basis x basis)")
+            println(io, "  boundary pts    : ", _plan_range(m))
+        else
+            println(io, "  boundary pts    : ", _plan_range(d), "  (full boundary)")
+            println(io, "  matrix dim      : ", _plan_range(m), "  (after symmetry reduction)")
+        end
+    else
+        println(io, "Windows")
+        println(io, "  count           : 0")
     end
-    println(io, "  memory          : ", plan.memory)
-    print(io, "  threads         : ", plan.nthreads)
-    for note in plan.notes
-        print(io, "\n  note            : ", note)
+    _write_plan_memory!(io, plan)
+    println(io, "Resources")
+    println(io, "  julia threads   : ", plan.nthreads)
+    print(io, "  blas threads    : ", LinearAlgebra.BLAS.get_num_threads(), " now, up to ", MAX_BLAS_THREADS, " in heavy kernels")
+    if !isempty(plan.notes)
+        print(io, "\nNotes")
+        for note in plan.notes
+            print(io, "\n  - ", note)
+        end
     end
 end
 
@@ -129,18 +214,51 @@ function _cork_intervals(solver::CORKSolver, billiard::AbsBilliard, k1, k2)
     return intervals
 end
 
-function _assemble_plan(solver, billiard::AbsBilliard, k1, k2, windows::Vector{WindowPlan{T}}, memory::MemoryEstimate, max_memory::Real, notes::Vector{String}; fundamental_only::Bool) where {T<:Real}
+function _assemble_plan(solver, billiard::AbsBilliard, k1, k2, windows::Vector{WindowPlan{T}}, memory::MemoryEstimate, max_memory::Real, notes::Vector{String}; fundamental_only::Bool, basis=nothing) where {T<:Real}
     need = _MEMORY_SLACK * total_bytes(memory)
     need > max_memory && push!(notes, "estimated peak memory $(round(need / 2^30; digits=1)) GiB exceeds max_memory $(round(max_memory / 2^30; digits=1)) GiB; compute_spectrum would throw")
-    return ComputationPlan{T,typeof(solver)}(solver, T(k1), T(k2), expected_states(billiard, k1, k2; fundamental_only), Float64(spectral_density(k1, billiard; fundamental_only)), Float64(spectral_density(k2, billiard; fundamental_only)), windows, memory, Threads.nthreads(), notes)
+    return ComputationPlan{T,typeof(solver),typeof(billiard),typeof(basis)}(solver, billiard, basis, T(k1), T(k2), expected_states(billiard, k1, k2; fundamental_only), Float64(spectral_density(k1, billiard; fundamental_only)), Float64(spectral_density(k2, billiard; fundamental_only)), windows, memory, Threads.nthreads(), notes)
+end
+
+# Boundary node count and matrix dimension at `k`. For DLP/CFIE kernels with smooth or global corner grading the
+# node count follows from the boundary length, so no boundary points are built; other kernels evaluate them.
+function _bim_dims_fn(solver, billiard::AbsBilliard)
+    kernel = solver.kernel
+    return _bim_dims_fn(solver, kernel, kernel isa Union{DoubleLayerPotentialSolver,CombinedFieldIntegralEquationSolver} ? kernel.grading : nothing, billiard)
+end
+
+function _bim_dims_fn(solver, kernel, ::Any, billiard::AbsBilliard)
+    return function (k)
+        pts = evaluate_points(solver, billiard, k)
+        return length(pts.xy), boundary_matrix_size(kernel, pts)
+    end
+end
+
+function _bim_dims_fn(solver, kernel, grading::Union{SmoothPeriodicGrading,GlobalCornerGrading}, billiard::AbsBilliard)
+    _require_no_holes(kernel, billiard)
+    T = _bim_numeric_type(kernel)
+    comp = full_boundary(billiard)
+    isempty(comp) && error("Boundary cannot be empty.")
+    _, _, Ltot = component_lengths(comp)
+    graded = grading isa GlobalCornerGrading && !isempty(BilliardGeometry._component_corner_locations(T, comp))
+    folded = Dict{Int,Int}()
+    return function (k)
+        N = _bim_node_count(kernel, Ltot, T(k); graded)
+        kernel.symmetry === nothing && return N, N
+        M = get!(folded, N) do
+            fundamental_size(_fold_boundary(T, kernel.billiard, N, kernel.symmetry, kernel.sym_characters))
+        end
+        return N, M
+    end
 end
 
 function _bim_window_plans(solver, billiard::AbsBilliard, intervals::Vector{Tuple{T,T}}) where {T<:Real}
     fundamental_only = solver.kernel.symmetry !== nothing
+    dims = _bim_dims_fn(solver, billiard)
     return @with_kress_q_floor map(intervals) do (a, b)
         kc = (a + b) / 2
-        pts = evaluate_points(solver, billiard, kc)
-        WindowPlan{T}(kc, (b - a) / 2, expected_states(billiard, a, b; fundamental_only), length(pts.xy), boundary_matrix_size(solver.kernel, pts))
+        N, M = dims(kc)
+        WindowPlan{T}(kc, (b - a) / 2, expected_states(billiard, a, b; fundamental_only), N, M)
     end
 end
 
@@ -151,19 +269,20 @@ function _bim_plan(solver, billiard::AbsBilliard, intervals::Vector{Tuple{T,T}},
     return _assemble_plan(solver, billiard, k1, k2, windows, memory, max_memory, notes; fundamental_only)
 end
 
-function _ebim_window_plans(solver::ExpandedBIMSolver, billiard::AbsBilliard, k1, k2, dk::Function)
+function _ebim_window_plans(solver::ExpandedBIMSolver, billiard::AbsBilliard, k1, k2, dk::Function; window_overlap::Real=0.5)
     fundamental_only = solver.kernel.symmetry !== nothing
-    centers, dks, _ = _ebim_windows(solver, billiard, k1, k2, dk)
+    centers, dks, _ = _ebim_windows(solver, billiard, k1, k2, dk; window_overlap)
     T = eltype(centers)
+    dims = _bim_dims_fn(solver, billiard)
     return @with_kress_q_floor map(eachindex(centers)) do i
-        pts = evaluate_points(solver, billiard, centers[i])
-        WindowPlan{T}(centers[i], dks[i], Float64(weyl_window_count(billiard, centers[i] - dks[i], 2 * dks[i]; fundamental_only)), length(pts.xy), boundary_matrix_size(solver.kernel, pts))
+        N, M = dims(centers[i])
+        WindowPlan{T}(centers[i], dks[i], Float64(weyl_window_count(billiard, centers[i] - dks[i], 2 * dks[i]; fundamental_only)), N, M)
     end
 end
 
-function _vs_window_plans(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, k1, k2, dk::Union{Real,Function})
+function _vs_window_plans(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, k1, k2, dk::Union{Real,Function}; window_overlap::Real=0.5)
     fundamental_only = basis.symmetries !== nothing
-    centers, widths = sweep_windows(k1, k2, dk)
+    centers, widths = sweep_windows(k1, k2, dk; window_overlap)
     T = eltype(centers)
     L = CompositeCurve(get_boundary_curves(billiard)).length
     vsdim(k) = max(solver.min_dim, round(Int, L * k * solver.dim_scaling_factor / (2 * pi)))
@@ -185,8 +304,8 @@ function _single_window(solver, billiard::AbsBilliard, k1, k2; vs_basis=nothing)
     T = promote_type(typeof(float(k1)), typeof(float(k2)))
     k = T(k2)
     if vs_basis === nothing
-        pts = @with_kress_q_floor evaluate_points(solver, billiard, k)
-        return [WindowPlan{T}(k, zero(T), 0.0, length(pts.xy), boundary_matrix_size(solver.kernel, pts))]
+        N, M = @with_kress_q_floor _bim_dims_fn(solver, billiard)(k)
+        return [WindowPlan{T}(k, zero(T), 0.0, N, M)]
     end
     L = CompositeCurve(get_boundary_curves(billiard)).length
     dim = max(solver.min_dim, round(Int, L * k * solver.dim_scaling_factor / (2 * pi)))
@@ -220,7 +339,7 @@ sizes a single window at `k2`.
 * `MemoryEstimate`: Peak working set and retained results in bytes.
 """
 function estimate_memory(solver::Union{BeynSolver,CORKSolver,ExpandedBIMSolver}, windows::AbstractVector{<:WindowPlan}, expected_total_states::Real)
-    working = mapreduce(w -> _working_bytes(solver, Float64(w.dim), Float64(w.matrix_dim)), max, windows; init=0.0)
+    working = mapreduce(w -> _working_bytes(solver, Float64(w.dim), Float64(w.matrix_dim); nw=length(windows)), max, windows; init=0.0)
     Nf = mapreduce(w -> Float64(w.dim), max, windows; init=0.0)
     M = mapreduce(w -> Float64(w.matrix_dim), max, windows; init=0.0)
     return MemoryEstimate(working, _persistent_bytes(solver, length(windows), Float64(expected_total_states), Nf, M))
@@ -242,13 +361,13 @@ function estimate_memory(solver::CORKSolver, billiard::AbsBilliard, k1, k2)
     return estimate_memory(solver, windows, expected_states(billiard, k1, k2; fundamental_only=solver.kernel.symmetry !== nothing))
 end
 
-function estimate_memory(solver::ExpandedBIMSolver, billiard::AbsBilliard, k1, k2; dk::Union{Nothing,Function}=nothing)
-    windows = dk === nothing ? _single_window(solver, billiard, k1, k2) : _ebim_window_plans(solver, billiard, k1, k2, dk)
+function estimate_memory(solver::ExpandedBIMSolver, billiard::AbsBilliard, k1, k2; dk::Union{Nothing,Function}=nothing, window_overlap::Real=0.5)
+    windows = dk === nothing ? _single_window(solver, billiard, k1, k2) : _ebim_window_plans(solver, billiard, k1, k2, dk; window_overlap)
     return estimate_memory(solver, windows, expected_states(billiard, k1, k2; fundamental_only=solver.kernel.symmetry !== nothing))
 end
 
-function estimate_memory(solver::VerginiSaracenoSolver, basis::AbsBasis, billiard::AbsBilliard, k1, k2, dk::Union{Nothing,Real,Function}=nothing)
-    windows = dk === nothing ? _single_window(solver, billiard, k1, k2; vs_basis=basis) : _vs_window_plans(solver, basis, billiard, k1, k2, dk)
+function estimate_memory(solver::VerginiSaracenoSolver, basis::AbsBasis, billiard::AbsBilliard, k1, k2, dk::Union{Nothing,Real,Function}=nothing; window_overlap::Real=0.5)
+    windows = dk === nothing ? _single_window(solver, billiard, k1, k2; vs_basis=basis) : _vs_window_plans(solver, basis, billiard, k1, k2, dk; window_overlap)
     return estimate_memory(solver, basis, windows, expected_states(billiard, k1, k2; fundamental_only=basis.symmetries !== nothing))
 end
 
@@ -264,31 +383,24 @@ function _vs_panels(centers::AbstractVector, R::Real)
 end
 
 # EBIM expansion centers, local half-widths and requested level counts.
-function _ebim_windows(solver::ExpandedBIMSolver, billiard::AbsBilliard, k1, k2, dk::Function)
-    T = _bim_numeric_type(solver); k1T = T(k1); k2T = T(k2)
-    k1T < k2T || throw(ArgumentError("require k1 < k2"))
+function _ebim_windows(solver::ExpandedBIMSolver, billiard::AbsBilliard, k1, k2, dk::Function; window_overlap::Real=0.5)
+    T = _bim_numeric_type(solver)
     fundamental_only = solver.kernel.symmetry !== nothing
-    centers = T[]; dks = T[]; nlevels = Int[]
-    k = k1T
-    while k <= k2T
-        Δk = T(dk(k))
-        Δk > zero(T) || throw(ArgumentError("dk(k) must be positive"))
-        push!(centers, k); push!(dks, Δk)
-        push!(nlevels, max(1, ceil(Int, weyl_window_count(billiard, k - Δk, 2 * Δk; fundamental_only))))
-        k += Δk
-    end
+    centers, dks = _sweep_windows(T(k1), T(k2), dk, window_overlap, true)
+    nlevels = [max(1, ceil(Int, weyl_window_count(billiard, k - Δk, 2 * Δk; fundamental_only))) for (k, Δk) in zip(centers, dks)]
     return centers, dks, nlevels
 end
 
 """
-    plan_computation(solver::ExpandedBIMSolver, billiard, k1, k2; dk=(k -> 0.05*k^(-1/3)), max_memory=default_memory_limit(), tune=true) -> ComputationPlan
-    plan_computation(solver::ExpandedBIMSolver, billiard, N1::Int, N2::Int; kwargs...) -> ComputationPlan
+    plan_computation(solver::ExpandedBIMSolver, billiard, k1, k2; dk=(k -> 0.05*k^(-1/3)), window_overlap=0.5, max_memory=default_memory_limit(), tune=true) -> ComputationPlan
+    plan_computation(solver::ExpandedBIMSolver, billiard, N1::Int, N2::Int; nlevels=nothing, kwargs...) -> ComputationPlan
 
-Describe the `compute_spectrum(solver, billiard, k1, k2; dk)` run without any
-eigen-solve. One window per expansion center, with half-width `dk(k)`; the
-expected states of a window are the Weyl count in `[k-dk, k+dk]`. The centers
-are produced by the function `compute_spectrum` uses. The solver is never
-modified, and `tune` has no effect.
+Describe the `compute_spectrum(solver, billiard, k1, k2; dk, window_overlap)` run without any
+eigen-solve. One window per expansion center, with half-width `dk(k)` and
+neighbouring windows overlapping by the fraction `window_overlap` of the window
+width; the expected states of a window are the Weyl count in `[k-dk, k+dk]`.
+The centers are produced by the function `compute_spectrum` uses. The solver is
+never modified, and `tune` has no effect.
 
 ## Arguments
 * `solver::ExpandedBIMSolver`: Expanded boundary-integral eigensolver.
@@ -296,32 +408,37 @@ modified, and `tune` has no effect.
 * `k1`, `k2`: Wavenumber interval, or `N1`, `N2` Weyl-law state indices.
 
 ## Keyword Arguments
-* `dk::Function=(k -> 0.05*k^(-1/3))`: Spacing between expansion centers.
+* `dk::Function=(k -> 0.05*k^(-1/3))`: Window half-width.
+* `nlevels::Union{Nothing,Real}=nothing`: `N1,N2` form only. If given, overrides `dk` with `k -> nlevels / (2*spectral_density(k, billiard))`, i.e. each window contains `nlevels` mean levels.
+* `window_overlap::Real=0.5`: Overlap of neighbouring windows as a fraction of the window width, in `[0, 0.5]`.
 * `max_memory::Real=default_memory_limit()`: Memory limit in bytes; exceeding it is reported in `plan.notes`.
 * `tune::Bool=true`: Accepted for a uniform interface.
 
 ## Returns
 * [`ComputationPlan`](@ref): Resolved windows, memory estimate and notes.
 """
-function plan_computation(solver::ExpandedBIMSolver, billiard::AbsBilliard, k1, k2; dk::Function=(k -> 0.05 * k^(-1/3)), tune::Bool=true, max_memory::Real=default_memory_limit())
+function plan_computation(solver::ExpandedBIMSolver, billiard::AbsBilliard, k1, k2; dk::Function=(k -> 0.05 * k^(-1/3)), window_overlap::Real=0.5, tune::Bool=true, max_memory::Real=default_memory_limit())
     fundamental_only = solver.kernel.symmetry !== nothing
-    windows = _ebim_window_plans(solver, billiard, k1, k2, dk)
+    windows = _ebim_window_plans(solver, billiard, k1, k2, dk; window_overlap)
     memory = estimate_memory(solver, windows, expected_states(billiard, k1, k2; fundamental_only))
     return _assemble_plan(solver, billiard, k1, k2, windows, memory, max_memory, String[]; fundamental_only)
 end
 
-function plan_computation(solver::ExpandedBIMSolver, billiard::AbsBilliard, N1::Int, N2::Int; kwargs...)
-    k1, k2 = k_range_for_states(billiard, N1, N2; fundamental_only=solver.kernel.symmetry !== nothing)
+function plan_computation(solver::ExpandedBIMSolver, billiard::AbsBilliard, N1::Int, N2::Int; nlevels::Union{Nothing,Real}=nothing, kwargs...)
+    fundamental_only = solver.kernel.symmetry !== nothing
+    k1, k2 = k_range_for_states(billiard, N1, N2; fundamental_only)
+    nlevels === nothing || return plan_computation(solver, billiard, k1, k2; kwargs..., dk = k -> nlevels / (2 * spectral_density(k, billiard; fundamental_only)))
     return plan_computation(solver, billiard, k1, k2; kwargs...)
 end
 
 """
-    plan_computation(solver::AcceleratedBasisSolver, basis, billiard, k1, k2, dk; max_memory=default_memory_limit(), tune=true) -> ComputationPlan
-    plan_computation(solver::AcceleratedBasisSolver, basis, billiard, N1::Int, N2::Int; nlevels=3, kwargs...) -> ComputationPlan
+    plan_computation(solver::AcceleratedBasisSolver, basis, billiard, k1, k2, dk; window_overlap=0.5, max_memory=default_memory_limit(), tune=true) -> ComputationPlan
+    plan_computation(solver::AcceleratedBasisSolver, basis, billiard, N1::Int, N2::Int; nlevels=6, kwargs...) -> ComputationPlan
 
 Describe the `compute_spectrum(solver, basis, billiard, k1, k2, dk)` run without
 any eigen-solve. One window per scaling center from [`sweep_windows`](@ref),
-with the local half-width as `halfwidth` and the Weyl count in
+with the local half-width as `halfwidth`, neighbouring windows overlapping by
+the fraction `window_overlap` of the window width, and the Weyl count in
 `[k-halfwidth, k+halfwidth]` as expected states. The basis dimension is
 `max(min_dim, round(L*k*dim_scaling_factor/2π))`. For a basis with
 `use_taylor`, centers are grouped into the same panels `compute_spectrum`
@@ -334,33 +451,34 @@ halving driven by `accept_tol` cannot be predicted and is not included.
 * `basis::AbsBasis`: Basis.
 * `billiard::AbsBilliard`: Billiard geometry.
 * `k1`, `k2`: Wavenumber interval, or `N1`, `N2` Weyl-law state indices.
-* `dk`: Constant or function spacing of scaling centers.
+* `dk`: Constant or function window half-width.
 
 ## Keyword Arguments
-* `nlevels::Real=3`: Levels per window for the `N1,N2` form; a note warns when it is at least 1.
+* `nlevels::Real=6`: Levels in the full window for the `N1,N2` form, i.e. the half-width is `nlevels/(2*spectral_density(k, billiard))`; a note warns when it is at least 1.
+* `window_overlap::Real=0.5`: Overlap of neighbouring windows as a fraction of the window width, in `[0, 0.5]`.
 * `max_memory::Real=default_memory_limit()`: Memory limit in bytes; exceeding it is reported in `plan.notes`.
 * `tune::Bool=true`: Accepted for a uniform interface.
 
 ## Returns
 * [`ComputationPlan`](@ref): Resolved windows, memory estimate and notes.
 """
-function plan_computation(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, k1, k2, dk::Union{Real,Function}; tune::Bool=true, max_memory::Real=default_memory_limit())
+function plan_computation(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, k1, k2, dk::Union{Real,Function}; window_overlap::Real=0.5, tune::Bool=true, max_memory::Real=default_memory_limit())
     fundamental_only = basis.symmetries !== nothing
-    windows = _vs_window_plans(solver, basis, billiard, k1, k2, dk)
+    windows = _vs_window_plans(solver, basis, billiard, k1, k2, dk; window_overlap)
     memory = estimate_memory(solver, basis, windows, expected_states(billiard, k1, k2; fundamental_only))
-    return _assemble_plan(solver, billiard, k1, k2, windows, memory, max_memory, String[]; fundamental_only)
+    return _assemble_plan(solver, billiard, k1, k2, windows, memory, max_memory, String[]; fundamental_only, basis)
 end
 
-function plan_computation(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, N1::Int, N2::Int; nlevels::Real=3, kwargs...)
+function plan_computation(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, N1::Int, N2::Int; nlevels::Real=6, kwargs...)
     fundamental_only = basis.symmetries !== nothing
     k1, k2 = k_range_for_states(billiard, N1, N2; fundamental_only)
-    plan = plan_computation(solver, basis, billiard, k1, k2, k -> nlevels / spectral_density(k, billiard; fundamental_only); kwargs...)
+    plan = plan_computation(solver, basis, billiard, k1, k2, k -> nlevels / (2 * spectral_density(k, billiard; fundamental_only)); kwargs...)
     nlevels >= 1 && push!(plan.notes, "nlevels=$nlevels >= 1 gives windows wider than one mean level spacing; the accelerated basis method loses accuracy, use nlevels below 1 unless k is large")
     return plan
 end
 
 """
-    plan_computation(solver::BeynSolver, billiard, k1, k2; tune=true, max_memory=default_memory_limit()) -> ComputationPlan
+    plan_computation(solver::BeynSolver, billiard, k1, k2; nlevels=nothing, Rmax=nothing, tune=true, max_memory=default_memory_limit()) -> ComputationPlan
     plan_computation(solver::BeynSolver, billiard, N1::Int, N2::Int; kwargs...) -> ComputationPlan
 
 Describe the `compute_spectrum(solver, billiard, k1, k2)` run without any
@@ -380,15 +498,25 @@ wavenumber interval.
 * `k1`, `k2`: Wavenumber interval, or `N1`, `N2` Weyl-law state indices.
 
 ## Keyword Arguments
+* `nlevels::Union{Nothing,Int}=nothing`: Overrides `solver.nlevels` (target levels per Weyl window); the plan stores a solver with that value. Each window is `min(Weyl width for nlevels levels, 2*solver.Rmax)` wide, so `nlevels` only changes the layout while the Weyl width is below `2*Rmax`.
+* `Rmax::Union{Nothing,Real}=nothing`: Overrides `solver.Rmax` (maximum contour radius, half the maximum window width); the plan stores a solver with that value.
 * `tune::Bool=true`: Validate the Taylor degree on the largest window.
 * `max_memory::Real=default_memory_limit()`: Memory limit in bytes; exceeding it is reported in `plan.notes`.
 
 ## Returns
 * [`ComputationPlan`](@ref): Resolved windows, memory estimate and notes.
 """
-function plan_computation(solver::BeynSolver, billiard::AbsBilliard, k1, k2; tune::Bool=true, max_memory::Real=default_memory_limit())
-    intervals = _beyn_intervals(solver, billiard, k1, k2)
+function plan_computation(solver::BeynSolver, billiard::AbsBilliard, k1, k2; nlevels::Union{Nothing,Int}=nothing, Rmax::Union{Nothing,Real}=nothing, tune::Bool=true, max_memory::Real=default_memory_limit())
     notes = String[]
+    if nlevels !== nothing && nlevels != solver.nlevels
+        push!(notes, "nlevels overridden from $(solver.nlevels) to $nlevels; the plan stores a solver with that value")
+        solver = with_params(solver; nlevels)
+    end
+    if Rmax !== nothing && Rmax != solver.Rmax
+        push!(notes, "Rmax overridden from $(solver.Rmax) to $Rmax; the plan stores a solver with that value")
+        solver = with_params(solver; Rmax=_bim_numeric_type(solver)(Rmax))
+    end
+    intervals = _beyn_intervals(solver, billiard, k1, k2)
     if tune && solver.use_taylor
         k0, R = beyn_disks_from_windows(intervals); _, i = findmax(R)
         p = @with_kress_q_floor _tune_beyn_taylor_degree(solver, [evaluate_points(solver, billiard, real(k0[i]))], [k0[i]], [R[i]])
@@ -404,7 +532,7 @@ function plan_computation(solver::BeynSolver, billiard::AbsBilliard, N1::Int, N2
 end
 
 """
-    plan_computation(solver::CORKSolver, billiard, k1, k2; tune=true, max_memory=default_memory_limit()) -> ComputationPlan
+    plan_computation(solver::CORKSolver, billiard, k1, k2; nlevels=nothing, Rmax=nothing, tune=true, max_memory=default_memory_limit()) -> ComputationPlan
     plan_computation(solver::CORKSolver, billiard, N1::Int, N2::Int; kwargs...) -> ComputationPlan
 
 Describe the `compute_spectrum(solver, billiard, k1, k2)` run without any
@@ -422,15 +550,25 @@ estimate uses `solver.p`.
 * `k1`, `k2`: Wavenumber interval, or `N1`, `N2` Weyl-law state indices.
 
 ## Keyword Arguments
+* `nlevels::Union{Nothing,Int}=nothing`: Overrides `solver.nlevels` (target levels per Weyl window) and rescales `mstart` as the constructor default does; the plan stores a solver with these values. Each window is `min(Weyl width for nlevels levels, 2*solver.Rmax)` wide, so `nlevels` only changes the layout while the Weyl width is below `2*Rmax`.
+* `Rmax::Union{Nothing,Real}=nothing`: Overrides `solver.Rmax` (maximum requested half-width of a window); the plan stores a solver with that value.
 * `tune::Bool=true`: Accepted for a uniform interface; has no effect for CORK.
 * `max_memory::Real=default_memory_limit()`: Memory limit in bytes; exceeding it is reported in `plan.notes`.
 
 ## Returns
 * [`ComputationPlan`](@ref): Resolved windows, memory estimate and notes.
 """
-function plan_computation(solver::CORKSolver, billiard::AbsBilliard, k1, k2; tune::Bool=true, max_memory::Real=default_memory_limit())
-    intervals = _cork_intervals(solver, billiard, k1, k2)
+function plan_computation(solver::CORKSolver, billiard::AbsBilliard, k1, k2; nlevels::Union{Nothing,Int}=nothing, Rmax::Union{Nothing,Real}=nothing, tune::Bool=true, max_memory::Real=default_memory_limit())
     notes = ["polynomial degree p is tuned at run time; the plan uses p=$(solver.p)"]
+    if nlevels !== nothing && nlevels != solver.nlevels
+        push!(notes, "nlevels overridden from $(solver.nlevels) to $nlevels and mstart rescaled; the plan stores a solver with these values")
+        solver = with_params(solver; nlevels, mstart=solver.block_size * ceil(Int, 5.0nlevels / solver.block_size))
+    end
+    if Rmax !== nothing && Rmax != solver.Rmax
+        push!(notes, "Rmax overridden from $(solver.Rmax) to $Rmax; the plan stores a solver with that value")
+        solver = with_params(solver; Rmax=_bim_numeric_type(solver)(Rmax))
+    end
+    intervals = _cork_intervals(solver, billiard, k1, k2)
     return _bim_plan(solver, billiard, intervals, k1, k2, max_memory, notes)
 end
 
