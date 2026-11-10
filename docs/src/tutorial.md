@@ -28,6 +28,31 @@ k1, k2 = k_range_for_states(billiard, 250, 257)
 spectrum = compute_spectrum(solver, billiard, k1, k2)
 ```
 
+The solver structs are immutable. [`with_params`](@ref) returns a copy with some
+fields replaced, for example `with_params(solver; nq = 60)`, and displaying a solver
+at the REPL (or [`log_solver`](@ref)) lists its parameters.
+
+## Planning a computation
+[`plan_computation`](@ref) describes a `compute_spectrum` run without solving:
+the window layout, the expected number of states per window (Weyl law), the
+basis or boundary dimensions, an upper-bound memory estimate and notes about
+parameter adjustments. The resulting [`ComputationPlan`](@ref) stores every
+input of the run, so [`compute_spectrum`](@ref) accepts it directly.
+
+```julia
+plan = plan_computation(solver, billiard, k1, k2)    # or (solver, billiard, N1, N2) with state indices
+plan                                                 # prints windows, dimensions and memory
+spectrum = compute_spectrum(plan; show_progress = false)
+```
+
+For [`VerginiSaracenoSolver`](@ref) pass the basis and the window half-width,
+`plan_computation(solver, basis, billiard, k1, k2, dk)`; for
+[`ExpandedBIMSolver`](@ref) the half-width is the keyword `dk`. `compute_spectrum`
+checks the same estimate before the sweep and throws if it exceeds `max_memory`
+(by default [`default_memory_limit`](@ref), 90% of the physical RAM); pass
+`max_memory = Inf` to disable the check. [`estimate_memory`](@ref) returns the
+estimate alone.
+
 ## Billiards with holes and symmetry
 A billiard with holes has the symmetry group `G'` of the elements of its
 registered group `G` that map every hole onto itself

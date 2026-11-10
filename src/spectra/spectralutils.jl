@@ -91,7 +91,8 @@ Merges `data2` into `data1` in place, requiring `data1.billiard===data2.billiard
 concrete solver algorithm/type, not byte-identical parameters). Reuses
 [`overlap_and_merge_ebim!`](@ref) for an [`ExpandedBIMSolver`](@ref) and
 [`overlap_and_merge!`](@ref) otherwise, mirroring the merge strategy each
-solver's own `compute_spectrum` already uses.
+solver's own `compute_spectrum` already uses. `tol` is the tolerance used to
+match duplicate levels across the two spectra.
 """
 function Base.append!(data1::SpectralData{T}, data2::SpectralData; tol::Real=1e-3) where {T<:Real}
     data1.billiard===data2.billiard || throw(ArgumentError("append!(::SpectralData,::SpectralData) requires both spectra to share the same billiard instance"))
@@ -120,7 +121,8 @@ end
     vcat(data1::SpectralData, data2::SpectralData; tol::Real=1e-3) → SpectralData
 
 Non-mutating counterpart to [`append!(::SpectralData,::SpectralData)`](@ref):
-copies `data1` and merges `data2` into the copy.
+copies `data1` and merges `data2` into the copy. `tol` has the same meaning as
+in `append!`.
 """
 function Base.vcat(data1::SpectralData, data2::SpectralData; tol::Real=1e-3)
     states = data1.states===nothing ? nothing : copy(data1.states)
@@ -342,10 +344,12 @@ neighbouring-window overlap `window_overlap`. At each center the local spectrum
 is computed and overlapping results are merged with
 [`overlap_and_merge!`](@ref).
 
-For a [`CornerAdaptedFourierBessel`](@ref) basis with `use_taylor = true`,
-consecutive scaling centers are grouped into panels covered by
-`basis.taylor_radius`. A single [`CornerAdaptedTaylorCache`](@ref) is
-constructed for each panel and reused by all scaling solves in that panel.
+For a basis with `use_taylor = true` ([`CornerAdaptedFourierBessel`](@ref),
+[`FourierBessel`](@ref) or [`RealPlaneWaves`](@ref)), consecutive scaling
+centers are grouped into panels covered by `basis.taylor_radius`. A single
+Taylor cache (`CornerAdaptedTaylorCache`, `FourierBesselTaylorCache`
+or `RealPlaneWaveTaylorCache`) is constructed for each panel and reused
+by all scaling solves in that panel.
 
 Before the spectral sweep, the configured Taylor degree and radius are checked
 at the largest scaling wavenumber against direct basis evaluation. The cached
@@ -506,7 +510,7 @@ Weyl-sized contour windows.
 
 When `solver.eigenvectors=true`, each retained eigenvalue stores a
 [`BIMEigenstate`](@ref) containing the layer density produced by the Beyn
-solve. The density is expanded with [`symmetrize_layer_density`](@ref) before
+solve. The density is expanded with `symmetrize_layer_density` before
 storage, so both `state.vec` and `state.pts` refer to the complete physical
 boundary.
 
@@ -871,7 +875,7 @@ using adjacent Weyl-sized spectral windows.
 Each requested interval is independently edge-certified and neighboring
 windows use deterministic ownership. When `solver.eigenvectors=true`, each
 retained root stores a [`BIMEigenstate`](@ref) containing the CORK layer
-density. The density is expanded with [`symmetrize_layer_density`](@ref) before
+density. The density is expanded with `symmetrize_layer_density` before
 storage, so both `state.vec` and `state.pts` refer to the complete physical
 boundary.
 

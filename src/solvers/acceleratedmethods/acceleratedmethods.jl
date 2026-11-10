@@ -6,7 +6,7 @@ Samples the boundary of `billiard` by delegating to `solver.kernel`'s own
 
 ## Description
 Every concrete [`AcceleratedBIMSolver`](@ref) ([`BeynSolver`](@ref),
-[`ExpandedBIMSolver`](@ref)) wraps an inner `kernel::SweepBIMSolver` supplying
+[`ExpandedBIMSolver`](@ref), [`CORKSolver`](@ref)) wraps an inner `kernel::SweepBIMSolver` supplying
 the Fredholm operator; the boundary discretization itself is entirely
 determined by that kernel; the accelerated solver only adds a root-finding
 strategy on top of `construct_matrices`/`solve`.

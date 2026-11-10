@@ -26,7 +26,12 @@
 # grid shape cannot be safely changed.
 ################################################################################
 
-# Extend a one-sided vector antisymmetrically without duplicating its first entry.
+"""
+    antisym_vec(x::AbstractVector) → AbstractVector
+
+Extend the one-sided vector `x` antisymmetrically to `[-x[end], …, -x[2], x[1], …, x[end]]`,
+without duplicating the first entry.
+"""
 function antisym_vec(x::AbstractVector{T}) where {T}
     return vcat(reverse(-x[2:end]),x)
 end
@@ -370,7 +375,7 @@ Compute the Poincare-Husimi function of a BIM eigenstate.
 If the physical boundary normal derivative `state.u` is available, it is used
 directly. Otherwise it is reconstructed at `state.k` with [`solve_state`](@ref)
 using the boundary discretization stored in `state.pts`, dispatching on
-[`_bim_kernel`](@ref)`(solver)`.
+`_bim_kernel(solver)`.
 
 For a billiard with holes the Husimi function lives on the outer boundary
 component only: `qs` runs over the outer boundary arclength `[0,L_outer)` and
@@ -402,12 +407,13 @@ function husimi_function(state::BIMEigenstate{K,T}, billiard::AbsBilliard, solve
 end
 
 """
-    husimi_function(state::S; ppw::Real=5.0, c::Real=10.0, w::Real=7.0, multithreaded::Bool=true, full_p::Bool=false) where {S<:AbsState}
+    husimi_function(state::S, billiard::AbsBilliard; ppw::Real=5.0, c::Real=10.0, w::Real=7.0, multithreaded::Bool=true, full_p::Bool=false) where {S<:AbsState}
 
 Compute the Poincare-Husimi function of a basis eigenstate.
 
 ## Arguments
 * `state::S`: Eigenstate represented in a basis.
+* `billiard::AbsBilliard`: Billiard the state was computed on.
 
 ## Keyword Arguments
 * `ppw::Real=5.0`: Boundary-function oversampling factor.
@@ -479,12 +485,13 @@ function husimi_function(states::AbstractVector{<:BIMEigenstate{K,T}}, billiard:
 end
 
 """
-    husimi_function(states::AbstractVector{S}; ppw::Real=5.0, c::Real=10.0, w::Real=7.0, multithreaded::Bool=true, full_p::Bool=false) where {S<:AbsState}
+    husimi_function(states::AbstractVector{S}, billiard::AbsBilliard; ppw::Real=5.0, c::Real=10.0, w::Real=7.0, multithreaded::Bool=true, full_p::Bool=false) where {S<:AbsState}
 
 Compute Poincare-Husimi functions for several basis eigenstates.
 
 ## Arguments
 * `states::AbstractVector{S}`: Eigenstates represented in a basis.
+* `billiard::AbsBilliard`: Billiard the states were computed on.
 
 ## Keyword Arguments
 * `ppw::Real=5.0`: Boundary-function oversampling factor.

@@ -37,7 +37,8 @@ end
     generalized_eigen!(A::Symmetric, B::Symmetric; eig_tol::Real = 1e-15) → (mu::Vector, Z::Matrix, C_scaled::Matrix)
 
 In-place variant of [`generalized_eigen`](@ref) that overwrites `A` with the
-diagonalization workspace and so avoids one copy of `A`.
+diagonalization workspace and so avoids one copy of `A`. `eig_tol` has the same
+meaning as in [`generalized_eigen`](@ref).
 """
 function generalized_eigen!(A,B;eig_tol=1e-15)
     @timeit_debug "generalized_eigen" begin

@@ -99,7 +99,7 @@ Construct a [`SymmetrySector`](@ref) for `billiard` from representation choices
 of the form `GeneratorType => value`.
 
 Every symmetry of the billiard's symmetry group `G'` (see
-[`get_symmetry_group`](@ref BilliardGeometry.get_symmetry_group); for a billiard
+`get_symmetry_group`; for a billiard
 with holes, the registered elements that leave every hole invariant) whose type
 matches `GeneratorType` is assigned the
 corresponding one-dimensional irreducible-representation character. Reflection
@@ -164,7 +164,7 @@ _group_description(group) = isempty(group) ? "{e}" : "{e, " * join(string.(group
     symmetry_irreps(billiard::BilliardGeometry.AbsBilliard) → info::NamedTuple
 
 Classify the symmetry group `G'` of `billiard` (see
-[`get_symmetry_group`](@ref BilliardGeometry.get_symmetry_group)) and list its
+`get_symmetry_group`) and list its
 one-dimensional irreps in the form accepted by
 `symmetry_sector(billiard, characters...)`.
 
@@ -211,7 +211,7 @@ irrep, the character tuple to pass to [`symmetry_sector`](@ref), e.g.
 
 ## Character tuples
 A character tuple has one entry per generator in `info.generators` (the order of
-[`get_symmetries`](@ref BilliardGeometry.get_symmetries)) and selects one irrep.
+`get_symmetries`) and selects one irrep.
 It is accepted by `symmetry_sector(billiard, tuple)` and by the `sym_characters`
 keyword of the BIM solvers.
 
@@ -258,7 +258,7 @@ end
 Construct a [`SymmetrySector`](@ref) for `billiard` by assigning one
 representation character to each of `billiard`'s minimal fundamental symmetry
 generators, in the order returned by
-[`get_symmetries`](@ref BilliardGeometry.get_symmetries).
+`get_symmetries`.
 
 ## Description
 This is a positional shortcut for the `GeneratorType => value` form: it pairs

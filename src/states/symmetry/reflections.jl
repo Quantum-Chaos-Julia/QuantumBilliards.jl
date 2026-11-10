@@ -140,7 +140,7 @@ end
 Unfold boundary points from a reflection-reduced fundamental boundary onto the
 corresponding full physical boundary.
 
-Positions and normals are transformed with [`apply_symmetry`](@ref), while
+Positions and normals are transformed with `apply_symmetry`, while
 point ordering and quadrature elements are reversed whenever required to
 preserve a continuous counter-clockwise traversal. With both axis reflections
 present, copies are appended in the order

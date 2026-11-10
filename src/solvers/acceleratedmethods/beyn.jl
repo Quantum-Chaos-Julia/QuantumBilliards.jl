@@ -53,7 +53,10 @@
 Contour-integral nonlinear eigensolver based on Beyn's method.
 
 The solver computes solutions of `A(k)u = 0` from contour moments on circular
-contours. Matrix construction can use the Chebyshev-accelerated backend.
+contours. Matrix construction uses the analytic Taylor-Horner backend by
+default, the radial-Chebyshev backend when `use_chebyshev=true`, or direct
+construction. The solver is immutable; [`with_params`](@ref) returns a copy with
+selected fields replaced.
 Multi-window spectrum calculations additionally support a global imaginary-`k`
 screening strategy which residual-checks roots in decreasing `abs(imag(k))`
 order and terminates after a prescribed sequence of residual-good roots.

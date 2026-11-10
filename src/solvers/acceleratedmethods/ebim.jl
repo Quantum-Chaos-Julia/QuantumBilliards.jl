@@ -714,7 +714,7 @@ Evaluate `A(k)`, `A'(k)`, and `A''(k)` from a cached Taylor panel.
 
 This allocating convenience method is intended for individual evaluations.
 Spectrum sweeps reuse persistent matrix buffers through
-[`_construct_matrices!`](@ref).
+`_construct_matrices!`.
 
 ## Arguments
 * `solver::ExpandedBIMSolver`: EBIM solver.
@@ -741,7 +741,7 @@ Assemble `A(k)`, `A'(k)`, and `A''(k)` directly from analytic BIM kernel
 derivatives.
 
 This method intentionally uses the independent direct EBIM implementation.
-Taylor acceleration is applied through an [`EBIMTaylorCache`](@ref), rather
+Taylor acceleration is applied through an `EBIMTaylorCache`, rather
 than implicitly constructing a one-point Taylor panel.
 
 ## Arguments

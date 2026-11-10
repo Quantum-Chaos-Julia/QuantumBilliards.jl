@@ -322,7 +322,7 @@ end
 
 """
     estimate_memory(solver, [basis,] windows::AbstractVector{<:WindowPlan}, expected_total_states) → MemoryEstimate
-    estimate_memory(solver, [basis,] billiard, k1, k2[, dk]) → MemoryEstimate
+    estimate_memory(solver, [basis,] billiard, k1, k2[, dk]; window_overlap=0.5) → MemoryEstimate
 
 Estimate the peak memory of a `compute_spectrum` run without running the solve.
 The working set is the maximum over the windows, each sized by its own basis or
@@ -341,7 +341,8 @@ sizes a single window at `k2`.
 * `expected_total_states`: Weyl estimate of the levels in the interval.
 * `billiard`: Billiard geometry.
 * `k1`, `k2`: Wavenumber interval.
-* `dk`: Spacing of scaling or expansion centers, for the sweep methods.
+* `dk`: Window half-width, for the sweep methods. Positional for [`VerginiSaracenoSolver`](@ref) (constant or function of `k`); keyword `dk` (function of `k`) for [`ExpandedBIMSolver`](@ref).
+* `window_overlap::Real=0.5`: Overlap of neighbouring sweep windows as a fraction of the window width; ignored when `dk` is omitted.
 
 ## Returns
 * `MemoryEstimate`: Peak working set and retained results in bytes.

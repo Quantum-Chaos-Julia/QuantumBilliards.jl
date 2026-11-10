@@ -60,10 +60,10 @@ cross-component kernel, whereas a source component using CFIE contributes the
 combined `D(k)+ikS(k)` kernel.
 
 Hole components are identified from the domain structure, not from curve
-orientation: the hole loops of a [`MultiplyConnectedDomain`](@ref) (e.g.
-[`AnnularBilliard`](@ref), [`SinaiBilliard`](@ref)) follow the outer boundary,
+orientation: the hole loops of a `MultiplyConnectedDomain` (e.g.
+`AnnularBilliard`, `SinaiBilliard`) follow the outer boundary,
 one component per hole object; every loop of a hole object (all copies of a
-[`SymmetrizedHoles`](@ref)) uses that object's solver. A billiard with `h`
+`SymmetrizedHoles`) uses that object's solver. A billiard with `h`
 holes therefore needs `1 + h` component solvers, ordered as the outer boundary
 followed by the holes in the order of the `holes` of the domain; a billiard
 without a `MultiplyConnectedDomain` has a single outer component and needs one
@@ -74,7 +74,7 @@ orientation is subsequently flipped, without changing node ordering, so that
 the resulting normals follow the physical outward-normal convention of the
 billiard region (pointing into the hole).
 Symmetry reduction acts on the symmetry group `G'` of the billiard
-([`get_symmetry_group`](@ref)): the outer boundary and every hole object are
+(`get_symmetry_group`): the outer boundary and every hole object are
 folded by the elements of `G'`, loops exchanged by a symmetry being blocks of
 one boundary group. A reduction generator outside `G'` raises an
 `ArgumentError`; use `symmetry = nothing` (all irreps of `G'` together) or a
@@ -110,7 +110,7 @@ however, use the same discrete symmetry and character because symmetry
 reduction is applied to the globally coupled full-boundary operator.
 
 A reduced solver acts through the symmetry group `G'` of the billiard (see
-[`get_symmetry_group`](@ref BilliardGeometry.get_symmetry_group)), so a hole
+`get_symmetry_group`), so a hole
 must be invariant under every generator it uses, otherwise an
 `ArgumentError` naming `G'` is raised. Loops exchanged by the
 symmetry (the copies of a `SymmetrizedHoles`) share one component solver and are
@@ -119,7 +119,7 @@ splits into blocks is rounded to a multiple of the number of blocks. A solver
 without symmetry keeps the unreduced discretization.
 
 ## Arguments
-* `component_solvers::SweepBIMSolver...`: Component solvers assigned in the same order as the connected boundary components returned during boundary decomposition: the outer boundary first, then one per hole object (`1 + number of holes` solvers for a [`MultiplyConnectedDomain`](@ref) billiard).
+* `component_solvers::SweepBIMSolver...`: Component solvers assigned in the same order as the connected boundary components returned during boundary decomposition: the outer boundary first, then one per hole object (`1 + number of holes` solvers for a `MultiplyConnectedDomain` billiard).
 
 ## Returns
 * `solver::CompositeBIMSolver`: Configured composite boundary-integral solver.

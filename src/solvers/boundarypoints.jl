@@ -266,7 +266,7 @@ Returns the component offsets for a single boundary component, `[1, length(pts)+
     points_in_billiard(pts, billiard) → mask
 
 Returns the interior-membership mask of `pts` with respect to `billiard`,
-delegating directly to [`is_inside`](@ref).
+delegating directly to `is_inside`.
 """
 @inline points_in_billiard(pts, billiard) = is_inside(billiard, pts)
 
@@ -380,7 +380,7 @@ end
     get_boundary_curves_with_ignored(domain::D) where D<:AbsMultiplyConnectedDomain → boundary::Vector{AbsCurve}
 
 Returns the boundary curves of a multiply connected domain (e.g.
-[`AnnularBilliard`](@ref)'s fundamental domain), including both
+`AnnularBilliard`'s fundamental domain), including both
 `SpecularReflection` and `QuantumSolverIgnore` curves: the connected outer
 curves in the fundamental frame, followed by the connected curves of every
 hole domain in the full physical frame. See

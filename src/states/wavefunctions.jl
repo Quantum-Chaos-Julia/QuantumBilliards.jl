@@ -20,6 +20,11 @@
 
 ############## HELPER FUNCTIONS #############
 
+"""
+    pad_limits(xlim, ylim; padding::Real = 0.01) → (xlim, ylim)
+
+Expand the limits `xlim` and `ylim` by `padding` on every side.
+"""
 function pad_limits(xlim, ylim; padding::Real = 0.01)
     return (xlim[1] - padding, xlim[2] + padding), (ylim[1] - padding, ylim[2] + padding)
 end
@@ -28,6 +33,14 @@ end
 # Broglie wavelength `2π/k`, floored at a minimum of 512 points.
 _debroglie_grid_size(k::Real, d::Real, ppw::Real) = max(round(Int, k * d * ppw / (2 * pi)), 512)
 
+"""
+    rectify_grid(grid::AbstractVector{<:Real}) → AbstractVector
+
+For a grid that spans zero, return the strictly positive half of the grid after
+shifting the grid point nearest zero to the origin; any other grid is returned
+unchanged. Used to restrict wavefunction grids to the fundamental domain of
+bases with `XAxisReflection` or `YAxisReflection` symmetry.
+"""
 function rectify_grid(grid::AbstractVector{T}) where {T<:Real}
     if grid[1] <= zero(T) <= grid[end]
         idx = argmin(abs.(grid))
@@ -298,7 +311,7 @@ Reconstruct BIM eigenstates on a common Cartesian grid.
 ## Arguments
 - `states::AbstractVector{<:BIMEigenstate{K,T}}`: BIM eigenstates.
 - `billiard::AbsBilliard`: Billiard the states were computed on (no longer stored on the state itself).
-- `solver::AbsBIMSolver`: Solver the states were computed with (either the `SweepBIMSolver` kernel itself, or an `AcceleratedBIMSolver` wrapping one) — used only to select the DLP/CFIE reconstruction kernel via [`_bim_kernel`](@ref).
+- `solver::AbsBIMSolver`: Solver the states were computed with (either the `SweepBIMSolver` kernel itself, or an `AcceleratedBIMSolver` wrapping one) — used only to select the DLP/CFIE reconstruction kernel via `_bim_kernel`.
 
 ## Keyword Arguments
 - `ppw::Real = 5`: Grid points per wavelength.
@@ -308,7 +321,7 @@ Reconstruct BIM eigenstates on a common Cartesian grid.
   domain alone, rather than the complete physical domain. `vec`/`u` are
   already expanded onto the complete boundary regardless of this flag, so
   density evaluation on the restricted grid remains correct. Matches
-  [`plot_boundary!`](@ref)'s fundamental-domain outline convention.
+  `plot_boundary!`'s fundamental-domain outline convention.
 - `min_chunk::Int = 4096`: Minimum spatial points per active thread.
 - `use_chebyshev::Bool = true`: Use Chebyshev-accelerated Hankel evaluation.
 - `show_progress::Bool = true`: Display reconstruction progress.
@@ -370,7 +383,7 @@ Reconstruct one BIM eigenstate.
   domain alone, rather than the complete physical domain. `vec`/`u` are
   already expanded onto the complete boundary regardless of this flag, so
   density evaluation on the restricted grid remains correct. Matches
-  [`plot_boundary!`](@ref)'s fundamental-domain outline convention.
+  `plot_boundary!`'s fundamental-domain outline convention.
 - `min_chunk::Int = 4096`: Minimum spatial points per active thread.
 - `use_chebyshev::Bool = true`: Use Chebyshev-accelerated Hankel evaluation.
 - `cheb_config::ChebyshevConfig = ChebyshevConfig(T)`: Chebyshev configuration.
@@ -393,9 +406,9 @@ end
 ################################################################################
 
 """
-    compute_psi(state::S, x_grid::AbstractVector, y_grid::AbstractVector; inside_only::Bool = true, memory_limit::Real = 10.0e9, multithreaded::Bool = true, nan_mask::Bool = false) where {S<:AbsState}
+    compute_psi(state::S, billiard::AbsBilliard, x_grid::AbstractVector, y_grid::AbstractVector; inside_only::Bool = true, memory_limit::Real = 10.0e9, multithreaded::Bool = true, nan_mask::Bool = false) where {S<:BasisEigenstate}
 
-Evaluate the wavefunction of `state` on a Cartesian grid.
+Evaluate the wavefunction of the basis eigenstate `state` on a Cartesian grid.
 
 The basis expansion ψ(x) = Σⱼ cⱼ φⱼ(k,x)
 is evaluated through basis-matrix multiplication ψ = B(k)c.
@@ -410,6 +423,7 @@ exterior values are set to zero by default, or `NaN` when `nan_mask = true`.
 
 ## Arguments
 - `state::S`: Eigenstate whose basis expansion is evaluated.
+- `billiard::AbsBilliard`: Billiard defining the interior mask.
 - `x_grid::AbstractVector`: Cartesian x coordinates.
 - `y_grid::AbstractVector`: Cartesian y coordinates.
 
@@ -443,7 +457,7 @@ function compute_psi(state::S, billiard::AbsBilliard, x_grid, y_grid; inside_onl
 end
 
 """
-    wavefunction(state::S; ppw::Real = 5.0, inside_only::Bool = true, fundamental_only::Bool = true, memory_limit::Real = 10.0e9, multithreaded::Bool = true, nan_mask::Bool = false) where {S<:AbsState}
+    wavefunction(state::S, billiard::AbsBilliard; ppw::Real = 5.0, inside_only::Bool = true, fundamental_only::Bool = true, memory_limit::Real = 10.0e9, multithreaded::Bool = true, nan_mask::Bool = false) where {S<:BasisEigenstate}
 
 Compute a basis-expanded eigenstate on a Cartesian grid.
 If the basis carries reflection symmetries, the corresponding coordinate

@@ -89,7 +89,7 @@ curve.
 ## Keyword Arguments
 * `min_dim::Int=100`: Minimum basis dimension.
 * `min_pts::Int=500`: Minimum number of boundary sampling points.
-* `eigenvectors::Bool`: Whether `compute_spectrum` retains the basis eigenvectors returned by the scaling solve.
+* `eigenvectors::Bool=true`: Whether `compute_spectrum` retains the basis eigenvectors returned by the scaling solve.
 
 ## Returns
 * `VerginiSaracenoSolver{T}`: Configured solver.
@@ -113,7 +113,7 @@ each fundamental boundary curve.
 ## Keyword Arguments
 * `min_dim::Int=100`: Minimum basis dimension.
 * `min_pts::Int=500`: Minimum number of boundary sampling points.
-* `eigenvectors::Bool`: Whether `compute_spectrum` retains the basis eigenvectors returned by the scaling solve.
+* `eigenvectors::Bool=true`: Whether `compute_spectrum` retains the basis eigenvectors returned by the scaling solve.
 
 ## Returns
 * `VerginiSaracenoSolver{T}`: Configured solver.
@@ -254,7 +254,7 @@ representation of the basis.
 
 ## Description
 The basis matrix `B` and its wavenumber derivative `dB/dk` are evaluated
-simultaneously from `cache` using [`basis_and_dk_matrices`](@ref). The
+simultaneously from `cache` using `basis_and_dk_matrices`. The
 Vergini–Saraceno matrices are then constructed as `F = B' * W * B` and
 `Fk = B' * W * dB/dk + (dB/dk)' * W * B`, where `W` is the diagonal
 quadrature weight matrix built from `pts.w_vs` and normalized by the number
@@ -267,7 +267,7 @@ the upper triangle, which is subsequently mirrored to the lower triangle.
 * `solver`: The [`VerginiSaracenoSolver`](@ref) whose matrices are constructed.
 * `basis`: Basis associated with `cache`.
 * `pts`: [`BoundaryPoints`](@ref) containing the Vergini–Saraceno quadrature weights.
-* `cache`: [`BasisCache`](@ref) used to evaluate the basis and its wavenumber derivative.
+* `cache`: `BasisCache` used to evaluate the basis and its wavenumber derivative.
 * `k`: Wavenumber at which the cached representation is evaluated.
 
 ## Keyword Arguments
@@ -390,7 +390,7 @@ Only candidates satisfying `abs(ks - k) < dk` are retained.
 * `solver`: The [`VerginiSaracenoSolver`](@ref) used to solve the generalized eigenvalue problem.
 * `basis`: Basis associated with `cache`.
 * `pts`: The [`BoundaryPoints`](@ref) containing the Vergini–Saraceno quadrature weights.
-* `cache`: [`BasisCache`](@ref) used to evaluate the basis and its wavenumber derivative.
+* `cache`: `BasisCache` used to evaluate the basis and its wavenumber derivative.
 * `k`: Scaling wavenumber around which the generalized eigenvalue problem is constructed.
 * `dk`: Half-width of the wavenumber window around `k` used to filter candidates.
 
@@ -514,7 +514,7 @@ original basis as `X = C * Z` and rescaled by `sqrt.(ten)`.
 * `solver`: The [`VerginiSaracenoSolver`](@ref) used to solve the generalized eigenvalue problem.
 * `basis`: Basis associated with `cache`.
 * `pts`: The [`BoundaryPoints`](@ref) containing the Vergini–Saraceno quadrature weights.
-* `cache`: [`BasisCache`](@ref) used to evaluate the basis and its wavenumber derivative.
+* `cache`: `BasisCache` used to evaluate the basis and its wavenumber derivative.
 * `k`: Scaling wavenumber around which the generalized eigenvalue problem is constructed.
 * `dk`: Half-width of the wavenumber window around `k` used to filter candidates.
 

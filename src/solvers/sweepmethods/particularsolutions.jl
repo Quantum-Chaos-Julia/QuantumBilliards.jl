@@ -64,8 +64,8 @@ tensions over a range of wavenumbers is minimized/scanned by
 The following functions can be evaluated for this type:
 - [`evaluate_points`](@ref)
 - [`construct_matrices`](@ref)
-- [`solve_full`](@ref)
-- [`solve_with_rank_reduction`](@ref)
+- `solve_full`
+- `solve_with_rank_reduction`
 - [`solve`](@ref)
 - [`solve_vect`](@ref)
 - [`solve_wavenumber`](@ref)
@@ -218,7 +218,7 @@ full (non rank-reduced) singular value decomposition of `B`/`B_int`.
 ## Description
 The tension is the smallest generalized singular value of the pencil
 `(B, B_int)`, computed directly with `svdvals(B, B_int)`. This is more
-expensive but more numerically robust than [`solve_with_rank_reduction`](@ref)
+expensive but more numerically robust than `solve_with_rank_reduction`
 for small-to-moderate basis dimensions.
 
 ## Arguments
@@ -305,9 +305,9 @@ Computes the particular solutions method tension at wavenumber `k` for `basis`
 on the boundary/interior points `pts`.
 
 ## Description
-Dispatches to [`solve_with_rank_reduction`](@ref) by default, which is
+Dispatches to `solve_with_rank_reduction` by default, which is
 substantially faster at large basis dimension; set `use_rank_reduction = false`
-to instead use the more robust, full-SVD [`solve_full`](@ref).
+to instead use the more robust, full-SVD `solve_full`.
 
 ## Arguments
 * `solver`: The [`ParticularSolutionsMethodSolver`](@ref) used to solve the eigenvalue problem.
@@ -317,8 +317,8 @@ to instead use the more robust, full-SVD [`solve_full`](@ref).
 
 ## Keyword arguments
 * `multithreaded::Bool = true`: Whether the matrix construction is multithreaded.
-* `use_rank_reduction::Bool = true`: If true, uses [`solve_with_rank_reduction`](@ref); otherwise uses [`solve_full`](@ref).
-* `rank_tol::Real = 1e-10`: Rank tolerance passed to [`solve_with_rank_reduction`](@ref).
+* `use_rank_reduction::Bool = true`: If true, uses `solve_with_rank_reduction`; otherwise uses `solve_full`.
+* `rank_tol::Real = 1e-10`: Rank tolerance passed to `solve_with_rank_reduction`.
 
 ## Returns
 * `t`: The tension at wavenumber `k`.
@@ -339,7 +339,7 @@ eigenvector (expressed in the original basis) at wavenumber `k`.
 
 ## Description
 Same rank-revealing QR reduction of `B_int` as
-[`solve_with_rank_reduction`](@ref), but additionally recovers the minimizing
+`solve_with_rank_reduction`, but additionally recovers the minimizing
 coefficient vector: the reduced matrix `B_reduced` is factorized with a full
 SVD, and its right singular vector for the smallest singular value is
 back-substituted through the QR triangular factor and un-pivoted to give the

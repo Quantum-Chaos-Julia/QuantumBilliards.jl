@@ -7,7 +7,9 @@ pages = [
     "API.md"
 ],
 format = Documenter.HTML(
-    prettyurls = get(ENV, "CI", nothing) == "true"
+    prettyurls = get(ENV, "CI", nothing) == "true",
+    size_threshold = 1_000_000,
+    size_threshold_warn = 500_000,
 )
 
 )

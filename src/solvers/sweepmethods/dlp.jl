@@ -66,6 +66,7 @@ full-boundary Fredholm operator to a selected symmetry sector.
 
 ## Attributes
 * `pts_scaling_factor::Vector{T}`: Boundary-point scaling factors used to determine the discretization size.
+* `billiard::Bi`: Billiard whose boundary is discretized.
 * `min_pts::Int64`: Minimum number of boundary points.
 * `grading::G`: [`BoundaryGrading`](@ref) strategy controlling the periodic boundary parametrization used by the Kress quadrature scheme.
 * `symmetry::Sy`: Optional discrete symmetry used to reduce the Fredholm operator.

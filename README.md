@@ -59,7 +59,7 @@ All accelerated BIM solvers wrap a sweep kernel (DLP/CFIE), which defines the in
 - **Sweep solvers** only for validation, basis convergence studies and spot checks at single wavenumbers.
 - Running two independent solvers on the same billiard is a good way to cross-validate a computed spectrum.
 
-**Bases**: `CornerAdaptedFourierBessel` (corner/singular geometries) and `RealPlaneWaves` (smooth, convex geometries).
+**Bases**: `CornerAdaptedFourierBessel` (corner/singular geometries), `FourierBessel` (star-shaped geometries) and `RealPlaneWaves` (smooth, convex geometries).
 
 **Boundary gradings**: `SmoothPeriodicGrading`, `CornerGrading`, `GlobalCornerGrading` (Kress grading for corner singularities).
 
@@ -85,9 +85,9 @@ k_min, k_max = k_range_for_states(billiard, 250, 257)
 spectrum = compute_spectrum(solver, billiard, k_min, k_max; multithreaded = true)
 
 # states (SpectralData is indexable and sliceable)
-Psi, x, y = wavefunction(spectrum[1]; b = 5.0, inside_only = true)
-u, s      = boundary_function(spectrum[1])
-h, p, q   = husimi_function(spectrum[1]; full_p = true)
+Psi, x, y = wavefunction(spectrum[1]; ppw = 5.0, inside_only = true)
+u, s, norm = boundary_function(spectrum[1])
+h, q, p    = husimi_function(spectrum[1]; full_p = true)
 ```
 
 Visualization is provided by [QBPlotting.jl](https://github.com/Quantum-Chaos-Julia/QBPlotting.jl) (Makie based).

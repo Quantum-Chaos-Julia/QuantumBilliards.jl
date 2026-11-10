@@ -32,7 +32,7 @@ function solve_wavenumber(solver::SweepBasisSolver,basis::AbsBasis, billiard::Ab
 end
 
 """
-    k_sweep(solver::SweepBasisSolver, basis::AbsBasis, billiard::AbsBilliard, ks; multithreaded::Bool = true) 
+    k_sweep(solver::SweepBasisSolver, basis::AbsBasis, billiard::AbsBilliard, ks; multithreaded::Bool = true, show_progress::Bool = false)
 
 Computes the tension of the sweep `solver` at every wavenumber in `ks`, using a
 single basis resized to the largest wavenumber in `ks`.
@@ -45,10 +45,10 @@ single basis resized to the largest wavenumber in `ks`.
 
 ## Keyword Arguments
 * `multithreaded::Bool = true`: Whether the matrix construction is multithreaded.
+* `show_progress::Bool = false`: Whether a progress bar is displayed during the sweep.
 
 ## Returns
 * `res::AbstractVector`: Tensions corresponding to the wavenumbers in `ks`.
-* `show_progress::Bool`: Whether a progress bar was displayed during the sweep.
 """
 function k_sweep(solver::SweepBasisSolver, basis::AbsBasis, billiard::AbsBilliard, ks; multithreaded=true, show_progress=false)
     k = maximum(ks)
@@ -328,7 +328,7 @@ and the physical boundary normal derivative `u = ∂ₙψ`.
 The DLP Fredholm matrix `A(k)` is assembled once and its smallest singular
 triplet is computed with a single `KrylovKit.svdsolve` call. The right singular
 vector gives the native DLP layer density. The left singular vector is converted
-to the physical normal derivative using [`_bim_normal_derivative`](@ref).
+to the physical normal derivative using `_bim_normal_derivative`.
 
 Both quantities are expanded onto the complete physical boundary when symmetry
 reduction is active. The physical normal derivative is then normalized using

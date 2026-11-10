@@ -35,8 +35,9 @@ discretization.
 ## Description
 `AbsSolver` is the top-level abstraction shared by every solver algorithm in
 the package, regardless of the representation used to determine the spectrum.
-Its concrete-algorithm branch is [`AbsBasisSolver`](@ref), the supertype of
-all solvers that determine the spectrum by expanding the solution in a basis.
+It has two concrete-algorithm branches: [`AbsBasisSolver`](@ref), the supertype
+of all solvers that determine the spectrum by expanding the solution in a basis,
+and [`AbsBIMSolver`](@ref), the supertype of all boundary-integral solvers.
 
 ## API
 The following functions can be evaluated for any `AbsSolver`:
@@ -120,21 +121,26 @@ Every concrete `AcceleratedBIMSolver` wraps an inner `kernel::SweepBIMSolver`
 (a [`DoubleLayerPotentialSolver`](@ref), [`CombinedFieldIntegralEquationSolver`](@ref)
 or [`CompositeBIMSolver`](@ref)) supplying the Fredholm operator, and adds its
 own root-finding strategy on top of it: [`BeynSolver`](@ref) recovers every
-root within a contour via Beyn's contour-integral method, while
-[`ExpandedBIMSolver`](@ref) recovers a single locally-corrected root via a
+root within a contour via Beyn's contour-integral method, [`CORKSolver`](@ref)
+recovers every root of a window from a Chebyshev matrix polynomial
+approximation of `A(k)` using a compact block-Arnoldi iteration, while
+[`ExpandedBIMSolver`](@ref) recovers locally-corrected roots via a
 second-order local Taylor expansion of `A(k)`. Every concrete
-`AcceleratedBIMSolver` also stores every one of its own numerical tuning
-parameters (Beyn's `m`/`nq`/`r`/`svd_tol`/`res_tol`, EBIM's Taylor
-settings) as fields, so its widest-scope entry point,
-[`compute_spectrum`](@ref), takes only the wavenumber range `[k1,k2]` (plus a
-small number of merge-strategy keyword arguments). `BeynSolver`'s [`compute_spectrum`](@ref) covers `[k1,k2]` with
-consecutive Weyl-balanced contour windows and concatenates each window's
-already-filtered result (no fuzzy overlap merge needed, windows are
-disjoint by construction); `ExpandedBIMSolver`'s corrects a dense adaptive
-grid of trial wavenumbers and merges the densely-overlapping results with
+`AcceleratedBIMSolver` also stores its own numerical tuning parameters (for
+example Beyn's `nlevels`/`nq`/`r`/`svd_tol`/`res_tol`, CORK's `p`/`block_size`,
+EBIM's Taylor settings) as immutable fields; [`with_params`](@ref) returns a
+copy with some of them replaced. Its widest-scope entry point,
+[`compute_spectrum`](@ref), takes the wavenumber range `[k1,k2]` (or Weyl-law
+state indices `N1,N2`) plus a small number of window and merge keyword arguments.
+`BeynSolver` and `CORKSolver` cover `[k1,k2]` with consecutive Weyl-sized
+windows and concatenate each window's already-filtered result (no fuzzy
+overlap merge needed, windows are disjoint by construction);
+`ExpandedBIMSolver` corrects roots around expansion centers placed by
+[`sweep_windows`](@ref) and merges the overlapping results with
 [`overlap_and_merge_ebim!`](@ref) (a spacing-adaptive clustering merge,
 unlike the window-boundary-based [`overlap_and_merge!`](@ref) used
-elsewhere).
+elsewhere). [`plan_computation`](@ref) describes the window layout and memory
+requirement of such a run without solving.
 
 ## API
 The following functions can be evaluated for any `AcceleratedBIMSolver`:
@@ -147,6 +153,28 @@ The following functions can be evaluated for any `AcceleratedBIMSolver`:
 """
 abstract type AcceleratedBIMSolver <: AbsBIMSolver end
 
+"""
+    AbsState
+
+`AbsState` is the abstract supertype for all representations of a quantum
+billiard state.
+
+## Description
+Every concrete subtype of `AbsState` stores at least a wavenumber `k`.
+States expressed in a genuine [`AbsBasis`](@ref) ([`BasisEigenstate`](@ref) and
+[`BasisState`](@ref)) additionally store the expansion coefficients `vec`, the
+wavenumber `k_basis` at which `basis` was evaluated and the `basis` itself.
+[`BIMEigenstate`](@ref) instead stores boundary data (layer density and/or
+physical boundary normal derivative) on a [`BoundaryPoints`](@ref)
+discretization and is not tied to any basis.
+
+## API
+The following functions can be evaluated for any `AbsState`:
+- `boundary_function`
+- `momentum_function`
+- `wavefunction`
+- `husimi_function`
+"""
 abstract type AbsState end
 
 """
@@ -224,29 +252,3 @@ The following functions can be evaluated for any `AcceleratedBasisSolver`:
 - [`compute_eigenstate`](@ref)
 """
 abstract type AcceleratedBasisSolver <: AbsBasisSolver end
-
-"""
-    AbsState
-
-`AbsState` is the abstract supertype for all representations of a quantum
-billiard state expressed through a coefficient vector `vec` at a wavenumber
-`k`.
-
-## Description
-Every concrete subtype of `AbsState` stores at least a wavenumber `k`, the
-wavenumber `k_basis` at which the associated basis coefficients `vec` were
-evaluated, the dimension `dim` of `vec`, and a numerical precision threshold
-`eps` (see `set_precision`) below which coefficients are treated as zero.
-[`AbsState`](@ref) is the branch of `AbsState` for states expressed in
-a genuine [`AbsBasis`](@ref); [`GaussianRandomState`](@ref) is a direct
-`AbsState` subtype not tied to any specific basis, used as a random-wave
-reference ensemble.
-
-## API
-The following functions can be evaluated for any `AbsState`:
-- `boundary_function`
-- `momentum_function`
-- `wavefunction`
-- `husimi_function`
-"""
-

@@ -46,7 +46,7 @@ The following functions can be evaluated for this type:
 - [`gradient`](@ref)
 - [`basis_and_gradient`](@ref)
 - [`dk_fun`](@ref)
-- [`RealPlaneWaveTaylorCache`](@ref)
+- `RealPlaneWaveTaylorCache`
 """
 struct RealPlaneWaves{T,Sa} <: AbsBasis where {T<:Real,Sa<:AbsSampler}
     dim::Int64

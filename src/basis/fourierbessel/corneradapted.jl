@@ -111,7 +111,7 @@ corner. This follows the corner-adapted approach of Betcke & Trefethen,
 
 The basis can optionally use an analytic Taylor representation in the
 wavenumber. When `use_taylor = true`, compatible accelerated solvers may
-construct a [`BasisCache`](@ref) and reuse it for basis evaluations within
+construct a `BasisCache` and reuse it for basis evaluations within
 `taylor_radius` of its expansion center. The Taylor degree is controlled by
 `taylor_degree`.
 
@@ -139,7 +139,7 @@ The following functions can be evaluated for this type:
 - [`dk_fun`](@ref)
 - [`gradient`](@ref)
 - [`basis_and_gradient`](@ref)
-- [`CornerAdaptedTaylorCache`](@ref)
+- `CornerAdaptedTaylorCache`
 """
 struct CornerAdaptedFourierBessel{T,Sy} <: AbsBasis where {T<:Real,Sy<:Union{AbsSymmetry,Nothing}}
     origin::SVector{2,T}

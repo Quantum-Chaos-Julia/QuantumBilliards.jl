@@ -128,7 +128,7 @@ Construct a Taylor cache for a [`RealPlaneWaves`](@ref) basis.
 * `multithreaded::Bool = true`: Whether cache construction is multithreaded across basis functions.
 
 ## Returns
-* `cache`: [`RealPlaneWaveTaylorCache`](@ref) containing the normalized Taylor coefficients.
+* `cache`: `RealPlaneWaveTaylorCache` containing the normalized Taylor coefficients.
 """
 function RealPlaneWaveTaylorCache(basis::RealPlaneWaves{T}, k0::T, pts::AbstractArray; multithreaded::Bool = true) where {T<:Real}
     p = basis.taylor_degree
@@ -161,7 +161,7 @@ Construct the Taylor cache associated with a [`RealPlaneWaves`](@ref) basis.
 * `multithreaded::Bool = true`: Whether cache construction is multithreaded.
 
 ## Returns
-* `cache`: [`RealPlaneWaveTaylorCache`](@ref) associated with `basis`.
+* `cache`: `RealPlaneWaveTaylorCache` associated with `basis`.
 """
 @inline function basis_cache(basis::RealPlaneWaves, k0, pts; multithreaded::Bool = true)
     return @timeit_debug "basis_cache" RealPlaneWaveTaylorCache(basis, k0, pts; multithreaded)
@@ -173,7 +173,7 @@ end
 Evaluate one cached real plane-wave basis function at `k`.
 
 ## Arguments
-* `cache`: [`RealPlaneWaveTaylorCache`](@ref).
+* `cache`: `RealPlaneWaveTaylorCache`.
 * `i`: Basis-function index.
 * `k`: Evaluation wavenumber.
 
@@ -196,7 +196,7 @@ end
 Evaluate selected cached real plane-wave basis functions at `k`.
 
 ## Arguments
-* `cache`: [`RealPlaneWaveTaylorCache`](@ref).
+* `cache`: `RealPlaneWaveTaylorCache`.
 * `indices`: Basis-function indices to evaluate.
 * `k`: Evaluation wavenumber.
 
@@ -226,7 +226,7 @@ end
 Evaluate the complete cached real plane-wave basis at `k`.
 
 ## Arguments
-* `cache`: [`RealPlaneWaveTaylorCache`](@ref).
+* `cache`: `RealPlaneWaveTaylorCache`.
 * `k`: Evaluation wavenumber.
 
 ## Keyword Arguments
@@ -255,7 +255,7 @@ Evaluate the wavenumber derivative of one cached real plane-wave basis
 function.
 
 ## Arguments
-* `cache`: [`RealPlaneWaveTaylorCache`](@ref).
+* `cache`: `RealPlaneWaveTaylorCache`.
 * `i`: Basis-function index.
 * `k`: Evaluation wavenumber.
 
@@ -279,7 +279,7 @@ Evaluate the wavenumber derivatives of selected cached real plane-wave basis
 functions.
 
 ## Arguments
-* `cache`: [`RealPlaneWaveTaylorCache`](@ref).
+* `cache`: `RealPlaneWaveTaylorCache`.
 * `indices`: Basis-function indices to evaluate.
 * `k`: Evaluation wavenumber.
 
@@ -310,7 +310,7 @@ Evaluate the wavenumber derivative of the complete cached real plane-wave
 basis.
 
 ## Arguments
-* `cache`: [`RealPlaneWaveTaylorCache`](@ref).
+* `cache`: `RealPlaneWaveTaylorCache`.
 * `k`: Evaluation wavenumber.
 
 ## Keyword Arguments
@@ -339,7 +339,7 @@ Evaluate the complete cached real plane-wave basis and its wavenumber
 derivative simultaneously.
 
 ## Arguments
-* `cache`: [`RealPlaneWaveTaylorCache`](@ref).
+* `cache`: `RealPlaneWaveTaylorCache`.
 * `k`: Evaluation wavenumber.
 * `w`: Vector of quadrature weights associated with the cached points.
 * `nsym`: = one(eltype(w)) * (isnothing(basis.symmetries) ? 1 : length(basis.symmetries) + 1)
