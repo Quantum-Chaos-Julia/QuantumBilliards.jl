@@ -4,8 +4,10 @@ This section will guide you through getting started with QuantumBilliards.jl.
 ## Installation
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/Quantum-Chaos-Julia/QuantumBilliards.jl")
+Pkg.add("QuantumBilliards.jl")
 ```
+
+QuantumBilliards does not change the BLAS/LAPACK backend. To use MKL on x86_64, add MKL.jl to your environment and run `using MKL` (or [`try_MKL!`](@ref)) before computing.
 
 ## Core components
 A computation combines a billiard from `BilliardGeometry.jl`, a solver and,

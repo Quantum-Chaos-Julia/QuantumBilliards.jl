@@ -458,8 +458,8 @@ Each state uses its natural automatically generated phase-space grid.
 
 ## Returns
 * `Hs::Vector{Matrix{T}}`: Poincare-Husimi matrices.
-* `ps::Vector{Vector{T}}`: Corresponding momentum grids.
 * `qs::Vector{Vector{T}}`: Corresponding boundary-position grids.
+* `ps::Vector{Vector{T}}`: Corresponding momentum grids.
 """
 function husimi_function(states::AbstractVector{<:BIMEigenstate{K,T}}, billiard::AbsBilliard, solver::AbsBIMSolver;c::Real=10.0,w::Real=7.0,full_p::Bool=false) where {K,T<:Real}
     n = length(states)
@@ -481,7 +481,7 @@ function husimi_function(states::AbstractVector{<:BIMEigenstate{K,T}}, billiard:
             next!(pbar)
         end
     end
-    return Hs[ok],ps_return[ok],qs_return[ok]
+    return Hs[ok],qs_return[ok],ps_return[ok]
 end
 
 """
@@ -502,8 +502,8 @@ Compute Poincare-Husimi functions for several basis eigenstates.
 
 ## Returns
 * `Hs::Vector{Matrix{T}}`: Poincare-Husimi matrices.
-* `ps::Vector{Vector{T}}`: Corresponding momentum grids.
 * `qs::Vector{Vector{T}}`: Corresponding boundary-position grids.
+* `ps::Vector{Vector{T}}`: Corresponding momentum grids.
 """
 function husimi_function(states::AbstractVector{S}, billiard::AbsBilliard; ppw::Real=5.0, c::Real=10.0, w::Real=7.0, multithreaded::Bool=true, full_p::Bool=false) where {S<:AbsState}
     n = length(states)
@@ -523,7 +523,7 @@ function husimi_function(states::AbstractVector{S}, billiard::AbsBilliard; ppw::
         end
         next!(pbar)
     end
-    return Hs[ok],ps_return[ok],qs_return[ok]
+    return Hs[ok],qs_return[ok],ps_return[ok]
 end
 
 ################################################################################
@@ -537,7 +537,7 @@ _husimi_function_state(state::BIMEigenstate, billiard::AbsBilliard, solver; kwar
 _husimi_function_state(state::BasisEigenstate, billiard::AbsBilliard, solver; kwargs...) = husimi_function(state, billiard; kwargs...)
 
 """
-    husimi_function(data::SpectralData; kwargs...) → (Hs, ps, qs)
+    husimi_function(data::SpectralData; kwargs...) → (Hs, qs, ps)
 
 Compute the Poincare-Husimi function of every eigenstate stored in `data`.
 """

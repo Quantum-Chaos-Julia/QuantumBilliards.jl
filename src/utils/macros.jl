@@ -96,13 +96,15 @@ end
 """
     try_MKL!()
 
-Tries to use the MKL on x86_64 architecture if possible. Otherwise it defaults to the stock BLAS backend :lbt.
+Opt-in switch of the BLAS/LAPACK backend to MKL on x86_64. MKL.jl replaces BLAS and LAPACK for the whole Julia process,
+so it is loaded only on request and must be installed in the active environment; QuantumBilliards does not depend on it.
+Otherwise it keeps the stock BLAS backend :lbt.
 macOS currently not supported due to Accelerate.jl causing issues with non-even FFTW. MKL.jl does not have this issue (for now).
 """
 function try_MKL!()
     if Sys.ARCH==:x86_64
         try
-            @eval using MKL
+            Base.require(Main, :MKL)
             @info "BLAS backend: $(BLAS.get_config())"
         catch e
             @warn "Install Math Kernel Library (MKL) via MKL.jl" exception=e

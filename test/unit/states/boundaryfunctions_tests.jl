@@ -629,13 +629,17 @@ end
 
         u1, sv1, n1 = boundary_function(data, 2)
         @test (u1, sv1, n1) == boundary_function(s1, BF_CIRCLE)
-        all_b = boundary_function(data)
-        @test length(all_b) == 2 && all_b[1] == boundary_function(s0, BF_CIRCLE) && all_b[2] == (u1, sv1, n1)
+        us, ss, ns = boundary_function(data)
+        @test length(us) == length(ss) == length(ns) == 2
+        @test (us[1], ss[1], ns[1]) == boundary_function(s0, BF_CIRCLE) && (us[2], ss[2], ns[2]) == (u1, sv1, n1)
+        u_one, s_one, n_one = boundary_function(data[1])
+        @test length(u_one) == 1 && (u_one[1], s_one[1], n_one[1]) == boundary_function(s0, BF_CIRCLE)
         @test boundary_function(data, 1; ppw=3000.0)[1] == boundary_function(s0, BF_CIRCLE; ppw=3000.0)[1]
 
         @test momentum_function(data, 2) == momentum_function(s1, BF_CIRCLE)
-        all_m = momentum_function(data)
-        @test length(all_m) == 2 && all_m[1] == momentum_function(s0, BF_CIRCLE) && all_m[2] == momentum_function(s1, BF_CIRCLE)
+        powers, kss = momentum_function(data)
+        @test length(powers) == length(kss) == 2
+        @test (powers[1], kss[1]) == momentum_function(s0, BF_CIRCLE) && (powers[2], kss[2]) == momentum_function(s1, BF_CIRCLE)
     end
 
     @testset "BIM eigenstates go through the solver" begin
@@ -643,9 +647,10 @@ end
         st = bf_bim_state(BF_J01, cos.(3 .* pts.s), pts)
         data = SpectralData(BF_CIRCLE, bf_SweepStub(), [BF_J01], [1e-9], [false]; states=[st])
         @test boundary_function(data, 1) == (st.u, pts.s, 1.25)
-        @test boundary_function(data) == [(st.u, pts.s, 1.25)]
+        @test boundary_function(data) == ([st.u], [pts.s], [1.25])
         @test momentum_function(data, 1) == momentum_function(st)
-        @test momentum_function(data) == [momentum_function(st)]
+        p1, k1 = momentum_function(st)
+        @test momentum_function(data) == ([p1], [k1])
     end
 
     @testset "data without stored states" begin

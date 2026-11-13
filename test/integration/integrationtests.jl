@@ -55,3 +55,7 @@ end
     include("drivers/compute_spectrum_drivers.jl")
     include("states/spectrum_states.jl")
 end
+
+@group "docs" begin
+    include("docs/readme_examples.jl")
+end

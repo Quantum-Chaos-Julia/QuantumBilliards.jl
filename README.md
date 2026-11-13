@@ -1,6 +1,7 @@
 # QuantumBilliards
 
-[![Build Status](https://github.com/clozej/QuantumBilliards.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/clozej/QuantumBilliards.jl/actions/workflows/CI.yml?query=branch%3Amain)
+[![Build Status](https://github.com/Quantum-Chaos-Julia/QuantumBilliards.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/Quantum-Chaos-Julia/QuantumBilliards.jl/actions/workflows/CI.yml?query=branch%3Amain)
+[![codecov](https://codecov.io/gh/Quantum-Chaos-Julia/QuantumBilliards.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/Quantum-Chaos-Julia/QuantumBilliards.jl)
 [![Documentation](https://img.shields.io/badge/docs-stable-blue.svg)](https://Quantum-Chaos-Julia.github.io/QuantumBilliards.jl/)
 [![Documentation (dev)](https://img.shields.io/badge/docs-dev-blue.svg)](https://Quantum-Chaos-Julia.github.io/QuantumBilliards.jl/dev/)
 [![Julia](https://img.shields.io/badge/julia-%E2%89%A5%201.12-9558B2.svg?logo=julia)](https://julialang.org)
@@ -63,6 +64,10 @@ All accelerated BIM solvers wrap a sweep kernel (DLP/CFIE), which defines the in
 
 **Boundary gradings**: `SmoothPeriodicGrading`, `CornerGrading`, `GlobalCornerGrading` (Kress grading for corner singularities).
 
+# BLAS backend
+
+QuantumBilliards.jl does not change the BLAS/LAPACK backend of your Julia session. On x86_64, [MKL.jl](https://github.com/JuliaLinearAlgebra/MKL.jl) is typically faster for the large dense factorizations used by the solvers (the [Benchmarks](#benchmarks) were run with it). To opt in, add MKL.jl to your environment and run `using MKL` before any computation, or call `try_MKL!()`, which loads it and reports the active backend.
+
 # Quick start
 
 ```julia
@@ -85,12 +90,12 @@ k_min, k_max = k_range_for_states(billiard, 250, 257)
 spectrum = compute_spectrum(solver, billiard, k_min, k_max; multithreaded = true)
 
 # states (SpectralData is indexable and sliceable)
-Psi, x, y = wavefunction(spectrum[1]; ppw = 5.0, inside_only = true)
-u, s, norm = boundary_function(spectrum[1])
-h, q, p    = husimi_function(spectrum[1]; full_p = true)
+Psis, xs, ys = wavefunction(spectrum[1]; ppw = 5.0, inside_only = true)
+us, ss, norms = boundary_function(spectrum[1])
+Hs, qs, ps    = husimi_function(spectrum[1]; full_p = true)
 ```
 
-Visualization is provided by [QBPlotting.jl](https://github.com/Quantum-Chaos-Julia/QBPlotting.jl) (Makie based).
+Visualization is provided by the companion package QBPlotting.jl (Makie based, not yet publicly available).
 
 # Billiards
 Available through BilliardGeometry.jl: circle, ellipse, rectangle, stadium, Prosen, Robnik limaçon, mushroom, annular, Sinai, triangles, general polygons, polar/Fourier-ripple billiards, `C3` and star billiards, and more. Custom billiards are assembled from parametrized curves (`LineSegment`, `CircleSegment`, `PolarSegment`, `FourierCoeffPolarSegment`), grouped into simple or composite domains with boundary roles (specular reflection, transparent interface, symmetry wall) and an optional symmetry registry.
@@ -108,8 +113,8 @@ Complete spectra for $500 \le k \le 1400$ of the Prosen billiard (single `comput
 
 # Related packages
 - [BilliardGeometry.jl](https://github.com/Quantum-Chaos-Julia/BilliardGeometry.jl) - geometry, boundary discretization, quadratures, symmetries.
-- [QBPlotting.jl](https://github.com/Quantum-Chaos-Julia/QBPlotting.jl) - plotting of states, boundary functions and Husimi functions.
-- [SpectralStatistics.jl](https://github.com/Quantum-Chaos-Julia/SpectralStatistics.jl) - spectral statistics and random matrix models for the computed spectra.
+- QBPlotting.jl - plotting of states, boundary functions and Husimi functions (not yet publicly available).
+- [SpectralStatistics.jl](https://github.com/clozej/SpectralStatistics.jl) - spectral statistics and random matrix models for the computed spectra.
 - `ClassicalBilliards.jl` - classical billiard dynamics (under development).
 
 # Roadmap
@@ -125,8 +130,11 @@ If you use QuantumBilliards.jl in your research, please cite:
   title   = {QuantumBilliards.jl: An extensible, user friendly, high-performance Julia library for the large scale computation of spectra and eigenstates of quantum billiards and related problems},
   author  = {Orel, Matic and Lozej, {\v C}rt},
   journal = {SciPost Physics Codebases},
-  year    = {2026},
-  note    = {PLACEHOLDER: add volume, article number, DOI and arXiv identifier after publication}
+  year={2026},
+  eprint={2610.32605},
+  archivePrefix={arXiv},
+  primaryClass={quant-ph},
+  url={https://arxiv.org/abs/2610.32605}, 
 }
 ```
 

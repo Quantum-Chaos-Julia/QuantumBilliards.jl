@@ -23,8 +23,8 @@
 # not affect the Husimi density of a single-curve boundary, since H is normalised to sum 1.
 # Helper definitions use the prefix `hu_` / `HU_`.
 #
-# FINDINGS (no source change): the batched forms return (Hs, ps, qs) while the single-state forms return (H, qs, ps);
-# the batched basis form drops states that throw, silently. Both are current documented/observed behaviour and are pinned below.
+# FINDINGS (no source change): the batched basis form drops states that throw, silently. This is current documented/observed
+# behaviour and is pinned below. Single-state and batched forms both return (H, qs, ps) / (Hs, qs, ps).
 # The single-axis reflection path was checked through boundary_function in boundaryfunctions_tests.jl (Limacon) and is
 # consistent; the single-axis bug of apply_symmetries_to_wavefunction does not affect the boundary-function path.
 
@@ -480,39 +480,39 @@ end
         hu_check_constant(H, qs, ps, st.k; var=false)
     end
 
-    @testset "several states: Hs, ps, qs, each equal to the single-state result" begin
+    @testset "several states: Hs, qs, ps, each equal to the single-state result" begin
         s, ds, _ = hu_uniform_grid(Float64, 256)
         pts = hu_pts(s, ds)
         s1 = hu_bim_state(HU_J02, fill(1.0, 256), pts)
-        s2 = hu_bim_state(HU_J02, cos.(10 .* s), pts)                 # note: tests the (Hs, ps, qs) order of the batch form
-        Hs, pss, qss = husimi_function([s1, s2], HU_CIRCLE, hu_SweepStub())
+        s2 = hu_bim_state(HU_J02, cos.(10 .* s), pts)
+        Hs, qss, pss = husimi_function([s1, s2], HU_CIRCLE, hu_SweepStub())
         @test length(Hs) == length(pss) == length(qss) == 2
         for (i, st) in enumerate((s1, s2))
             H, qs, ps = husimi_function(st, HU_CIRCLE, hu_SweepStub())
             @test Hs[i] == H && qss[i] == qs && pss[i] == ps
         end
-        @test pss[1][1] ≈ -1 && qss[1][1] >= 0                         # second element holds the momentum grids
+        @test pss[1][1] ≈ -1 && qss[1][1] >= 0                         # third element holds the momentum grids
     end
 end
 
 @testset "husimi_function(states, billiard) - several basis eigenstates" begin
     s0 = hu_j0_state(); s1 = hu_j1_state()
 
-    @testset "Hs, ps, qs equal the single-state results" begin
-        Hs, pss, qss = husimi_function([s0, s1], HU_CIRCLE)
+    @testset "Hs, qs, ps equal the single-state results" begin
+        Hs, qss, pss = husimi_function([s0, s1], HU_CIRCLE)
         @test Hs isa Vector{Matrix{Float64}} && pss isa Vector{Vector{Float64}} && qss isa Vector{Vector{Float64}}
         @test length(Hs) == 2
         for (i, st) in enumerate((s0, s1))
             H, qs, ps = husimi_function(st, HU_CIRCLE)
             @test Hs[i] == H && qss[i] == qs && pss[i] == ps
         end
-        Hc, pc, qc = husimi_function([s0, s1], HU_CIRCLE; c=5.0)
+        Hc, qc, pc = husimi_function([s0, s1], HU_CIRCLE; c=5.0)
         @test length(pc[1]) == 2 * ceil(Int, 5 * sqrt(s0.k)) + 1
     end
 
     @testset "a state that throws is dropped from the result (current behaviour)" begin
         bad = BasisEigenstate(s0.k, [1.0, 2.0], 1e-12, s0.basis)       # coefficient vector of the wrong length
-        Hs, pss, qss = @test_logs husimi_function([s0, bad, s1], HU_CIRCLE)
+        Hs, qss, pss = @test_logs husimi_function([s0, bad, s1], HU_CIRCLE)
         @test length(Hs) == length(pss) == length(qss) == 2
         @test Hs[1] == husimi_function(s0, HU_CIRCLE)[1] && Hs[2] == husimi_function(s1, HU_CIRCLE)[1]
     end
@@ -524,8 +524,8 @@ end
         data = SpectralData(HU_CIRCLE, nothing, [s0.k, s1.k], [1e-12, 1e-12], [false, false]; states=[s0, s1])
         @test husimi_function(data, 2) == husimi_function(s1, HU_CIRCLE)
         @test husimi_function(data, 1; c=5.0) == husimi_function(s0, HU_CIRCLE; c=5.0)
-        Hs, pss, qss = husimi_function(data)
-        Hr, pr, qr = husimi_function([s0, s1], HU_CIRCLE)
+        Hs, qss, pss = husimi_function(data)
+        Hr, qr, pr = husimi_function([s0, s1], HU_CIRCLE)
         @test Hs == Hr && pss == pr && qss == qr
     end
 
@@ -534,7 +534,7 @@ end
         st = hu_bim_state(HU_J02, ones(256), hu_pts(s, ds))
         data = SpectralData(HU_CIRCLE, hu_SweepStub(), [HU_J02], [1e-9], [false]; states=[st])
         @test husimi_function(data, 1) == husimi_function(st, HU_CIRCLE, hu_SweepStub())
-        Hs, pss, qss = husimi_function(data)
+        Hs, qss, pss = husimi_function(data)
         @test length(Hs) == 1 && Hs[1] == husimi_function(st, HU_CIRCLE, hu_SweepStub())[1]
     end
 

@@ -11,7 +11,6 @@ using BilliardGeometry
 using KrylovKit
 using Printf
 using ProgressMeter
-using MKL
 
 #abstract types
 include("abstracttypes.jl")
