@@ -8,6 +8,8 @@
 # the same geometry for every n, see trivial_group_fallback.jl. Window [8, 16]: the first level of the billiard with the hole is near 9.7
 # (the hole raises the levels; the hole-free C3Billiard(0.2) window of rotation_spectra.jl is [3, 12]).
 
+@requires "integration/symmetric_holes/helpers.jl"
+
 # solver: Beyn contour integral
 # kernel/basis: composite CFIE (SmoothPeriodicGrading), ppw=10, min_pts=96
 # billiard: C3Billiard(0.2) with a disc hole declared as a C6 SymmetricHole (G' = C3)

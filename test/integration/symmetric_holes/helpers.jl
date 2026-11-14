@@ -1,6 +1,6 @@
 # Shared helpers for the symmetric-holes integration group (Phase 2 of the symmetric-holes plan, scratchpad of BilliardGeometry.jl).
-# Not a test file: definitions only, no @testset. Included first by the "symmetric holes" group of integrationtests.jl, so that
-# the files of the group (and a QB_TEST_FILTER run of that group alone) are self-contained. All names carry the prefix `sh_`.
+# Not a test file: definitions only, no @testset. Loaded once per run by the `@requires` line of each file of the group, so that
+# every file is self-contained under QB_TEST_FILE. All names carry the prefix `sh_`.
 #
 # The common setup is a composite CFIE kernel (one component per boundary group: the outer boundary, then one per hole object)
 # inside a BeynSolver with the Taylor backend off (use_chebyshev = false). Spectra are cached in SH_CACHE, so the unreduced

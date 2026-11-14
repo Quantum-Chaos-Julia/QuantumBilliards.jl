@@ -6,6 +6,8 @@
 # one hole component solver (one hole object), the explicit billiard has four. Window [4, 9]: nearest levels to the edges (observed) 4.18
 # and 8.94.
 
+@requires "integration/symmetric_holes/helpers.jl"
+
 # solver: Beyn contour integral
 # kernel/basis: composite CFIE (outer square graded, hole copies share one solver), ppw=10, min_pts=96
 # billiard: D2 quarter square with SymmetrizedHoles(DomainHole(disc), D2_symmetry()), four hole loops in one group

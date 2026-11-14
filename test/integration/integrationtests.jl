@@ -1,5 +1,5 @@
 # Integration tier: spectrum-focused pipeline tests, grouped in nested @testsets.
-# `common.jl` (reference generators and tolerances) is included by runtests.jl before this file.
+# `common.jl` (reference generators and tolerances) is shared with every integration file through the harness.
 
 @group "high_k" begin
     run_file("integration/high_k/beyn_high_k_spectra.jl")
@@ -38,9 +38,8 @@ end
 end
 
 # Symmetric holes: reduced composite solvers on billiards with SymmetricHole / SymmetrizedHoles. helpers.jl holds definitions
-# only (cached Beyn spectra, kernel builder); it comes first so that the group is self-contained under QB_TEST_FILTER.
+# only (cached Beyn spectra, kernel builder) and is loaded by the `@requires` line of each file of the group.
 @group "symmetric holes" begin
-    include_helper("integration/symmetric_holes/helpers.jl")
     run_file("integration/symmetric_holes/sinai_sector_spectra.jl")
     run_file("integration/symmetric_holes/reduced_ebim_spectra.jl")
     run_file("integration/symmetric_holes/reduced_states.jl")

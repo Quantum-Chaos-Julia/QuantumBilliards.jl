@@ -8,6 +8,7 @@
 # the plan: the Husimi general-path edge rows are wrong, so Husimi checks use interior rows only).
 
 using LinearAlgebra: norm, dot
+using SpecialFunctions: besselj
 using Statistics: mean
 
 const _SS_SPECTRA = Dict{Symbol,Any}()

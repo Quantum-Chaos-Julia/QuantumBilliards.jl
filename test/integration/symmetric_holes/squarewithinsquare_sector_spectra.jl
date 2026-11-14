@@ -8,6 +8,8 @@
 # not an accuracy test, and |Im k| is not asserted. Levels with chi_Diagonal = -1 (zero on the diagonal) are converged to 1e-9.
 # Window [4, 9] (edges away from levels; nearest observed 4.14 and 8.92).
 
+@requires "integration/symmetric_holes/helpers.jl"
+
 # solver: Beyn contour integral
 # kernel/basis: composite CFIE (GlobalCornerGrading(kressq=2) on both loops), ppw=10, min_pts=96
 # billiard: SquareWithinSquare (SquareWithinSquareBilliard(1.0; positions=[0.0], sizes=[0.5])), concentric square obstacle

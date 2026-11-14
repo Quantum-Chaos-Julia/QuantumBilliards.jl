@@ -7,6 +7,8 @@
 # to sum 1; the unfolded wavefunction of the sector (+1, +1) is even under x -> -x and y -> -y and vanishes inside the hole and
 # outside the square (inside_only mask).
 
+@requires "integration/symmetric_holes/helpers.jl"
+
 using LinearAlgebra: norm, dot
 
 const REDUCED_STATES_CACHE = Dict{Symbol,Any}()

@@ -7,6 +7,8 @@
 # The reduced CORKSolver is deliberately not tested: reduced CORK fails with "Reached full CORK Krylov dimension" even for a hole-free
 # rectangle (known bug in src/, see the report of the Julia Test Writer; unreduced CORK works).
 
+@requires "integration/symmetric_holes/helpers.jl"
+
 # solver: Expanded BIM
 # kernel/basis: composite CFIE (outer square graded, disc hole), ppw=10, min_pts=200
 # billiard: Sinai (SinaiBilliard(1.0, 0.25))

@@ -9,6 +9,8 @@
 # Kernel: composite CFIE with SmoothPeriodicGrading on the smooth outer loop and the hole loop, ppw 10, min_pts 96 per component.
 # Windows: concentric [4, 12] as in bim_sweep/compositebim_holes.jl; eccentric [4, 11.6], the nearest levels (observed) are 11.46 and 11.79.
 
+@requires "integration/symmetric_holes/helpers.jl"
+
 const ANNULAR_GRADING = SmoothPeriodicGrading()
 
 # Distinct levels of the concentric annulus spectrum and their multiplicity (the generator repeats the same float for m >= 1).

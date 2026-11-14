@@ -4,7 +4,8 @@
 #   QB_TEST_GROUP   unit | integration | all (default)  - tier
 #   QB_TEST_FILTER  comma-separated substrings of @group names
 #   QB_TEST_FILE    comma-separated substrings of test file paths relative to test/ (e.g. "unit/solvers/dlp,beyn")
-# Tier files include test files only through `run_file("<path relative to test/>")`, which is what QB_TEST_FILE filters.
+# Tier files include test files only through `run_file("<path relative to test/>")`, which is what QB_TEST_FILE filters and
+# which runs each file in its own module.
 
 using Test
 using Logging
@@ -33,23 +34,66 @@ group_enabled(name::AbstractString, files::AbstractVector{<:AbstractString}=Stri
 
 const RAN_FILES = String[]
 
+# Each test file runs in its own anonymous module, so it sees only the package, the shared fixtures and the names it defines
+# itself. Shared definition-only files (fixtures) are loaded once into their own module, whose names are exported and
+# brought into a test module with `using`.
+const FIXTURE_MODULES = Dict{String,Module}()
+const ALWAYS_FIXTURE = "holes_fixtures.jl"
+const INTEGRATION_FIXTURE = "integration/common.jl"
+
+function _prepare_module!(m::Module, rel::AbstractString)
+    Core.eval(m, :(using Test, Logging, QuantumBilliards, BilliardGeometry))
+    Core.eval(m, Meta.parse("import Main: @requires"))
+    rel == ALWAYS_FIXTURE || use_fixture!(m, ALWAYS_FIXTURE)
+    startswith(rel, "integration/") && rel != INTEGRATION_FIXTURE && use_fixture!(m, INTEGRATION_FIXTURE)
+    return m
+end
+
+function _load_fixture(rel::AbstractString)
+    modname = Symbol("QBFixture_", replace(rel, r"\W" => "_"))
+    m = Module(modname)
+    _prepare_module!(m, rel)
+    Base.include(m, joinpath(QB_TEST_ROOT, rel))
+    skip = (:eval, :include, modname)
+    defined = Base.invokelatest(names, m; all=true, imported=false)
+    exported = [n for n in defined if n ∉ skip && !startswith(string(n), "#")]
+    Core.eval(m, Expr(:export, exported...))
+    Core.eval(Main, :(const $modname = $m))
+    return m
+end
+
+"""
+    use_fixture!(target, rel)
+
+Load the definitions-only file `rel` (path relative to `test/`) once per run and bring its names into `target` with `using`.
+"""
+function use_fixture!(target::Module, rel::AbstractString)
+    m = get!(() -> _load_fixture(rel), FIXTURE_MODULES, rel)
+    Core.eval(target, Expr(:using, Expr(:., :Main, nameof(m))))
+    return nothing
+end
+
+"""
+    @requires "path"
+
+First line of a test file that needs a shared definitions-only file `path` (relative to `test/`).
+"""
+macro requires(rel)
+    return :(use_fixture!(@__MODULE__, $(esc(rel))))
+end
+
 """
     run_file(rel)
 
-Include the test file `rel` (path relative to `test/`) if it passes `QB_TEST_FILE`.
+Run the test file `rel` (path relative to `test/`) in a fresh module if it passes `QB_TEST_FILE`.
 """
 function run_file(rel::AbstractString)
     file_enabled(rel) || return nothing
     push!(RAN_FILES, rel)
-    return include(joinpath(QB_TEST_ROOT, rel))
+    m = Module(:QBTestFile)
+    _prepare_module!(m, rel)
+    return Base.include(m, joinpath(QB_TEST_ROOT, rel))
 end
-
-"""
-    include_helper(rel)
-
-Include a definitions-only file `rel` (path relative to `test/`) unconditionally. Used for helpers shared by the files of a group.
-"""
-include_helper(rel::AbstractString) = include(joinpath(QB_TEST_ROOT, rel))
 
 # Paths of the `run_file("...")` calls inside a @group body, used to skip groups with no selected file.
 function _group_files(ex)
@@ -90,5 +134,3 @@ function finish_tests()
     isempty(FAILED_GROUPS) || error("Failed test groups: ", join(FAILED_GROUPS, ", "))
     return nothing
 end
-
-include(joinpath(QB_TEST_ROOT, "holes_fixtures.jl"))   # shared hole fixtures (definitions only)

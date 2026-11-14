@@ -8,6 +8,8 @@
 #     geometry as in the C6 case of c3_rotation_hole_spectra.jl, so the spectra must coincide with the unreduced C6 spectrum.
 # Kernel and windows: composite CFIE as in the other files of the group; [4, 9] for the square, [8, 16] for the C3 billiard.
 
+@requires "integration/symmetric_holes/helpers.jl"
+
 # solver: Beyn contour integral
 # kernel/basis: composite CFIE (outer square graded), ppw=10, min_pts=96
 # billiard: D2 quarter square with an off-axis DomainHole (disc of radius 0.1 about (0.4, 0.2)), G' = {e}

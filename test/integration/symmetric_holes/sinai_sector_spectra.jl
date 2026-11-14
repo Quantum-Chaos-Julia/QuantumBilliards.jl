@@ -9,6 +9,8 @@
 # of D4 has four 1D irreps that contain every level of D4 (E levels split into the (+,-) and (-,+) sectors); each D2 sector chi_X = chi_Y
 # is the union of the two D4 irreps with that chi_Y, and the sectors (+,-) and (-,+) are isospectral through the diagonal reflection.
 
+@requires "integration/symmetric_holes/helpers.jl"
+
 # solver: Beyn contour integral
 # kernel/basis: composite CFIE (outer square graded, disc hole), ppw=10, min_pts=96
 # billiard: Sinai (SinaiBilliard(1.0, 0.25))

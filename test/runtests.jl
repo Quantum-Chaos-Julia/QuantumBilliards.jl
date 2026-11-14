@@ -8,7 +8,6 @@ if QB_TEST_GROUP in ("unit", "all")
 end
 
 if QB_TEST_GROUP in ("integration", "all")
-    include("integration/common.jl")
     include("integration/integrationtests.jl")
 end
 
