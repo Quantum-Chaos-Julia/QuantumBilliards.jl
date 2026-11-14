@@ -421,3 +421,5 @@ copilot-instructions.md
 /test/Manifest.toml
 # scratchpad
 scratchpad/
+# Julia docs environment
+/docs/Manifest.toml
