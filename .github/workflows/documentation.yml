@@ -18,11 +18,6 @@ jobs:
       - uses: julia-actions/setup-julia@v1
         with:
           version: '1.12'
-      - name: Install unregistered dependency (BilliardGeometry.jl)
-        run: |
-          import Pkg
-          Pkg.develop(url="https://github.com/Quantum-Chaos-Julia/BilliardGeometry.jl.git")
-        shell: julia --color=yes --project=docs/ {0}
       - name: Install dependencies
         run: julia --project=docs/ -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
       - name: Build and deploy

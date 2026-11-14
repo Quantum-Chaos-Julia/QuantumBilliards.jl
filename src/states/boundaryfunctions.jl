@@ -414,11 +414,14 @@ end
     boundary_function(data::SpectralData; kwargs...) → (us, ss, norms)
 
 Compute the boundary normal derivative of every eigenstate stored in `data`,
-returning a vector of `(u, s, norm)` results.
+returning `(us::Vector, ss::Vector, norms::Vector)` with one entry per state,
+the same layout as `wavefunction(data)` and `husimi_function(data)`. Use
+`boundary_function(data, i)` for the unwrapped `(u, s, norm)` of a single state.
 """
 function boundary_function(data::SpectralData; kwargs...)
     states = _require_states(data)
-    return [boundary_function(data, i; kwargs...) for i in eachindex(states)]
+    results = [boundary_function(data, i; kwargs...) for i in eachindex(states)]
+    return first.(results), getindex.(results, 2), getindex.(results, 3)
 end
 
 """
@@ -432,11 +435,15 @@ function momentum_function(data::SpectralData, i::Integer; kwargs...)
 end
 
 """
-    momentum_function(data::SpectralData; kwargs...) → Vector{Tuple}
+    momentum_function(data::SpectralData; kwargs...) → (powers, kss)
 
-Compute the momentum-space representation of every eigenstate stored in `data`.
+Compute the momentum-space representation of every eigenstate stored in `data`,
+returning one entry per state in `powers` and `kss`, the same layout as
+`boundary_function(data)`. Use `momentum_function(data, i)` for the unwrapped
+`(power, ks)` of a single state.
 """
 function momentum_function(data::SpectralData; kwargs...)
     states = _require_states(data)
-    return [momentum_function(data, i; kwargs...) for i in eachindex(states)]
+    results = [momentum_function(data, i; kwargs...) for i in eachindex(states)]
+    return first.(results), getindex.(results, 2)
 end

@@ -3,7 +3,7 @@
 # `boundary_function`, `husimi_function` and `wavefunction` and compared with analytic mode shapes. Every comparison is made
 # after normalisation (least-squares scale or division by the mean), so no scale, phase or tension is pinned.
 # Conventions of the current API: `husimi_function(data, i)` returns (H, qs, ps) with H of size (length(qs), length(ps)),
-# `husimi_function(data)` returns (Hs, ps, qs); `wavefunction(data, i)` returns (Psi, x, y) with Psi[ix, iy];
+# `husimi_function(data)` returns (Hs, qs, ps); `wavefunction(data, i)` returns (Psi, x, y) with Psi[ix, iy];
 # `boundary_function(state, billiard, solver)` is needed for Beyn BIM states, because `state.u` is not stored (findings F8/F9 of
 # the plan: the Husimi general-path edge rows are wrong, so Husimi checks use interior rows only).
 
@@ -77,8 +77,8 @@ end
     @test issorted(Hp[1:ip0]) && issorted(Hp[ip0:end]; rev=true)
     @test Hp[1] < 0.2 * Hp[ip0] && Hp[end] < 0.2 * Hp[ip0]
     @test all(abs.(H[rows, :] .- mean(H[rows, :]; dims=1)) .<= 1e-6 * maximum(H))
-    # batch form returns (Hs, ps, qs)
-    Hs, pss, qss = husimi_function(data)
+    # batch form returns (Hs, qs, ps)
+    Hs, qss, pss = husimi_function(data)
     @test length(Hs) == length(data)
     @test Hs[i0] ≈ H
     @test pss[i0] ≈ ps && qss[i0] ≈ qs

@@ -421,11 +421,12 @@ end
         end
     end
 
-    @testset "at a root the correction vanishes" begin
-        ks, ts = _solve(solver, eb_matrix(s, 3.0), eb_dmatrix(s, 3.0), eb_ddmatrix(s, 3.0), 3.0, nlevels)
+    @testset "near a root the correction is the small offset to it" begin
+        δ = 1e-4                                                             # A is exactly singular at a root, so expand next to it
+        ks, ts = _solve(solver, eb_matrix(s, 3.0 + δ), eb_dmatrix(s, 3.0 + δ), eb_ddmatrix(s, 3.0 + δ), 3.0 + δ, nlevels)
         q = argmin(abs.(real.(ks) .- 3.0))
         @test real(ks[q]) ≈ 3.0 atol = 1e-8
-        @test ts[q] < 1e-6
+        @test ts[q] ≈ δ atol = 1e-8
     end
 
     @testset "the number of candidates is capped by the matrix size" begin

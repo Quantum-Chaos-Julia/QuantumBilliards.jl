@@ -39,11 +39,15 @@ end
 # billiard: Rectangle (RectangleBilliard(1.0, 0.7), the full 2.0 x 1.4 rectangle)
 # symmetry: None
 # reference: analytic; the window [3, 10] holds 16 levels
+# note: taylor_tol = 1e-10 instead of the default 3e-10. With the default the tuned degree is p = 13 (validation error
+#   about 1.5e-10), and with the OpenBLAS backend the Ritz residual of the level k = 5.2194 in the window [4.2, 5.4] stagnates
+#   above res_tol, so adaptive_cork reaches the full Krylov dimension and throws. p = 14 (error about 1.5e-11) converges.
+#   The cause of the residual stagnation is not yet identified.
 # functions to test: compute_spectrum
 @testset "CORK (CFIE) - Rectangle - Spectrum k in [3, 10]" begin
     billiard = RectangleBilliard(1.0, 0.7)
     kernel = CombinedFieldIntegralEquationSolver(20.0, billiard; grading=GlobalCornerGrading(), min_pts=800)
-    solver = CORKSolver(kernel; nlevels=40)
+    solver = CORKSolver(kernel; nlevels=40, taylor_tol=1e-10)
     k1, k2 = 3.0, 10.0
     data = compute_spectrum(solver, billiard, k1, k2; multithreaded=true, show_progress=false)
     ks_ref = rectangle_spectrum(2.0, 1.4, k1, k2)
