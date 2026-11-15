@@ -463,10 +463,10 @@ Computes the Beyn spectrum over the requested wavenumber interval using
 Weyl-sized contour windows.
 
 When `solver.eigenvectors=true`, each retained eigenvalue stores a
-[`BIMEigenstate`](@ref) containing the layer density produced by the Beyn
-solve. The density is expanded with [`symmetrize_layer_density`](@ref) before
-storage, so both `state.vec` and `state.pts` refer to the complete physical
-boundary.
+[`BIMEigenstate`](@ref) containing the layer density in full-contour mode,
+or the Rellich-normalized physical boundary function in half-contour mode.
+The boundary data are expanded with [`symmetrize_layer_density`](@ref)
+before storage and refer to the complete physical boundary.
 
 When `solver.imag_k_check=true`, projected roots and layer densities are
 retained temporarily and subjected to the global imaginary-wavenumber
@@ -499,17 +499,31 @@ function compute_spectrum(solver::BeynSolver, billiard::Bi, k1, k2; accept_tol::
         _tune_beyn_taylor_degree!(solver, pts, k0, R; multithreaded)
     end
     cheb_config = solver.cheb_config
-    if (solver.use_chebyshev || solver.imag_k_check) && solver.cheb_config.param_strategy!==:manual # always do cheb config since imag_k_check requires it anyway even if taylor
+    if !solver.use_half_contour && (solver.use_chebyshev || solver.imag_k_check) && solver.cheb_config.param_strategy!==:manual
         cheb_config = tune_cheb_config(solver.kernel, pts[end], real(k0[end])+R[end], solver.cheb_config)
     end
-    if !solver.imag_k_check
+    if !solver.imag_k_check || (solver.use_half_contour && solver.auto_discard_spurious)
+        # Half contours validate every candidate, so no global imaginary-part
+        # ordering is needed. Reuse each window's coefficients before discarding it.
         ks_win = Vector{Vector{Complex{T}}}(undef, nw); ts_win = Vector{Vector{T}}(undef, nw)
         if solver.eigenvectors
             X_win = Vector{Matrix{Complex{T}}}(undef, nw)
             @maybe_showprogress show_progress for i in 1:nw
                 ks_win[i], ts_win[i], X_win[i] = solve_vectors(solver, pts[i], k0[i], 2R[i]; multithreaded, cheb_config)
             end
-            states_win = [[BIMEigenstate(ks_win[i][j], symmetrize_layer_density(solver.kernel, X_win[i][:,j], pts[i], billiard), ts_win[i][j], pts[i]) for j in eachindex(ks_win[i])] for i in 1:nw]
+            states_win = [BIMEigenstate{Complex{T},T}[] for _ in 1:nw]
+            for i in 1:nw, j in eachindex(ks_win[i])
+                v = symmetrize_layer_density(solver.kernel, X_win[i][:,j], pts[i], billiard)
+                if solver.use_half_contour
+                    # solve_vectors already returns u, with orbit weights removed.
+                    bnd_norm = _rellich(pts[i], v, T(real(ks_win[i][j])))
+                    isfinite(bnd_norm) && bnd_norm>0 || throw(ArgumentError("Invalid half-contour boundary normalization"))
+                    v ./= sqrt(bnd_norm)
+                    push!(states_win[i], BIMEigenstate(ks_win[i][j], nothing, ts_win[i][j], pts[i]; u=v, bnd_norm))
+                else
+                    push!(states_win[i], BIMEigenstate(ks_win[i][j], v, ts_win[i][j], pts[i]))
+                end
+            end
             ks = reduce(vcat, ks_win); ts = reduce(vcat, ts_win); states = reduce(vcat, states_win)
             keep = (T(k1).<=real.(ks)).&(real.(ks).<=T(k2))
             return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], fill(false, count(keep)); states=isempty(states) ? nothing : states[keep], accept_tol)
@@ -524,16 +538,41 @@ function compute_spectrum(solver::BeynSolver, billiard::Bi, k1, k2; accept_tol::
     @maybe_showprogress show_progress for i in 1:nw
         ks_win[i], X_win[i] = _beyn_projected_solve(solver, pts[i], k0[i], 2R[i]; multithreaded, cheb_config)
     end
-    idx_keep, residuals = _beyn_imag_k_check(solver, ks_win, X_win, pts; multithreaded, cheb_config)
+    idx_keep, residuals = _beyn_imag_k_check(solver, ks_win, X_win, pts; multithreaded, cheb_config, windows=(k0,R))
     n = sum(length, idx_keep); ks = Vector{Complex{T}}(undef, n); ts = Vector{T}(undef, n); control = Vector{Bool}(undef, n)
     if solver.eigenvectors
+        if solver.use_half_contour
+            # Validation uses x=M*u. Remove M only afterwards, once per window.
+            for i in 1:nw
+                weights = pts[i].ds
+                if solver.kernel.symmetry!==nothing
+                    orbits = _fold_boundary(T, billiard, length(pts[i]), solver.kernel.symmetry, solver.kernel.sym_characters)
+                    weights = zeros(T, length(orbits.fundamental_indices))
+                    @inbounds for j in eachindex(pts[i].ds)
+                        weights[orbits.orbit_of[j]] += pts[i].ds[j]*abs2(orbits.phase[j])
+                    end
+                end
+                X_win[i] ./= weights
+            end
+        end
         entries = Tuple{Int,Int}[]; p = 0
         for i in 1:nw, q in eachindex(idx_keep[i])
             j = idx_keep[i][q]; p += 1
             ks[p] = ks_win[i][j]; control[p] = isnan(residuals[i][q]); ts[p] = control[p] ? abs(imag(ks[p])) : residuals[i][q]
             push!(entries, (i,j))
         end
-        states = [BIMEigenstate(ks[q], symmetrize_layer_density(solver.kernel, X_win[i][:,j], pts[i], billiard), ts[q], pts[i]) for (q,(i,j)) in enumerate(entries)]
+        states = BIMEigenstate{Complex{T},T}[]
+        for (q,(i,j)) in enumerate(entries)
+            v = symmetrize_layer_density(solver.kernel, X_win[i][:,j], pts[i], billiard)
+            if solver.use_half_contour
+                bnd_norm = _rellich(pts[i], v, T(real(ks[q])))
+                isfinite(bnd_norm) && bnd_norm>0 || throw(ArgumentError("Invalid half-contour boundary normalization"))
+                v ./= sqrt(bnd_norm)
+                push!(states, BIMEigenstate(ks[q], nothing, ts[q], pts[i]; u=v, bnd_norm))
+            else
+                push!(states, BIMEigenstate(ks[q], v, ts[q], pts[i]))
+            end
+        end
         keep = (T(k1).<=real.(ks)).&(real.(ks).<=T(k2))
         return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], control[keep]; states=isempty(states) ? nothing : states[keep], accept_tol)
     end

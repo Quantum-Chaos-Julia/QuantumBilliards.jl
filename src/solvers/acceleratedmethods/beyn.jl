@@ -72,10 +72,12 @@ order and terminates after a prescribed sequence of residual-good roots.
 * `taylor_tol::T`: Tolerance for the Taylor expansion.
 * `use_chebyshev::Bool`: Use Chebyshev-accelerated matrix construction.
 * `cheb_config::ChebyshevConfig{T}`: Chebyshev interpolation configuration.
-* `imag_k_check::Bool`: Enable global imaginary-`k` screening. In production should be true.
-* `imag_k_pad::Int`: Consecutive good roots required before stopping if imaginary-`k` screening is enabled.
-* `imag_k_group_size::Int`: Maximum residual-check batch size for imaginary-`k` screening. 
-* `eigenvectors::Bool`: Whether `compute_spectrum` retains the layer densities returned by the Beyn solve.
+* `imag_k_check::Bool`: Validate candidates jointly across sweep windows; full mode uses imaginary-`k` early stopping.
+* `imag_k_pad::Int`: Consecutive good roots required before full-contour screening stops; unused in half mode.
+* `imag_k_group_size::Int`: Maximum root-processing batch size; half-contour Taylor products use all roots in a window.
+* `eigenvectors::Bool`: Retain layer densities in full mode or physical boundary functions in half mode.
+* `use_half_contour::Bool`: Use the real-beta half contour; `nq` counts the full paired rule.
+* `beta::T`: Real Green-function coupling, default 1.
 """
 mutable struct BeynSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
     kernel::K
@@ -95,16 +97,19 @@ mutable struct BeynSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
     imag_k_pad::Int
     imag_k_group_size::Int
     eigenvectors::Bool
+    use_half_contour::Bool
+    beta::T
 end
 
 """
-    BeynSolver(kernel::K; nlevels::Int=100, nq::Int=40, r::Int=200, Rmax::Real=0.5, svd_tol::Real=1e-11, res_tol::Real=1e-8, auto_discard_spurious::Bool=true, use_taylor::Bool=true, taylor_degree::Int=14, taylor_tol::Real=1e-12, use_chebyshev::Bool=false, cheb_config::Union{Nothing,ChebyshevConfig}=nothing, imag_k_check::Bool=true, imag_k_pad::Int=20, imag_k_group_size::Int=20, eigenvectors::Bool=true)
+    BeynSolver(kernel::K; nlevels::Int=100, nq::Int=40, r::Int=200, Rmax::Real=0.5, svd_tol::Real=1e-11, res_tol::Real=1e-8, auto_discard_spurious::Bool=true, use_taylor::Bool=true, taylor_degree::Int=14, taylor_tol::Real=1e-12, use_chebyshev::Bool=false, cheb_config::Union{Nothing,ChebyshevConfig}=nothing, imag_k_check::Bool=true, imag_k_pad::Int=20, imag_k_group_size::Int=20, eigenvectors::Bool=true, use_half_contour::Bool=false, beta::Real=1.0)
 
 Construct a Beyn nonlinear eigensolver.
 
-Single-contour calls through `solve` and `solve_vectors` perform exhaustive
-nonlinear-residual validation. Multi-window `compute_spectrum` calculations uses
-imaginary-`k` screening by default to verify the spectrum integrity.
+With `auto_discard_spurious=true`, single-contour `solve` and `solve_vectors`
+calls exhaustively validate nonlinear residuals. By default, multi-window
+`compute_spectrum` uses imaginary-`k` screening in full mode and exhaustive
+full-Hankel residual checks in half mode.
 
 ## Arguments
 * `kernel::K`: Boundary-integral solver defining the nonlinear matrix `A(k)`.
@@ -126,14 +131,23 @@ imaginary-`k` screening by default to verify the spectrum integrity.
 * `imag_k_pad::Int=20`: Consecutive residual-good roots required before stopping. Only applies when `imag_k_check` is enabled.
 * `imag_k_group_size::Int=20`: Maximum residual-check batch size. Only applies when `imag_k_check` is enabled.
 * `eigenvectors::Bool=true`: Whether `compute_spectrum` retains the layer densities returned by the Beyn solve.
+* `use_half_contour::Bool=false`: Use the real-beta half contour; `nq` counts the full paired rule.
+* `beta::Real=1.0`: Real Green-function coupling.
 
 ## Returns
 * `BeynSolver{T,K}`: Configured Beyn solver.
 """
-function BeynSolver(kernel::K; nlevels::Int=100, nq::Int=40, r::Int=200, Rmax::Real=0.5, svd_tol::Real=1e-11, res_tol::Real=1e-8, auto_discard_spurious::Bool=true, use_taylor::Bool=true, taylor_degree::Int=14, taylor_tol::Real=1e-12, use_chebyshev::Bool=false, cheb_config::Union{Nothing,ChebyshevConfig}=nothing, imag_k_check::Bool=true, imag_k_pad::Int=20, imag_k_group_size::Int=20, eigenvectors::Bool=true) where {K<:SweepBIMSolver}
+function BeynSolver(kernel::K; nlevels::Int=100, nq::Int=40, r::Int=200, Rmax::Real=0.5, svd_tol::Real=1e-11, res_tol::Real=1e-8, auto_discard_spurious::Bool=true, use_taylor::Bool=true, taylor_degree::Int=14, taylor_tol::Real=1e-12, use_chebyshev::Bool=false, cheb_config::Union{Nothing,ChebyshevConfig}=nothing, imag_k_check::Bool=true, imag_k_pad::Int=20, imag_k_group_size::Int=20, eigenvectors::Bool=true, use_half_contour::Bool=false, beta::Real=1.0) where {K<:SweepBIMSolver}
     T = _bim_numeric_type(kernel); cfg = cheb_config === nothing ? ChebyshevConfig(T) : cheb_config
-    return BeynSolver{T,K}(kernel, nlevels, nq, r, T(Rmax), T(svd_tol), T(res_tol), auto_discard_spurious, use_taylor, taylor_degree, T(taylor_tol), use_chebyshev, cfg, imag_k_check, imag_k_pad, imag_k_group_size, eigenvectors)
+    coupling = T(beta)
+    if use_half_contour
+        # TODO: corner-graded half contours.
+        T===Float64 && kernel isa DoubleLayerPotentialSolver && kernel.grading isa SmoothPeriodicGrading && use_taylor && !use_chebyshev && iseven(nq) ||
+            throw(ArgumentError("Half contours require Float64 Taylor DLP, smooth periodic grading and even nq"))
+    end
+    return BeynSolver{T,K}(kernel, nlevels, nq, r, T(Rmax), T(svd_tol), T(res_tol), auto_discard_spurious, use_taylor, taylor_degree, T(taylor_tol), use_chebyshev, cfg, imag_k_check, imag_k_pad, imag_k_group_size, eigenvectors, use_half_contour, coupling)
 end
+
 
 _bim_numeric_type(::BeynSolver{T}) where {T} = T
 
@@ -223,9 +237,267 @@ Allocate the work matrices of Beyn's method: a random probing matrix `V` of size
 ## Returns
 * `NTuple{4,Matrix{Complex{T}}}`: `(V, X, A0, A1)`.
 """
-function beyn_buffer_matrices(::Type{T}, N::Int, r::Int, rng) where {T<:Real}
+function beyn_buffer_matrices(::Type{T},::Val{:random}, N::Int, r::Int, rng) where {T<:Real}
     V = randn(rng, Complex{T}, N, r); X = similar(V); A0 = zeros(Complex{T}, N, r); A1 = zeros(Complex{T}, N, r)
     return V, X, A0, A1
+end
+
+beyn_buffer_matrices(::Type{T}, N::Int, r::Int, rng) where {T<:Real} = beyn_buffer_matrices(T, Val(:random), N, r, rng)
+
+# Complex rotational half contours await an exact reflection map from geometry.
+function _beyn_half_symmetry_rotation_fix(kernel::DoubleLayerPotentialSolver, pts=nothing)
+    symmetry = kernel.symmetry
+    symmetry isa NFoldRotation || return kernel, nothing
+    sector = isempty(kernel.sym_characters) ? 0 : only(kernel.sym_characters)
+    # TODO: complex rotational sectors need an exact reflection map from geometry, no API yet.
+    mod(2*sector, symmetry.order)==0 || throw(ArgumentError("Half contours do not yet support complex rotational symmetry sectors; use use_half_contour=false"))
+    return kernel, nothing
+end
+
+"""
+    _beyn_interior_sources(kernel::DoubleLayerPotentialSolver, pts::BoundaryPoints{Float64}, k0::Real, r::Int, rng::AbstractRNG; multithreaded::Bool=true)
+
+Choose `r` distinct interior points `s_j`, fixed throughout one contour.
+
+## Arguments
+* `kernel::DoubleLayerPotentialSolver`: Float64 Euclidean DLP solver defining
+  the billiard and optional symmetry sector.
+* `pts::BoundaryPoints{Float64}`: Full physical-boundary nodes and arclength
+  weights used to estimate the mean spacing `h̄`.
+* `k0::Real`: Positive real contour center; `2π/k0` sets the nominal grid spacing.
+* `r::Int`: Positive number of distinct source points to select.
+* `rng::AbstractRNG`: Generator used to shuffle candidate points without replacement.
+
+## Keyword Arguments
+* `multithreaded::Bool=true`: Parallelize the interior-membership mask.
+
+## Returns
+* `full::DoubleLayerPotentialSolver{Float64}`: Unreduced, smooth-periodic DLP
+  kernel used to construct the full-boundary probe for reuse.
+* `sources::Vector{SVector{2,Float64}}`: The `r` selected interior points.
+
+Returns `(full, sources)`. Throws `ArgumentError` if the clearance band does
+not contain enough candidate points.
+"""
+function _beyn_interior_sources(kernel::DoubleLayerPotentialSolver, pts::BoundaryPoints{Float64}, k0, r::Int, rng; multithreaded::Bool=true)
+    n = length(pts)
+    # Fourfold boundary sampling refinining the boundary choice for easier interior source points placement 
+    # ppw = 1.0 does nothing due to high min_pts, very hacky
+    full = DoubleLayerPotentialSolver(1.0, kernel.billiard; min_pts=4n, grading=SmoothPeriodicGrading(), symmetry=nothing, sym_characters=())
+    fine = evaluate_points(full, kernel.billiard, k0); step = sum(pts.ds)/n # easy estimate of mean spacing h̄
+    # With h=step and 20h cells, all nodes within 10h lie in the 3x3 neighborhood.
+    cellsize = 20*step; cells = Dict{Tuple{Int,Int},Vector{Int}}()
+    # Conservative bounds protect distance arithmetic, integer indices and bin precision.
+    coordinate_limit = sqrt(floatmax(Float64))/4; quotient_limit = min(2.0^45, Float64(typemax(Int))/2)
+    safe_cells = isfinite(cellsize) && sqrt(floatmin(Float64))<cellsize<coordinate_limit
+    if safe_cells
+        for j in eachindex(fine.xy)
+            point = fine.xy[j]; qx = point[1]/cellsize; qy = point[2]/cellsize
+            # Unsafe coordinates disable binning; retain the original full scan.
+            if !(isfinite(qx) && isfinite(qy) && max(abs(point[1]),abs(point[2]))<coordinate_limit && max(abs(qx),abs(qy))<quotient_limit)
+                safe_cells = false; break
+            end
+            # Store fine-boundary indices by cell.
+            push!(get!(() -> Int[], cells, (floor(Int,qx),floor(Int,qy))), j)
+        end
+    end
+    # Select sources in the fundamental domain when a sector is active.
+    billiard = kernel.billiard; fundamental = kernel.symmetry!==nothing
+    curves = fundamental ? get_boundary_curves(billiard) : full_boundary(billiard)
+    xb = Float64[]; yb = Float64[]
+    # Bounding-box heuristics, in principle arbitrary #TODO Maybe make this more adaptive to the geometry
+    # Omit t=1 to avoid repeating the endpoint, leaving one fewer sample.
+    # This is extremely hacky but provides a dense set of candidate points for interior source placement.
+    for crv in curves
+        t = range(0.0, 1.0; length=max(512, round(Int, 1000/crv.length)))[1:end-1]
+        boundary = curve(crv, t)
+        append!(xb, getindex.(boundary, 1)); append!(yb, getindex.(boundary, 2))
+    end
+    xb[end] = xb[1]; yb[end] = yb[1]
+    xlim = extrema(xb); ylim = extrema(yb); dx = 2*pi/Float64(real(k0))
+    # Candidate spacing is at most 2π/k_0 (wavelength scale). The 512-node floor per axis supplies a dense pool at low k
+    nx = max(512, ceil(Int, (xlim[2]-xlim[1])/dx)+1); ny = max(512, ceil(Int, (ylim[2]-ylim[1])/dx)+1)
+    xgrid = collect(range(xlim[1], xlim[2]; length=nx)); ygrid = collect(range(ylim[1], ylim[2]; length=ny))
+    grid = vec([SVector{2,Float64}(x,y) for x in xgrid, y in ygrid]); mask = Vector{Bool}(undef, length(grid))
+    # Cache domain lists and test curves lazily; retain the geometry predicate for holes.
+    domains = billiard.fundamental_domain isa BilliardGeometry.AbsMultiplyConnectedDomain ? nothing : BilliardGeometry.get_all_domains(billiard)
+    inside_domain(point) = domains===nothing ? BilliardGeometry.is_inside(billiard, point) : any(domain -> all(crv -> BilliardGeometry.is_inside(crv, point), domain.boundary), domains)
+    @use_threads multithreading=multithreaded for i in eachindex(grid) # do domain membership check for each candidate point #TODO Make it more efficient
+        point = grid[i]; inside = inside_domain(point)
+        if !fundamental && !inside
+            inside = any(sym -> inside_domain(BilliardGeometry.apply_symmetry(sym, point)), billiard.symmetries)
+        end
+        mask[i] = inside
+    end
+    indices = findall(mask)
+    # Shuffle without replacement, ensuring there is no pattern to sources to prevent nodal line evals #TODO Pathological cases check coupling to eigenspaces
+    shuffle!(rng, indices)
+    sources = eltype(pts.xy)[] # preallocate the array for selected sources
+    for i in indices
+        source = grid[i]
+        # Exclude the candidate-grid perimeter.
+        first(xgrid)<source[1]<last(xgrid) && first(ygrid)<source[2]<last(ygrid) || continue
+        qx = source[1]/cellsize; qy = source[2]/cellsize
+        if safe_cells && isfinite(qx) && isfinite(qy) && max(abs(source[1]),abs(source[2]))<coordinate_limit && max(abs(qx),abs(qy))<quotient_limit
+            cx = floor(Int,qx); cy = floor(Int,qy); d = Inf
+            # Same nearest distance when d<=10h; otherwise the source is rejected anyway.
+            for iy in cy-1:cy+1, ix in cx-1:cx+1
+                neighbors = get(cells, (ix,iy), nothing)
+                neighbors===nothing && continue
+                for j in neighbors
+                    d = min(d, norm(source-fine.xy[j]))
+                end
+            end
+        else
+            d = minimum(norm(source-x) for x in fine.xy)
+        end
+        # step=mean(ds); several boundary spacings away (5h away as emphasized by Barnett: https://arxiv.org/abs/1310.5352 (Remark 6): Evaluation of layer potentials close to the boundary for Laplace and Helmholtz problems on analytic planar domains), while capping their depth (10 steps from the boundary provided good results - this is in preparation for magnetic edge states where not a lot of mass is in the deep interior)
+        5*step<=d<=10*step || continue # tipically enough
+        push!(sources, source); length(sources)==r && break # we want only r sources
+    end
+    length(sources)==r || throw(ArgumentError("Could not populate the sources grid, maybe check boundary resolution or step size"))
+    return full, sources
+end
+
+"""
+    beyn_buffer_matrices(T, Val(:interior), N, r, rng; kernel, pts, k0, p, sources=nothing, beta=1.0, Rmax=0.5, multithreaded=true, conjugation_map=nothing)
+
+Build a fixed interior-source Taylor probe and allocate the Beyn buffers:
+
+    Gβ = -(Y₀+beta*J₀)/4,  q = 2∂ₙGβ,
+    b_l = E†W ∂ₖ^lq(k₀)/l!,  # Taylor coefficients of the weighted forcing term
+    c_j² = Σ_l Rmax^(2l) ‖b_l[:,j]‖₂², # rescaling of each column while preserving holomorphy
+    C[l+1,(j-1)N+i] = b_l[i,j]/c_j. # normalized Taylor coefficient for column j
+
+`W=diag(pts.ds)` and `E` extends sector values (`E=I` without symmetry).
+Set `M=E†WE`; `u_j` is the reduced physical boundary normal derivative.
+Automatic setup later gives the weighted response `X[:,j] ≈ M u_j/c_j`.
+Complex rotational sectors are currently unsupported. The reserved path
+`b_l ← (b_l+H*conj(b_l))/2` reflects weighted rows and averages a source pair, pending a future geometry API.
+Fixed sources and scales preserve holomorphy.
+
+## Arguments
+* `T::Type{<:Real}`: Buffer element type (`Float64` for half contours).
+* `N::Int`: Reduced boundary dimension.
+* `r::Int`: Probe column count.
+* `rng::AbstractRNG`: Automatic source-placement generator.
+
+## Keyword Arguments
+* `kernel::DoubleLayerPotentialSolver`: Smooth-periodic Euclidean DLP kernel.
+* `pts::BoundaryPoints{Float64}`: Full boundary nodes and arclength weights.
+* `k0::Real`, `p::Int`: Positive real center and Taylor degree.
+* `sources::Union{Nothing,AbstractVector}=nothing`: Optional `r` fixed interior points.
+* `beta::Real=1.0`, `Rmax::Real=0.5`: Real coupling and column-scaling radius.
+* `multithreaded::Bool=true`: Parallelize source and coefficient construction.
+* `conjugation_map::Union{Nothing,NamedTuple}=nothing`: Optional `(rows, factors)`
+  map for lower-contour reconstruction; reserved for a future symmetry API.
+
+## Returns
+* `V::Matrix{Complex{T}}`: Uninitialized `(N,r)` forcing buffer, later filled as
+  `V_{ij}(k)=Σ_{l=0}^p C[l+1,(j-1)N+i](k-k₀)^l`.
+* `X::Matrix{Complex{T}}`: Uninitialized `(N,r)` response buffer, later solving
+  `A_{s,χ}(k)ᵀ X(k)=V(k)` with the source-normal matrix in a supported real sector.
+* `A0, A1::Matrix{Complex{T}}`: Zeroed `(N,r)` accumulators for the contour moments
+  `A0 ≈ (1/2πi)∮ X(k)dk` and `A1 ≈ (1/2πi)∮ kX(k)dk`.
+* `C::Matrix{ComplexF64}`: `(p+1,N*r)` Taylor coefficients of `V(k)`, including
+  boundary weights and column normalization in automatic setup. Explicit sources
+  return raw helper coefficients. Evaluate with `_horner(C, (j-1)*N+i, k-k0)`.
+
+Returns `(V, X, A0, A1, C)`.
+"""
+function beyn_buffer_matrices(::Type{T}, ::Val{:interior}, N::Int, r::Int, rng; kernel, pts, sources=nothing, k0, p::Int, beta::Real=1.0, Rmax::Real=0.5, multithreaded::Bool=true, conjugation_map=nothing) where {T<:Real}
+    if sources===nothing
+        # Start with n full boundary nodes. Symmetry groups them into m orbits, one reduced boundary value represents all nodes in each orbit (as everywhere else the symmetry is applied).
+        n = length(pts); m = boundary_matrix_size(kernel, pts)
+        orbits = kernel.symmetry===nothing ? nothing : _fold_boundary(Float64, kernel.billiard, n, kernel.symmetry, kernel.sym_characters)
+        # Conjugation swaps complex rotation sectors; TODO reflection map awaits the geometry API.
+        conjugation_map===nothing && ((_, conjugation_map) = _beyn_half_symmetry_rotation_fix(kernel, pts)) #TODO Not yet implemented for complex irreps
+        # The rotation gate above proves real characters from the integer sector;
+        # cis(pi) may still leave imaginary roundoff in their stored phases.
+        orbits===nothing || conjugation_map!==nothing || kernel.symmetry isa NFoldRotation || all(z -> isreal(z) && abs(real(z))==1, orbits.phase) || throw(ArgumentError("Complex half contours require a reflection-compatible rotational sector")) #TODO Not yet implemented for complex irreps
+        # Keep source positions fixed throughout this contour.
+        full, sources = _beyn_interior_sources(kernel, pts, k0, r, rng; multithreaded)
+        # For source j, q_{ij}(k)=2∂_{n_i}G_β(x_i,s_j;k).
+        # Generate each Taylor coefficient directly into its weighted orbit sum.
+        # Retain the raw helper's division by ds before applying the row weight.
+        coupling = _real_beta_coupling(beta)
+        source_factors = ComplexF64[conj(one(ComplexF64))/(1*pts.ds[i]) for i in 1:n]
+        source_workspaces = [TaylorWorkspace(p) for _ in 1:Threads.maxthreadid()]
+        C = zeros(ComplexF64, p+1, m*r); scales = zeros(r)
+        # Why multiply by ds? The library uses in general a source-normal matrix A_s, #TODO Potentially in the future migrate to the target-normal convention always, as both PH and Wavef can be immediately constructed.
+        # Freeze captured bindings so the threaded loop keeps concrete types.
+        let C = C, conjugation_map = conjugation_map, full = full, sources = sources
+            @use_threads multithreading=multithreaded for j in 1:r
+                source_workspace = source_workspaces[Threads.threadid()]
+                sx, sy = Float64(sources[j][1]), Float64(sources[j][2])
+                @inbounds for i in 1:n
+                    source_coefficients = _kernel_taylor!(full, source_workspace, pts, sx, sy, Float64(real(k0)), p, i)
+                    row = orbits===nothing ? i : orbits.orbit_of[i]
+                    # Apply the same row sum to every Taylor degree l.
+                    weight = pts.ds[i]*(orbits===nothing ? one(T) : conjugation_map===nothing ? real(orbits.phase[i]) : conj(orbits.phase[i]))
+                    # The probe is real at real k_0; symmetry phases can make the sum complex.
+                    @simd for ell in 1:p+1
+                        probe = source_factors[i]*(real(source_coefficients[ell])-coupling*imag(source_coefficients[ell]))
+                        C[ell, (j-1)*m+row] += weight*real(probe)
+                    end
+                end
+                # All m rows for source j occupy this block of C's columns.
+                # The contour evaluation uses C[:,(j-1)*m+a] to fill V[a,j].
+                columns = (j-1)*m+1:j*m
+                if conjugation_map!==nothing #TODO Not yet implemented for complex irreps
+                    # Conjugation changes sector χ to χ^{bar}; reflection reverses the
+                    # rotation and brings it back to χ, allowing lower-node "free" construction.
+                    rows = conjugation_map.rows; factors = conjugation_map.factors; offset = (j-1)*m
+                    @inbounds for a in 1:m
+                        b = rows[a]; a<=b || continue
+                        @simd for ell in 1:p+1
+                            u = C[ell,offset+a]; v = C[ell,offset+b]
+                            C[ell,offset+a] = (u+factors[a]*conj(v))/2
+                            C[ell,offset+b] = (v+factors[b]*conj(u))/2
+                        end
+                    end
+                end
+                #TODO Thanks ChatGPT for this suggestion, was quite annoying sometimes for columns with very different magnitudes
+                # Measure the typical size of each source's probe column, then scale
+                # the columns to balance their influence on the contour moments.
+                # For source j, let b_{l,j}=b_l[:,j] and
+                # P_j(δ)=Σ_{l=0}^p b_{l,j} δ^{l}.
+                # On the reference circle δ=Rmax*exp(iθ), this becomes
+                # P_j=Σ_{l=0}^{p} b_{l,j} R_{max}^{l} exp(ilθ).
+                # Squaring its norm produces both individual and cross terms:
+                # ‖P_j‖_2^{2}=Σ_{l,h=0}^{p} R_{max}^{l+h}(b_{h,j}† b_{l,j}) exp(i(l-h)θ).
+                # Averaging this squared norm over one full circle has average zero for l≠h and one for l=h:
+                # (1/2π)∫_0^{2π} exp(i(l-h)θ)dθ = 0 (l≠h), 1 (l=h).
+                # All cross terms disappear, leaving
+                # c_j^{2}=(1/2π)∫_0^{2π} ‖P_j(R_{max} exp(iθ))‖_2^{2} dθ =Σ_{l=0}^{p} R_{max}^{2l} ‖b_{l,j}‖_2^{2}.
+                # Thus c_j is the root-mean-square size of this probe column.
+                # Dividing every coefficient in column j by the same c_j makes
+                # its average squared norm on the reference circle equal to one.
+                # Compute c_j once from the coefficients, without contour evaluations.
+                # Keeping it independent of k preserves the probe's analytic dependence on k.
+                scale2 = 0.0; power = 1.0
+                for ell in 1:p+1
+                    scale2 += power^2*sum(abs2, @view C[ell,columns])
+                    power *= Rmax
+                end
+                scales[j] = sqrt(scale2)
+                # A zero column cannot be normalized.
+                scales[j]>0 || throw(ArgumentError("An interior source gives a zero column"))
+                # P_j(k-k_0) approximates rhs_j(k). Divide its coefficients by c_j:
+                # V_j(k)=P_j(k-k_0)/c_j, so we have for the following j-column eq:
+                # A_{s,χ}^{bar}(k)ᵀ X_j(k)=V_j(k),
+                # so X_j≈M u_{red,j}/c_j. solve_vectors divides each row by its total_weight.
+                # Fixed nonzero c_j preserves its poles and residue ranks.
+                @views C[:, columns] ./= scales[j]
+            end
+        end
+    else
+        # Provided sources use the existing raw helper API. The caller must handle
+        # the weights, matrix orientation and any column normalization.
+        C = beyn_interior_probe_taylor(kernel, pts, sources, Float64(real(k0)), p; beta, multithreaded)
+    end
+    V = Matrix{Complex{T}}(undef, N, r); X = similar(V); A0 = zeros(Complex{T}, N, r); A1 = zeros(Complex{T}, N, r)
+    return V, X, A0, A1, C
 end
 
 function tune_cheb_config(cs::DoubleLayerPotentialSolver, pts::BoundaryPoints, k, cfg::ChebyshevConfig)
@@ -405,6 +677,50 @@ Matrix construction uses the analytic Taylor-Horner backend when
 * `A1::Matrix{Complex{T}}`: First contour moment.
 """
 function construct_matrices(solver::BeynSolver, pts::BoundaryPoints, k0, R; multithreaded::Bool=true, rng=MersenneTwister(0), cheb_config::ChebyshevConfig=solver.cheb_config, taylor_degree::Int=solver.taylor_degree)
+    return _construct_matrices(solver, Val(solver.use_half_contour), pts, k0, R; multithreaded, rng, cheb_config, taylor_degree)
+end
+
+function _construct_matrices(solver::BeynSolver, ::Val{true}, pts::BoundaryPoints, k0, R; multithreaded::Bool=true, rng=MersenneTwister(0), cheb_config::ChebyshevConfig=solver.cheb_config, taylor_degree::Int=solver.taylor_degree, coefficients=nothing)
+    kernel = solver.kernel; nq = solver.nq; N = boundary_matrix_size(kernel, pts); r = min(solver.r, N); p = taylor_degree
+    isreal(k0) && real(k0)>R || throw(ArgumentError("Half contours require a real center and a disk in Re(k)>0"))
+    center = Float64(real(k0)); radius = Float64(R)
+    source, conjugation_map = _beyn_half_symmetry_rotation_fix(kernel, pts)
+    V, X, A0, A1, C = beyn_buffer_matrices(Float64, Val(:interior), N, r, rng; kernel, pts, k0=center, p, beta=solver.beta, Rmax=solver.Rmax, multithreaded, conjugation_map)
+    t = ComplexF64[cis((2*j-1)*pi/nq) for j in 1:nq÷2]; ks = center.+radius.*t
+    # Evaluate all probes together: vec(V_j)=Cᵀ[1,δ_j,...,δ_j^p], δ_j=ks[j]-center.
+    powers = Matrix{ComplexF64}(undef, p+1, length(ks))
+    @inbounds for j in eachindex(ks)
+        powers[1,j] = 1.0
+        for l in 1:p
+            powers[l+1,j] = powers[l,j]*(ks[j]-center)
+        end
+    end
+    probes = Array{ComplexF64}(undef, N, r, length(ks))
+    @blas_multi_then_1 MAX_BLAS_THREADS mul!(reshape(probes, N*r, length(ks)), transpose(C), powers)
+    matrices = _construct_matrices_multi_k_taylor_real_beta(source, pts, center, ks, p; beta=solver.beta, multithreaded, coefficients)
+    @blas_multi_then_1 MAX_BLAS_THREADS Fs = [lu!(A; check=false) for A in matrices]
+    @blas_multi_then_1 MAX_BLAS_THREADS for j in eachindex(ks)
+        ldiv!(X, transpose(Fs[j]), @view(probes[:,:,j]))
+        weight = (radius/nq)*t[j]
+        if conjugation_map===nothing
+            @. A0 += 2*real(weight*X)
+            @. A1 += 2*real(weight*ks[j]*X)
+        else
+            # The lower node is conj(ks[j]), but #TODO not yet implemented for complex irreps
+            rows = conjugation_map.rows; factors = conjugation_map.factors; weight1 = weight*ks[j]
+            @inbounds for b in 1:r
+                @simd for a in 1:N
+                    lower = factors[a]*conj(X[rows[a],b])
+                    A0[a,b] += weight*X[a,b]+conj(weight)*lower
+                    A1[a,b] += weight1*X[a,b]+conj(weight1)*lower
+                end
+            end
+        end
+    end
+    return A0, A1 # x=M*u
+end
+
+function _construct_matrices(solver::BeynSolver, ::Val{false}, pts::BoundaryPoints, k0, R; multithreaded::Bool=true, rng=MersenneTwister(0), cheb_config::ChebyshevConfig=solver.cheb_config, taylor_degree::Int=solver.taylor_degree)
     T = _bim_numeric_type(solver); N = boundary_matrix_size(solver.kernel, pts); k0c = Complex{T}(k0); Rc = T(R); nq = solver.nq
     θ = range(zero(T), 2T(pi); length=nq+1)[1:end-1]; ej = cis.(θ); zj = k0c .+ Rc.*ej; wj = (Rc/nq).*ej
     if solver.use_taylor
@@ -439,6 +755,8 @@ Perform the projected stage of Beyn's method without nonlinear-residual
 validation. The contour has center `k0` and radius `dk/2`. The reduced Beyn
 matrix is diagonalized, layer density vectors are reconstructed, and roots
 outside the contour are discarded.
+In half mode, `coefficients` optionally retains the full Taylor expansion
+for subsequent residual checks in the same window.
 
 ## Arguments
 * `solver::BeynSolver`: Beyn solver.
@@ -453,14 +771,19 @@ outside the contour are discarded.
 
 ## Returns
 * `ks::Vector{Complex{T}}`: Complex roots inside the contour.
-* `X::Matrix{Complex{T}}`: Corresponding layer density vectors as columns.
+* `X::Matrix{Complex{T}}`: Layer density columns in full mode; weighted boundary functions `M*u` in half mode.
 """
-function _beyn_projected_solve(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, rng=MersenneTwister(0), cheb_config::ChebyshevConfig=solver.cheb_config)
+function _beyn_projected_solve(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, rng=MersenneTwister(0), cheb_config::ChebyshevConfig=solver.cheb_config, coefficients=nothing)
     T = _bim_numeric_type(solver); k0c = Complex{T}(k0); Rc = T(dk)/2
-    @blas_1 A0, A1 = construct_matrices(solver, pts, k0c, Rc; multithreaded, rng, cheb_config)
+    if coefficients===nothing
+        @blas_1 A0, A1 = construct_matrices(solver, pts, k0c, Rc; multithreaded, rng, cheb_config)
+    else
+        @blas_1 A0, A1 = _construct_matrices(solver, Val(true), pts, k0c, Rc; multithreaded, rng, cheb_config, coefficients)
+    end
     N = size(A0, 1)
     @blas_multi_then_1 MAX_BLAS_THREADS U, Σ, W = svd!(A0; full=false)
     rk = count(>=(solver.svd_tol), Σ)
+    solver.use_half_contour && rk==size(A0,2) && throw(ArgumentError("Half-contour probe is saturated; increase r or reduce the window"))
     rk == 0 && return Complex{T}[], Matrix{Complex{T}}(undef, N, 0)
     Uk = @view U[:, 1:rk]; Wk = @view W[:, 1:rk]; Σk = @view Σ[1:rk]; tmp = Matrix{Complex{T}}(undef, N, rk)
     @blas_multi_then_1 MAX_BLAS_THREADS mul!(tmp, A1, Wk)
@@ -475,19 +798,20 @@ function _beyn_projected_solve(solver::BeynSolver, pts::BoundaryPoints, k0, dk; 
     return ks[idx], X[:,idx]
 end
 
-# Compute the residual of a candidate root and its corresponding layer density vector.
+# Compute a candidate residual: A*x for full-contour densities, Aᵀ*x for half-contour x=M*u.
 @inline function _beyn_residual(solver::BeynSolver, pts, k, x, y; multithreaded::Bool=true)
-    @blas_1 A = construct_matrices(solver.kernel, pts, k; multithreaded)
-    @blas_multi_then_1 MAX_BLAS_THREADS mul!(y, A, x)
+    kernel = solver.use_half_contour ? first(_beyn_half_symmetry_rotation_fix(solver.kernel)) : solver.kernel
+    @blas_1 A = construct_matrices(kernel, pts, k; multithreaded)
+    @blas_multi_then_1 MAX_BLAS_THREADS mul!(y, solver.use_half_contour ? transpose(A) : A, x)
     return norm(y)
 end
 
 """
     _beyn_solve_core(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, rng=MersenneTwister(0), cheb_config::ChebyshevConfig=solver.cheb_config)
 
-Perform an exhaustive single-contour Beyn solve. Every projected candidate is
-explicitly residual-checked. This is the reference path used by `solve` and
-`solve_vectors`.
+Perform a single-contour Beyn solve. With `auto_discard_spurious=true`, every
+projected candidate is residual-checked; otherwise validation is skipped and
+residuals are `NaN`. This is the path used by `solve` and `solve_vectors`.
 
 ## Arguments
 * `solver::BeynSolver`: Beyn solver.
@@ -506,9 +830,19 @@ explicitly residual-checked. This is the reference path used by `solve` and
 * `X::Matrix{Complex{T}}`: Corresponding layer density vectors.
 """
 function _beyn_solve_core(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, rng=MersenneTwister(0), cheb_config::ChebyshevConfig=solver.cheb_config)
-    T = _bim_numeric_type(solver); ks, X = _beyn_projected_solve(solver, pts, k0, dk; multithreaded, rng, cheb_config); N = size(X, 1)
+    T = _bim_numeric_type(solver); N = boundary_matrix_size(solver.kernel, pts)
+    # Retain one window's full A_l while constructing its real-beta matrices.
+    # Validate with those same coefficients, then release them with this window.
+    coefficients = solver.use_half_contour && solver.auto_discard_spurious ? Array{ComplexF64}(undef, N, N, solver.taylor_degree+1) : nothing
+    ks, X = _beyn_projected_solve(solver, pts, k0, dk; multithreaded, rng, cheb_config, coefficients)
     isempty(ks) && return Complex{T}[], T[], Matrix{Complex{T}}(undef, N, 0)
     !solver.auto_discard_spurious && return ks, fill(T(NaN), length(ks)), X
+    if solver.use_half_contour
+        values = [ks]; vectors = [X]
+        keep, residuals = _beyn_imag_k_check(solver, values, vectors, [pts]; multithreaded, cheb_config, windows=([k0], [T(dk)/2]), coefficients)
+        idx = keep[1]
+        return values[1][idx], residuals[1], isempty(idx) ? Matrix{Complex{T}}(undef, N, 0) : vectors[1][:,idx]
+    end
     residuals = Vector{T}(undef, length(ks)); keep = falses(length(ks)); y = Vector{Complex{T}}(undef, N)
     @inbounds for j in eachindex(ks)
         rj = _beyn_residual(solver, pts, ks[j], @view(X[:,j]), y; multithreaded); residuals[j] = rj; keep[j] = rj<solver.res_tol
@@ -518,40 +852,55 @@ function _beyn_solve_core(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multi
 end
 
 """
-    _beyn_imag_k_check(solver::BeynSolver, ks_all, X_all, all_pts; pad::Int=solver.imag_k_pad, group_size::Int=solver.imag_k_group_size, multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config)
+    _beyn_imag_k_check(solver::BeynSolver, ks_all, X_all, all_pts;
+        pad::Int=solver.imag_k_pad, group_size::Int=solver.imag_k_group_size,
+        multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config,
+        windows=nothing, block_size::Int=512, block_bytes::Int=512*1024^2)
 
-Apply imaginary-`k` screening to projected roots from multiple Beyn
-windows.
+Process projected roots in batches of at most `group_size`.
+Full contours process decreasing `abs(imag(k))` and accept the remaining roots
+once `pad` consecutive checks pass. Half contours check every root in window
+order. With `windows`, full Hankel Taylor coefficients are shared across all
+candidate vectors in each window using BLAS-3 products.
 
-Candidates are sorted by decreasing `abs(imag(k))`. Residual
-validation therefore starts with roots furthest from the real axis. A failed
-residual resets the good-root streak and is discarded when
-`solver.auto_discard_spurious=true`. Once `pad` consecutive roots satisfy the
-residual tolerance, all remaining roots are accepted without explicit residual
-evaluation.
-
-Candidates from the same spectral window are evaluated together using the
-multi-`k` Chebyshev backend when available.
+With `auto_discard_spurious=true`, discard failing checked candidates.
+Half contours check every candidate and also reject nonfinite residuals.
 
 ## Arguments
 * `solver::BeynSolver`: Beyn solver and filtering configuration.
-* `ks_all`: Complex projected roots for each window.
-* `X_all`: layer density matrices corresponding to `ks_all`.
-* `all_pts`: Boundary discretization associated with each window.
+* `ks_all::AbstractVector{<:AbstractVector{Complex{T}}}`: Projected roots per window.
+* `X_all::AbstractVector{<:AbstractMatrix{Complex{T}}}`: Projected vector columns,
+  with column j associated with `ks_all[i][j]` in window i.
+* `all_pts::AbstractVector{<:BoundaryPoints}`: Boundary discretization per window.
 
 ## Keyword Arguments
-* `pad::Int=solver.imag_k_pad`: Consecutive good roots required before stopping.
-* `group_size::Int=solver.imag_k_group_size`: Maximum residual-check batch size.
+* `pad::Int=solver.imag_k_pad`: Consecutive passing checks before full-contour
+  early termination; unused for half contours.
+* `group_size::Int=solver.imag_k_group_size`: Maximum root-processing batch size;
+  half-contour Taylor products use all candidate vectors in a window.
 * `multithreaded::Bool=true`: Enable multithreaded matrix construction.
-* `cheb_config::ChebyshevConfig=solver.cheb_config`: Chebyshev configuration.
+* `cheb_config::ChebyshevConfig=solver.cheb_config`: Chebyshev residual configuration.
+* `windows::Union{Nothing,Tuple}=nothing`: Original `(centers, radii)` per window;
+  supplied centers enable full Hankel Taylor checks for half contours.
+* `block_size::Int=512`: Maximum coefficient-block width for half-contour Taylor checks.
+* `block_bytes::Int=512*1024^2`: Coefficient-buffer budget in bytes for those checks;
+  forwarded to `_beyn_taylor_residuals`, separately from other workspaces.
+* `coefficients::Union{Nothing,Array{ComplexF64,3}}=nothing`: Full Fredholm
+  Taylor coefficients retained for a single window; skips their reassembly.
 
 ## Returns
-* `idx_keep::Vector{Vector{Int}}`: Retained local root indices for each window.
-* `residuals::Vector{Vector{T}}`: Residuals aligned with retained roots. Roots
-  accepted after early termination contain `NaN`.
+* `idx_keep::Vector{Vector{Int}}`: Retained local root indices per window.
+* `residuals::Vector{Vector{T}}`: Nonlinear residual norms aligned with retained
+  roots; unevaluated entries remain `NaN`. A batch may evaluate beyond the
+  full-contour stopping point.
+
+Returns `(idx_keep, residuals)`, with `T=_bim_numeric_type(solver)`.
 """
-function _beyn_imag_k_check(solver::BeynSolver, ks_all, X_all, all_pts; pad::Int=solver.imag_k_pad, group_size::Int=solver.imag_k_group_size, multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config)
-    T = _bim_numeric_type(solver); nw = length(ks_all)
+function _beyn_imag_k_check(solver::BeynSolver, ks_all, X_all, all_pts; pad::Int=solver.imag_k_pad, group_size::Int=solver.imag_k_group_size, multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config, windows=nothing, block_size::Int=512, block_bytes::Int=512*1024^2, coefficients=nothing)
+    T = _bim_numeric_type(solver); nw = length(ks_all); half = solver.use_half_contour
+    kernel = half ? first(_beyn_half_symmetry_rotation_fix(solver.kernel)) : solver.kernel
+    taylor = half && windows!==nothing; batched = taylor || (solver.use_chebyshev && solver.kernel isa Union{DoubleLayerPotentialSolver,CombinedFieldIntegralEquationSolver})
+    computed = taylor ? falses(nw) : Bool[]
     keep = [trues(length(ks_all[i])) for i in 1:nw]; residuals = [fill(T(NaN), length(ks_all[i])) for i in 1:nw]; candidates = Tuple{Int,Int,T}[]
     @inbounds for i in 1:nw
         for j in eachindex(ks_all[i])
@@ -559,24 +908,26 @@ function _beyn_imag_k_check(solver::BeynSolver, ks_all, X_all, all_pts; pad::Int
         end
     end
     isempty(candidates) && return [Int[] for _ in 1:nw], residuals
-    sort!(candidates; by=c -> c[3], rev=true)
-    window_js = [Int[] for _ in 1:nw]; touched = Int[]; streak = 0; pos = 1; nc = length(candidates)
+    half || sort!(candidates; by=c -> c[3], rev=true)
+    window_js = [Int[] for _ in 1:nw]; touched = Int[]; y = Complex{T}[]
+    streak = 0; pos = 1; nc = length(candidates)
     while pos <= nc
         last = min(pos+group_size-1, nc); empty!(touched)
         @inbounds for q in pos:last
             i, j, _ = candidates[q]; isempty(window_js[i]) && push!(touched, i); push!(window_js[i], j)
         end
         @inbounds for i in touched
-            js = window_js[i]; pts = all_pts[i]; N = boundary_matrix_size(solver.kernel, pts); nk = length(js); y = Vector{Complex{T}}(undef, N)
-            if solver.use_chebyshev && solver.kernel isa Union{DoubleLayerPotentialSolver,CombinedFieldIntegralEquationSolver}
-                zg = Vector{ComplexF64}(undef, nk)
-                for q in 1:nk
-                    zg[q] = ComplexF64(ks_all[i][js[q]])
+            js = window_js[i]; pts = all_pts[i]; resize!(y, size(X_all[i], 1))
+            if taylor
+                if !computed[i]
+                    residuals[i] = _beyn_taylor_residuals(kernel, pts, Float64(real(windows[1][i])), ks_all[i], X_all[i], solver.taylor_degree; block_size, block_bytes, multithreaded, coefficients)
+                    computed[i] = true
                 end
-                Abufs = _construct_matrices_multi_k_cheb(solver.kernel, pts, zg, cheb_config; multithreaded)
-                for q in 1:nk
-                    j = js[q]
-                    @blas_multi_then_1 MAX_BLAS_THREADS mul!(y, Abufs[q], @view(X_all[i][:, j]))
+            elseif batched
+                zg = ComplexF64[ks_all[i][j] for j in js]
+                Abufs = _construct_matrices_multi_k_cheb(kernel, pts, zg, cheb_config; multithreaded)
+                @blas_multi_then_1 MAX_BLAS_THREADS for q in eachindex(js)
+                    j = js[q]; mul!(y, Abufs[q], @view(X_all[i][:,j]))
                     residuals[i][j] = norm(y)
                 end
             else
@@ -588,11 +939,11 @@ function _beyn_imag_k_check(solver::BeynSolver, ks_all, X_all, all_pts; pad::Int
         stop = false
         @inbounds for q in pos:last
             i, j, _ = candidates[q]; rj = residuals[i][j]
-            if rj >= solver.res_tol
+            if rj >= solver.res_tol || (half && !isfinite(rj))
                 solver.auto_discard_spurious && (keep[i][j] = false); streak = 0
             else
                 streak += 1
-                if streak >= pad
+                if !half && streak >= pad
                     stop = true; break
                 end
             end
@@ -635,7 +986,7 @@ end
     solve_vectors(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config)
 
 Solve one circular Beyn contour with residual validation and return
-the corresponding layer density vectors.
+source-layer densities in full mode or physical boundary functions in half mode.
 
 ## Arguments
 * `solver::BeynSolver`: Beyn solver.
@@ -650,10 +1001,22 @@ the corresponding layer density vectors.
 ## Returns
 * `ks::Vector{Complex{T}}`: Accepted complex eigenvalues.
 * `residuals::Vector{T}`: Corresponding nonlinear residuals.
-* `X::Matrix{Complex{T}}`: Corresponding layer density vectors.
+* `X::Matrix{Complex{T}}`: Source-layer densities in full mode; physical boundary functions in half mode.
 """
 function solve_vectors(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config)
-    return _beyn_solve_core(solver, pts, k0, dk; multithreaded, cheb_config)
+    ks, residuals, X = _beyn_solve_core(solver, pts, k0, dk; multithreaded, cheb_config)
+    if solver.use_half_contour
+        weights = pts.ds
+        if solver.kernel.symmetry!==nothing
+            orbits = _fold_boundary(Float64, solver.kernel.billiard, length(pts), solver.kernel.symmetry, solver.kernel.sym_characters)
+            weights = zeros(Float64, length(orbits.fundamental_indices))
+            @inbounds for i in eachindex(pts.ds)
+                weights[orbits.orbit_of[i]] += pts.ds[i]*abs2(orbits.phase[i])
+            end
+        end
+        X ./= weights
+    end
+    return ks, residuals, X
 end
 
 """
