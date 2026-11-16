@@ -284,15 +284,40 @@ function _beyn_interior_sources(kernel::DoubleLayerPotentialSolver, pts::Boundar
     # Fourfold boundary sampling refinining the boundary choice for easier interior source points placement 
     # ppw = 1.0 does nothing due to high min_pts, very hacky
     full = DoubleLayerPotentialSolver(1.0, kernel.billiard; min_pts=4n, grading=SmoothPeriodicGrading(), symmetry=nothing, sym_characters=())
-    fine = evaluate_points(full, kernel.billiard, k0); step = sum(pts.ds)/n # easy estimate of mean spacing h̄
+    # Distance checks need only the same fine-boundary positions, not its
+    # tangents, arclength coordinates or quadrature fields.
+    _require_no_holes(full, full.billiard)
+    comp = full_boundary(full.billiard)
+    isempty(comp) && error("Boundary cannot be empty.")
+    lens, cum, Ltot = component_lengths(comp)
+    fine_count = max(full.min_pts, round(Int, Float64(k0)*Ltot*full.pts_scaling_factor[1]/(2*pi)))
+    fine_count = _bim_round_nodes(fine_count, lcm(2, _bim_solver_node_multiple(full)), nothing)
+    fine_xy = Vector{SVector{2,Float64}}(undef, fine_count)
+    @inbounds for i in eachindex(fine_xy)
+        t = Float64(s_mid(i, fine_count))
+        s = (t/Float64(2*pi))*Ltot
+        if s >= Ltot
+            segment = 1; u = 0.0
+        else
+            segment = clamp(searchsortedlast(cum, s), 1, length(lens))
+            while segment < length(lens) && s >= cum[segment+1]
+                segment += 1
+            end
+            local_s = s-cum[segment]
+            u = lens[segment]==0.0 ? 0.0 : local_s/lens[segment]
+            u = clamp(u, 0.0, 1.0)
+        end
+        fine_xy[i] = curve(comp[segment], u)
+    end
+    step = sum(pts.ds)/n # easy estimate of mean spacing h̄
     # With h=step and 20h cells, all nodes within 10h lie in the 3x3 neighborhood.
     cellsize = 20*step; cells = Dict{Tuple{Int,Int},Vector{Int}}()
     # Conservative bounds protect distance arithmetic, integer indices and bin precision.
     coordinate_limit = sqrt(floatmax(Float64))/4; quotient_limit = min(2.0^45, Float64(typemax(Int))/2)
     safe_cells = isfinite(cellsize) && sqrt(floatmin(Float64))<cellsize<coordinate_limit
     if safe_cells
-        for j in eachindex(fine.xy)
-            point = fine.xy[j]; qx = point[1]/cellsize; qy = point[2]/cellsize
+        for j in eachindex(fine_xy)
+            point = fine_xy[j]; qx = point[1]/cellsize; qy = point[2]/cellsize
             # Unsafe coordinates disable binning; retain the original full scan.
             if !(isfinite(qx) && isfinite(qy) && max(abs(point[1]),abs(point[2]))<coordinate_limit && max(abs(qx),abs(qy))<quotient_limit)
                 safe_cells = false; break
@@ -345,11 +370,11 @@ function _beyn_interior_sources(kernel::DoubleLayerPotentialSolver, pts::Boundar
                 neighbors = get(cells, (ix,iy), nothing)
                 neighbors===nothing && continue
                 for j in neighbors
-                    d = min(d, norm(source-fine.xy[j]))
+                    d = min(d, norm(source-fine_xy[j]))
                 end
             end
         else
-            d = minimum(norm(source-x) for x in fine.xy)
+            d = minimum(norm(source-x) for x in fine_xy)
         end
         # step=mean(ds); several boundary spacings away (5h away as emphasized by Barnett: https://arxiv.org/abs/1310.5352 (Remark 6): Evaluation of layer potentials close to the boundary for Laplace and Helmholtz problems on analytic planar domains), while capping their depth (10 steps from the boundary provided good results - this is in preparation for magnetic edge states where not a lot of mass is in the deep interior)
         5*step<=d<=10*step || continue # tipically enough
@@ -785,7 +810,7 @@ function _beyn_projected_solve(solver::BeynSolver, pts::BoundaryPoints, k0, dk; 
     rk = count(>=(solver.svd_tol), Σ)
     solver.use_half_contour && rk==size(A0,2) && throw(ArgumentError("Half-contour probe is saturated; increase r or reduce the window"))
     rk == 0 && return Complex{T}[], Matrix{Complex{T}}(undef, N, 0)
-    Uk = @view U[:, 1:rk]; Wk = @view W[:, 1:rk]; Σk = @view Σ[1:rk]; tmp = Matrix{Complex{T}}(undef, N, rk)
+    Uk = @view U[:, 1:rk]; Wk = copy(@view W[:, 1:rk]); Σk = @view Σ[1:rk]; tmp = Matrix{Complex{T}}(undef, N, rk)
     @blas_multi_then_1 MAX_BLAS_THREADS mul!(tmp, A1, Wk)
     @inbounds for j in 1:rk
         @views tmp[:, j] ./= Σk[j]
@@ -793,9 +818,11 @@ function _beyn_projected_solve(solver::BeynSolver, pts::BoundaryPoints, k0, dk; 
     B = Matrix{Complex{T}}(undef, rk, rk)
     @blas_multi_then_1 MAX_BLAS_THREADS mul!(B, adjoint(Uk), tmp)
     @blas_multi_then_1 MAX_BLAS_THREADS ev = eigen!(B)
-    ks = ev.values; X = Uk*ev.vectors; idx = findall(j -> abs(ks[j]-k0c)<=Rc, eachindex(ks))
+    ks = ev.values; idx = findall(j -> abs(ks[j]-k0c)<=Rc, eachindex(ks))
     isempty(idx) && return Complex{T}[], Matrix{Complex{T}}(undef, N, 0)
-    return ks[idx], X[:,idx]
+    X = Matrix{Complex{T}}(undef, N, length(idx))
+    @blas_multi_then_1 MAX_BLAS_THREADS mul!(X, Uk, ev.vectors[:,idx])
+    return ks[idx], X
 end
 
 # Compute a candidate residual: A*x for full-contour densities, Aᵀ*x for half-contour x=M*u.

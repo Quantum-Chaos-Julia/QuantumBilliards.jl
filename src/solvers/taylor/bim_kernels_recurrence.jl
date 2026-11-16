@@ -751,61 +751,77 @@ function _construct_matrices_multi_k_taylor_real_beta_reduced(solver::DoubleLaye
     work::Vector{TaylorWorkspace} = [TaylorWorkspace(p) for _ = 1:Threads.maxthreadid()]
     coeff::Vector{Matrix{ComplexF64}} = [Matrix{ComplexF64}(undef, p + 1, m) for _ = 1:Threads.maxthreadid()]
     full_coeff = coefficients===nothing ? coeff : [Matrix{ComplexF64}(undef, p+1, m) for _ = 1:Threads.maxthreadid()]
-    @use_threads multithreading=multithreaded for bcol = 1:m # for each reduced source column
-        tid::Int = Threads.threadid()
-        w::TaylorWorkspace = work[tid]
-        C::Matrix{ComplexF64} = coeff[tid] # C[l,arow] stores degree taylor coefficient for the arow-th reduced target row
-        H = full_coeff[tid]
-        imgs::Vector{Int} = images[bcol] 
-        gj::Int = imgs[1] # finds the full boundary index corresponding to the bcol-th reduced source column
-        χ = phase[gj] # irrep factor associated with the full boundary index gj
-        ########
-        # Initialize the column using its first source image.
-        ########
-        @inbounds for arow = 1:m # for each reduced target row
-            gi::Int = fund[arow] # finds the full boundary index corresponding to the arow-th reduced target row
-            a::Vector{ComplexF64} = _kernel_taylor!(cache, w, k0, p, gi, gj) # compute the Taylor coefficients for the kernel at the full boundary indices gi, gj
-            @simd for l = 1:p + 1 # convert at real k0 before applying the possibly complex irrep phase χ
-                C[l, arow] = -χ * (real(a[l]) - coupling*imag(a[l])) # this source image contributes to I-K; its source-normal derivative and quadrature weight are already in a
-                coefficients===nothing || (H[l,arow] = -χ*a[l])
-            end
+    powers = Matrix{ComplexF64}(undef, p+1, nk)
+    @inbounds for q = 1:nk
+        powers[1,q] = 1.0
+        for l = 1:p
+            powers[l+1,q] = powers[l,q]*δ[q]
         end
-        ########
-        # Add the remaining source images to the same reduced column; boundary quadrature weights are already included in a.
-        ########
-        @inbounds for ii = 2:length(imgs) # first one already done above
-            gj = imgs[ii]
-            χ = phase[gj]
-            for arow = 1:m
-                gi = fund[arow]
-                a = _kernel_taylor!(cache, w, k0, p, gi, gj)
-                @simd for l = 1:p + 1
-                    C[l, arow] -= χ * (real(a[l]) - coupling*imag(a[l]))
-                    coefficients===nothing || (H[l,arow] -= χ*a[l])
+    end
+    evaluation = [Matrix{ComplexF64}(undef, m, nk) for _ = 1:Threads.maxthreadid()]
+    @blas_multi 1 begin
+        @use_threads multithreading=multithreaded for bcol = 1:m # for each reduced source column
+            tid::Int = Threads.threadid()
+            w::TaylorWorkspace = work[tid]
+            C::Matrix{ComplexF64} = coeff[tid] # C[l,arow] stores degree taylor coefficient for the arow-th reduced target row
+            H = full_coeff[tid]
+            imgs::Vector{Int} = images[bcol]
+            gj::Int = imgs[1] # finds the full boundary index corresponding to the bcol-th reduced source column
+            χ = phase[gj] # irrep factor associated with the full boundary index gj
+            ########
+            # Initialize the column using its first source image.
+            ########
+            @inbounds for arow = 1:m # for each reduced target row
+                gi::Int = fund[arow] # finds the full boundary index corresponding to the arow-th reduced target row
+                a::Vector{ComplexF64} = _kernel_taylor!(cache, w, k0, p, gi, gj) # compute the Taylor coefficients for the kernel at the full boundary indices gi, gj
+                @simd for l = 1:p + 1 # convert at real k0 before applying the possibly complex irrep phase χ
+                    C[l, arow] = -χ * (real(a[l]) - coupling*imag(a[l])) # this source image contributes to I-K; its source-normal derivative and quadrature weight are already in a
+                    coefficients===nothing || (H[l,arow] = -χ*a[l])
                 end
             end
-        end
-        if coefficients!==nothing
-            # Fold the full kernel separately: conversion to real beta must
-            # precede the irrep phases in C, while H retains the full kernel.
-            H[1,bcol] += 1.0
-            @inbounds for l = 1:p+1, arow = 1:m
-                coefficients[arow,bcol,l] = H[l,arow]
+            ########
+            # Add the remaining source images to the same reduced column; boundary quadrature weights are already included in a.
+            ########
+            @inbounds for ii = 2:length(imgs) # first one already done above
+                gj = imgs[ii]
+                χ = phase[gj]
+                for arow = 1:m
+                    gi = fund[arow]
+                    a = _kernel_taylor!(cache, w, k0, p, gi, gj)
+                    @simd for l = 1:p + 1
+                        C[l, arow] -= χ * (real(a[l]) - coupling*imag(a[l]))
+                        coefficients===nothing || (H[l,arow] -= χ*a[l])
+                    end
+                end
             end
-        end
-        @inbounds for arow = 1:m
-            # Add the identity (DLP 1/2 jump relation, mul by 2 convetion) once, after summing all source images.
-            # It contributes only on the reduced diagonal and at Taylor degree zero.
-            arow == bcol && (C[1, arow] += 1.0)
-            # C[:,arow] now contains the Taylor coefficients of this one reduced
-            # matrix entry, for the current source column bcol. The source-image
-            # sum and diagonal identity have already been included.
-            #
-            # For each requested k=ks[q], evaluate
-            # C[1,arow] + C[2,arow]*(k-k0) + ... + C[p+1,arow]*(k-k0)^p,
-            # then store it at the same (arow,bcol) position in that k's matrix.
-            for q = 1:nk # iterate over all the ks
-                Tbufs[q][arow, bcol] = _horner(C, arow, δ[q])
+            if coefficients!==nothing
+                # Fold the full kernel separately: conversion to real beta must
+                # precede the irrep phases in C, while H retains the full kernel.
+                H[1,bcol] += 1.0
+                @inbounds for l = 1:p+1, arow = 1:m
+                    coefficients[arow,bcol,l] = H[l,arow]
+                end
+            end
+            @inbounds for arow = 1:m
+                # Add the identity (DLP 1/2 jump relation, mul by 2 convetion) once, after summing all source images.
+                # It contributes only on the reduced diagonal and at Taylor degree zero.
+                arow == bcol && (C[1, arow] += 1.0)
+                # C[:,arow] now contains the Taylor coefficients of this one reduced
+                # matrix entry, for the current source column bcol. The source-image
+                # sum and diagonal identity have already been included.
+                #
+                # For each requested k=ks[q], evaluate
+                # C[1,arow] + C[2,arow]*(k-k0) + ... + C[p+1,arow]*(k-k0)^p,
+                # then store it at the same (arow,bcol) position in that k's matrix.
+            end
+            # Evaluate this source column at all nodes: E=transpose(C)*powers.
+            # For each quadrature node q, copy E[:,q] into column bcol.
+            E = evaluation[tid]
+            mul!(E, transpose(C), powers)
+            @inbounds for q = 1:nk
+                @simd for arow = 1:m
+                    Tbufs[q][arow,bcol] = E[arow,q]
+                end
             end
         end
     end
@@ -1078,7 +1094,7 @@ The argument order and matrix return type match the original outgoing-Hankel
 constructor. The distinct function name is the only entry into this path.
 The full-boundary or symmetry-reduced builder is selected automatically.
 Conversion precedes symmetry-character multiplication, including for complex
-rotational irreps. Real and complex `ks` are evaluated by Horner's rule.
+rotational irreps. Real and complex `ks` evaluate the same Taylor polynomial.
 
 ## Arguments
 - `solver::DoubleLayerPotentialSolver`: Euclidean DLP solver.
