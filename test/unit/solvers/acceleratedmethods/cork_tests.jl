@@ -25,6 +25,15 @@
 # kappa = 2.85, 3.0 (double), 3.3. The nearest excluded real roots are 1.8 and 4.4; the remaining roots are spread over 0 .. 6.2 so the
 # Krylov iteration converges within the matrix size N = 24 (a convergence tolerance of 1e-6 is needed for the block size 2).
 # Helper definitions use the prefix `ck_`.
+#
+# Convergence criterion. `ritz_roots` returns a third output `diskρ`, the residual indicators of every Ritz value with |t| <= 1 + edge_tol
+# (no |Im k| restriction); `adaptive_cork` accepts a Krylov dimension only when every element of `diskρ` is <= res_tol and the accepted
+# set is stable. An empty accepted set is a valid result once the disk has converged, so the Weyl-count keyword `expected` no longer exists.
+# The two former Weyl-guard testsets of `solve / solve_vectors` (growth of a too small `mstart` with `expected = 4.0`; empty window with
+# `expected < 0.5` versus `expected = 3.0`) pinned behaviour that was removed on purpose. They are REPLACED, not weakened, by: an empty window
+# returns an empty spectrum without any estimate; a too small `mstart` still yields all four roots; an unconverged Ritz value inside the
+# disk blocks acceptance (`adaptive_cork`, `ritz_roots`); the `ritz_roots` residual output; `res_tol = 0` exhausts the Krylov dimension.
+# With block size 1 the second copy of the double root is round-off dependent, so the two testsets that use it compare distinct roots.
 
 using LinearAlgebra: Diagonal, qr, norm, svdvals, lu, I, tril
 using Random: MersenneTwister
@@ -109,6 +118,26 @@ end
 
 # Chebyshev polynomial T_j(t) = cos(j acos t) on [-1, 1].
 ck_T(j::Int, t::Real) = cos(j * acos(t))
+
+# Roots sorted by real part with values closer than `tol` collapsed to the first one (a multiple root counted once).
+function ck_distinct(ks::AbstractVector{<:Complex}; tol::Float64=1e-6)
+    out = ComplexF64[]
+    for k in sort(ks; by=real)
+        (isempty(out) || abs(k - out[end]) > tol) && push!(out, k)
+    end
+    return out
+end
+
+# Whether the multiset `a` is contained in the multiset `b` (exact equality of the entries).
+function ck_submultiset(a::AbstractVector, b::AbstractVector)
+    rest = collect(b)
+    for x in a
+        i = findfirst(==(x), rest)
+        i === nothing && return false
+        deleteat!(rest, i)
+    end
+    return true
+end
 
 @testset "synthetic problem: roots, eigenvectors and Taylor hook" begin
     s = ck_problem()
@@ -449,7 +478,7 @@ end
 
 @testset "ritz_roots: roots of the projected inverse linearization" begin
     P, _, S = ck_state(CK_N)
-    roots, V = ritz_roots(S, CK_K0, CK_DPOLY, CK_N)
+    roots, V, diskρ = ritz_roots(S, CK_K0, CK_DPOLY, CK_N)
     inwin = findall(r -> 2.8 <= r[1] <= 3.4, roots)
 
     @testset "requested window holds the known roots with small indicators" begin
@@ -472,6 +501,30 @@ end
         @test all(r -> any(q -> q == r, roots_wide), roots)
     end
 
+    @testset "third output: residual indicators of every Ritz value in the window disk" begin
+        @test diskρ isa Vector{Float64}
+        @test all(>=(0), diskρ)
+        @test length(diskρ) >= count(r -> abs(r[1] - CK_K0) <= CK_DPOLY, roots)       # the real roots of the window lie in the disk
+        @test ck_submultiset([r[3] for r in roots], diskρ)                         # the residuals of the strip roots are among them
+        @test count(<(1e-6), diskρ) >= length(inwin)                               # converged state (m = N): window roots have small residuals
+        @test all(<(1e-6), diskρ)                                                  # and nothing else is in the disk of this problem
+    end
+
+    @testset "the disk residuals do not depend on the imaginary strip" begin
+        _, _, diskρ0 = ritz_roots(S, CK_K0, CK_DPOLY, CK_N; imag_search_tol=0.0)
+        @test sort(diskρ0) ≈ sort(diskρ)
+        _, _, diskρ_wide = ritz_roots(S, CK_K0, CK_DPOLY, CK_N; edge_tol=0.2)
+        @test length(diskρ_wide) >= length(diskρ)                                  # a larger disk can only add Ritz values
+        @test ck_submultiset(diskρ, diskρ_wide)
+    end
+
+    @testset "an unconverged state has an empty strip but a visible disk" begin
+        _, _, S8 = ck_state(8)
+        roots8, V8, diskρ8 = ritz_roots(S8, CK_K0, CK_DPOLY, 8)
+        @test isempty(roots8) && size(V8, 2) == 0
+        @test !isempty(diskρ8) && maximum(diskρ8) > 1e-6
+    end
+
     @testset "state checks" begin
         @test_throws "State dimension" ritz_roots(S, CK_K0, CK_DPOLY, CK_N - 2)
         S0 = init_cork(P.B, 3, CK_N; block_size=2)
@@ -482,7 +535,7 @@ end
 @testset "reconstruct_cork_eigenvectors: Ritz vectors to Fredholm vectors" begin
     s = ck_problem()
     _, _, S = ck_state(CK_N)
-    roots, V = ritz_roots(S, CK_K0, CK_DPOLY, CK_N)
+    roots, V, _ = ritz_roots(S, CK_K0, CK_DPOLY, CK_N)
     inwin = findall(r -> 2.8 <= r[1] <= 3.4, roots)
     Ψ = reconstruct_cork_eigenvectors(S, Matrix{ComplexF64}(V[:, inwin]), CK_N)
     ks = [r[1] for r in roots[inwin]]
@@ -554,6 +607,25 @@ end
 
     @testset "an unreachable residual tolerance exhausts the Krylov dimension" begin
         @test_throws "Reached full CORK Krylov dimension m=$(CK_N) for matrix size N=$(CK_N) without a stable requested spectrum" adaptive_cork(P.B, F, 3, CK_N; kw..., res_tol=0.0)
+        @test_throws "inside the window disk" adaptive_cork(P.B, F, 3, CK_N; kw..., res_tol=0.0)      # the message names the unconverged disk Ritz values
+    end
+
+    @testset "an unconverged Ritz value inside the disk blocks acceptance" begin
+        # Replaces the Weyl guard. Block size 2 with mstart = 6: at m = 6 and m = 8 the strip |Im k| <= imag_search_tol holds no Ritz root
+        # (the requested set is empty at both dimensions, so the accepted set is trivially stable), yet the disk |t| <= 1 + edge_tol holds
+        # Ritz values with residuals far above res_tol (observed: 2 values, largest 0.98 at m = 6 and 0.15 at m = 8). They carry a
+        # non-negligible imaginary part, so they are invisible in the strip. The iteration must not accept the empty spectrum there.
+        kw6 = (; kw..., mstart=6)
+        for m in (6, 8)
+            _, _, Sm = ck_state(m)
+            roots_m, _, diskρ_m = ritz_roots(Sm, CK_K0, CK_DPOLY, m)
+            @test isempty(roots_m)
+            @test !isempty(diskρ_m) && maximum(diskρ_m) > kw6.res_tol
+        end
+        _, ks, _, requested, _, _, edge_good, m = adaptive_cork(P.B, F, 3, CK_N; kw6...)
+        @test m > 8                                                          # not accepted as an empty spectrum at m = 6, 8
+        @test [x[1] for x in ks] ≈ CK_INSIDE atol = 1e-6
+        @test length(requested) == 4 && edge_good == (true, true)
     end
 end
 
@@ -590,11 +662,15 @@ end
     end
 
     @testset "a larger polynomial degree represents the same operator" begin
+        # With block size 1 a single starting vector sees only one copy of the double root in exact arithmetic; a second copy is
+        # generated by round-off and, as every Ritz value inside the disk must converge, it may or may not be returned. The test therefore
+        # compares the distinct roots; it still asserts that the three distinct roots are found.
         solver1 = ck_solver(block_size=1)                                             # block size 1 converges within N also for p = 5
         ks3, _ = solve(solver1, CK_PTS, CK_K0, CK_DK; multithreaded=false)
         ks5, _ = solve(solver1, CK_PTS, CK_K0, CK_DK; multithreaded=false, p=5)
-        @test real.(ks5) ≈ [2.85, 3.0, 3.3] atol = 1e-6
-        @test ks5 ≈ ks3 atol = 1e-6
+        d3, d5 = ck_distinct(ks3), ck_distinct(ks5)
+        @test real.(d5) ≈ [2.85, 3.0, 3.3] atol = 1e-6
+        @test d5 ≈ d3 atol = 1e-6
     end
 
     @testset "a window without roots returns empty outputs" begin
@@ -604,22 +680,25 @@ end
     end
 
     @testset "multiplicity is limited by the block size" begin
+        # A single starting vector sees one copy of the double root; a second copy, when present, is a round-off artefact and is
+        # not asserted (see ck_distinct). The three distinct roots must be found.
         ks1, _ = solve(ck_solver(block_size=1, mstart=10, res_tol=1e-10), CK_PTS, CK_K0, CK_DK; multithreaded=false)
-        @test real.(ks1) ≈ [2.85, 3.0, 3.3] atol = 1e-6                      # a single starting vector sees one copy of the double root
+        @test real.(ck_distinct(ks1)) ≈ [2.85, 3.0, 3.3] atol = 1e-6
     end
 
-    @testset "a too small initial Krylov dimension does not yield an empty spectrum when levels are expected" begin
-        # mstart = 6 leaves no Ritz root in the window at m = 6 and m = 8; with the expected level count the empty
-        # spectrum is not accepted and the Krylov dimension keeps growing until the four roots appear.
-        ks_small, _ = _cork_solve(ck_solver(mstart=6), CK_PTS, CK_K0, CK_DK; multithreaded=false, expected=4.0)
+    # Replaces the Weyl-guard testset "a too small initial Krylov dimension does not yield an empty spectrum when levels are expected".
+    @testset "a too small initial Krylov dimension still yields all roots" begin
+        # mstart = 6 leaves no Ritz root in the strip at m = 6 and m = 8, but unconverged Ritz values inside the window disk keep the
+        # Krylov dimension growing until the four roots appear (no `expected` level count is involved).
+        ks_small, _ = _cork_solve(ck_solver(mstart=6), CK_PTS, CK_K0, CK_DK; multithreaded=false)
         @test length(ks_small) == 4
         @test real.(ks_small) ≈ [2.85, 3.0, 3.0, 3.3] atol = 1e-6
     end
 
-    @testset "an empty window with expected < 0.5 still returns an empty spectrum" begin
-        ks_empty, _ = _cork_solve(ck_solver(), CK_PTS, 4.0, 0.4; multithreaded=false, expected=0.1)
-        @test isempty(ks_empty)
-        @test_throws "Reached full CORK Krylov dimension" _cork_solve(ck_solver(), CK_PTS, 4.0, 0.4; multithreaded=false, expected=3.0)
+    # Replaces the Weyl-guard testset "an empty window with expected < 0.5 still returns an empty spectrum" (and its expected = 3.0 throw).
+    @testset "an empty window returns an empty spectrum without a Weyl estimate" begin
+        ks_empty, res_empty = _cork_solve(ck_solver(), CK_PTS, 4.0, 0.4; multithreaded=false)
+        @test isempty(ks_empty) && isempty(res_empty)
     end
 end
 
@@ -658,7 +737,7 @@ end
     end
 
     @testset "solve_wavenumber with no root in the window returns (nothing, nothing)" begin
-        # the Weyl estimate of the unit circle for dk = 0.1 is below 0.5, so the empty Ritz set is accepted
+        # no Ritz value of the disk is left unconverged, so the empty Ritz set is accepted
         @test solve_wavenumber(solver, billiard, 4.0, 0.1; multithreaded=false) === (nothing, nothing)
     end
 

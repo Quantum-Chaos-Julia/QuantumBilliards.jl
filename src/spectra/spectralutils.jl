@@ -898,7 +898,6 @@ function compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; accept_tol::
     _enforce_memory_limit(max_memory, "CORK", solver, billiard, k1, k2)
     @timeit_debug "compute_spectrum_cork" @with_kress_q_floor begin
         T = _bim_numeric_type(solver); k1T = T(k1); k2T = T(k2); k1T<k2T || throw(ArgumentError("require k1<k2"))
-        fundamental_only = solver.kernel.symmetry!==nothing
         intervals = _cork_intervals(solver, billiard, k1, k2)
         @debug "CORK sweep" maxlog=1 k1 k2 nwindows=length(intervals) eigenvectors=solver.eigenvectors live_GiB=Base.gc_live_bytes()/2^30 maxrss_GiB=Sys.maxrss()/2^30
         a, b = intervals[1]; k0 = (a+b)/2; Δpoly = (1+solver.guard)*(b-a)/2; pts = evaluate_points(solver, billiard, k0)
@@ -929,7 +928,7 @@ function compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; accept_tol::
             @timeit_debug "solution" begin
                 @maybe_showprogress show_progress for i in eachindex(intervals)
                     a, b = intervals[i]; k0 = (a+b)/2; dk = b-a; pts = @timeit_debug "evaluate_points" evaluate_points(solver, billiard, k0)
-                    ki, ti, X = _cork_solve(solver, pts, k0, dk; multithreaded, p, vectors=true, expected=weyl_window_count(billiard, k0 - dk/2, dk; fundamental_only))
+                    ki, ti, X = _cork_solve(solver, pts, k0, dk; multithreaded, p, vectors=true)
                     keep = findall(j -> begin
                         x = real(ki[j])
                         a<=x && (i==length(intervals) ? x<=k2T : x<b) && k1T<=x
@@ -947,7 +946,7 @@ function compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; accept_tol::
         @timeit_debug "solution" begin
             @maybe_showprogress show_progress for i in eachindex(intervals)
                 a, b = intervals[i]; k0 = (a+b)/2; dk = b-a; pts = @timeit_debug "evaluate_points" evaluate_points(solver, billiard, k0)
-                ki, ti, _ = _cork_solve(solver, pts, k0, dk; multithreaded, p, expected=weyl_window_count(billiard, k0 - dk/2, dk; fundamental_only))
+                ki, ti, _ = _cork_solve(solver, pts, k0, dk; multithreaded, p)
                 keep = findall(j -> begin
                     x = real(ki[j])
                     a<=x && (i==length(intervals) ? x<=k2T : x<b) && k1T<=x

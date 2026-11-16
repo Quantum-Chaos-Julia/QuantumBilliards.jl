@@ -906,7 +906,7 @@ end
 ################################################################################
 
 """
-    ritz_roots(S::CORKState, k0::Float64, Δpoly::Float64, m::Int; edge_tol::Float64=1e-8, imag_search_tol::Float64=1e-4) -> Tuple{Vector{Tuple{Float64,Float64,Float64}},Matrix{ComplexF64}}
+    ritz_roots(S::CORKState, k0::Float64, Δpoly::Float64, m::Int; edge_tol::Float64=1e-8, imag_search_tol::Float64=1e-4) -> Tuple{Vector{Tuple{Float64,Float64,Float64}},Matrix{ComplexF64},Vector{Float64}}
 
 Extract individual Ritz roots and their projected right eigenvectors from the
 projected inverse linearization. Every projected eigenvalue is mapped
@@ -918,7 +918,10 @@ For a projected right eigenpair `Hv=μv`, the block-Arnoldi residual estimate is
     ρ=‖Htail*v‖/max(1,|μ|).
 
 The returned Ritz-vector columns remain in exactly the same order as the
-returned roots.
+returned roots. Besides the roots of the `imag_search_tol` strip, the residuals
+of every Ritz value in the guarded disk `|t|≤1+edge_tol` are returned,
+regardless of `Im(k)`; an unconverged Ritz value with a large imaginary part
+is then still visible to the caller.
 
 ## Arguments
 - `S::CORKState`:  CORK state at dimension `m`.
@@ -931,25 +934,28 @@ returned roots.
 ## Returns
 - `Vector{Tuple{Float64,Float64,Float64}}`: Individual Ritz roots as `(Re(k),Im(k),ρ)`.
 - `Matrix{ComplexF64}`: Corresponding projected right Ritz vectors.
+- `Vector{Float64}`: Residual indicators of all Ritz values with `|t|≤1+edge_tol`.
 """
-function ritz_roots(S::CORKState, k0::Float64, Δpoly::Float64, m::Int; edge_tol::Float64=1e-8, imag_search_tol::Float64=1e-4)::Tuple{Vector{Tuple{Float64,Float64,Float64}},Matrix{ComplexF64}}
+function ritz_roots(S::CORKState, k0::Float64, Δpoly::Float64, m::Int; edge_tol::Float64=1e-8, imag_search_tol::Float64=1e-4)::Tuple{Vector{Tuple{Float64,Float64,Float64}},Matrix{ComplexF64},Vector{Float64}}
     S.n == m || error("State dimension $(S.n) != requested m=$m")
     S.pending || error("Arnoldi tail missing")
     H = Matrix(@view S.Hb[1:m,1:m]); E = nothing
     @blas_multi_then_1 MAX_BLAS_THREADS begin
         E = eigen(H)
     end
-    tail = @view S.Hb[m + 1:m + S.b,1:m]; roots = Tuple{Float64,Float64,Float64}[]; inds = Int[]
+    tail = @view S.Hb[m + 1:m + S.b,1:m]; roots = Tuple{Float64,Float64,Float64}[]; inds = Int[]; diskρ = Float64[]
     for j = eachindex(E.values)
         μ = E.values[j]; abs(μ) > 1e-14 || continue
         t = inv(μ); k = ComplexF64(k0 + Δpoly*t)
-        -1 - edge_tol <= real(t) <= 1 + edge_tol || continue
-        abs(imag(k)) <= imag_search_tol || continue
+        in_disk = abs(t) <= 1 + edge_tol
+        in_strip = -1 - edge_tol <= real(t) <= 1 + edge_tol && abs(imag(k)) <= imag_search_tol
+        (in_disk || in_strip) || continue
         ρ = norm(tail*@view(E.vectors[:,j]))/max(1.0,abs(μ))
-        push!(roots,(real(k),imag(k),ρ)); push!(inds,j)
+        in_disk && push!(diskρ,ρ)
+        in_strip && (push!(roots,(real(k),imag(k),ρ)); push!(inds,j))
     end
     perm = sortperm(roots,by=x -> (x[1],x[2]))
-    return roots[perm],Matrix{ComplexF64}(E.vectors[:,inds[perm]])
+    return roots[perm],Matrix{ComplexF64}(E.vectors[:,inds[perm]]),diskρ
 end
 
 """
@@ -992,23 +998,25 @@ end
 ################################################################################
 
 """
-    adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ::Float64, Δpoly::Float64, block_size::Int=10, mstart::Int=200, mstep::Int=100, stable_checks::Int=2, imag_tol::Float64=1e-7, edge_tol::Float64=1e-8, res_tol::Float64=1e-8, stable_tol::Float64=1e-8, imag_search_tol::Float64=1e-4, eigenvectors::Bool=false, expected::Real=0.0)
+    adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ::Float64, Δpoly::Float64, block_size::Int=10, mstart::Int=200, mstep::Int=100, stable_checks::Int=2, imag_tol::Float64=1e-7, edge_tol::Float64=1e-8, res_tol::Float64=1e-8, stable_tol::Float64=1e-8, imag_search_tol::Float64=1e-4, eigenvectors::Bool=false)
 
-Grow one  block-CORK factorization until the accepted spectrum in
-the requested interval `[k₀-Δ,k₀+Δ]` is stable and both requested spectral
-edges are represented by converged Ritz roots.
+Grow one  block-CORK factorization until every Ritz value that can belong to
+the window has converged and the accepted spectrum in the requested interval
+`[k₀-Δ,k₀+Δ]` is stable.
 
 At each Krylov dimension, projected inverse-linearization eigenvalues are
 mapped by
 
     μ → t=1/μ → k=k₀+Δpoly*t.
 
-Roots in the requested physical interval are accepted only when their
-imaginary parts and projected CORK residual indicators satisfy `imag_tol` and
-`res_tol`. The accepted spectrum must remain unchanged to within `stable_tol`
-for `stable_checks` consecutive Krylov dimensions, and the leftmost and
-rightmost requested Ritz roots must independently satisfy the same physical
-convergence criteria. The Krylov dimension grows in increments of `mstep`
+Let `D` be the set of Ritz values with `|t|≤1+edge_tol`, with no restriction on
+`Im(k)`. The Krylov dimension is accepted when every element of `D` has a
+projected CORK residual indicator `≤ res_tol` and the accepted spectrum has
+remained unchanged to within `stable_tol` for `stable_checks` consecutive
+Krylov dimensions. Accepted roots are the elements of `D` in the requested
+physical interval with `|Im(k)|≤imag_tol`. An empty accepted set is a valid
+result once `D` has converged, so no estimate of the number of levels is
+needed. The Krylov dimension grows in increments of `mstep`
 up to the largest block-compatible dimension
 
     mdim = floor(N/block_size)block_size.
@@ -1031,14 +1039,13 @@ up to the largest block-compatible dimension
 - `stable_tol::Float64`: Maximum root displacement between consecutive accepted spectra.
 - `imag_search_tol::Float64`: Loose imaginary strip used during Ritz discovery.
 - `eigenvectors::Bool`: Whether to reconstruct physical Fredholm vectors after convergence.
-- `expected::Real`: Weyl estimate of the number of levels in the requested interval. An empty Ritz set is accepted as a converged empty spectrum only when `expected < 0.5`; otherwise the Krylov dimension keeps growing.
 
 ## Returns
 - `Tuple`: Final CORK state, accepted roots, optional physical vectors,
   requested Ritz roots, all guarded Ritz roots, requested edge roots, edge
   convergence flags, and final compact Krylov dimension.
 """
-function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ::Float64, Δpoly::Float64, block_size::Int = 10, mstart::Int = 200, mstep::Int = 100, stable_checks::Int = 2, imag_tol::Float64 = 1e-7, edge_tol::Float64 = 1e-8, res_tol::Float64 = 1e-8, stable_tol::Float64 = 1e-8, imag_search_tol::Float64 = 1e-4, eigenvectors::Bool = false, expected::Real = 0.0)
+function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ::Float64, Δpoly::Float64, block_size::Int = 10, mstart::Int = 200, mstep::Int = 100, stable_checks::Int = 2, imag_tol::Float64 = 1e-7, edge_tol::Float64 = 1e-8, res_tol::Float64 = 1e-8, stable_tol::Float64 = 1e-8, imag_search_tol::Float64 = 1e-4, eigenvectors::Bool = false)
     mstart % block_size == 0 || error("mstart must be divisible by block_size")
     mstep % block_size == 0 || error("mstep must be divisible by block_size")
     S = init_cork(B, p, N; block_size); mdim = size(S.Hb, 2); m = min(mstart, mdim)
@@ -1047,7 +1054,7 @@ function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ
     while true
         @timeit_debug "extend" extend!(S, B, F, m)
         @timeit_debug "ritz_roots" begin
-            allroots, Vall = ritz_roots(S, k0, Δpoly, m; edge_tol = edge_tol, imag_search_tol = imag_search_tol)
+            allroots, Vall, diskρ = ritz_roots(S, k0, Δpoly, m; edge_tol = edge_tol, imag_search_tol = imag_search_tol)
         end
         requested_inds = findall(x -> kmin <= x[1] <= kmax, allroots)
         requested = allroots[requested_inds]; Vrequested = @view Vall[:,requested_inds]
@@ -1055,7 +1062,7 @@ function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ
         phys = requested[phys_inds]; Vphys = @view Vrequested[:,phys_inds]; ks = copy(phys)
         edges = (isempty(requested) ? nothing : first(requested), isempty(requested) ? nothing : last(requested))
         edge_good = (edges[1] !== nothing && abs(edges[1][2]) <= imag_tol && edges[1][3] <= res_tol, edges[2] !== nothing && abs(edges[2][2]) <= imag_tol && edges[2][3] <= res_tol)
-        edge_ok = all(edge_good)
+        nunconverged = count(>(res_tol), diskρ); disk_ok = nunconverged == 0
         if have_prev && isempty(prev) && isempty(ks)
             drift = 0.0
         elseif have_prev && length(prev) == length(ks) && !isempty(ks)
@@ -1064,11 +1071,10 @@ function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ
             drift = Inf
         end
         nstable = isfinite(drift) && drift <= stable_tol ? nstable + 1 : 0
-        empty_ok = expected < 0.5 && have_prev && isempty(prev) && isempty(requested) && isempty(ks)
-        converged = nstable >= stable_checks && (edge_ok || empty_ok)
-        maxρ = isempty(phys) ? Inf : maximum(x[3] for x in phys)
-        status = empty_ok ? "EMPTY" : edge_ok ? "PASS" : "FAIL"
-        @debug "CORK Krylov step" maxlog=1 m mdim rank=S.r ritz=length(requested) converged=length(phys) states=length(ks) max_residual=maxρ drift nstable stable_checks edges=status applies=S.napply
+        converged = nstable >= stable_checks && disk_ok
+        maxρ = maximum(diskρ; init = 0.0)
+        status = !disk_ok ? "FAIL" : isempty(ks) ? "EMPTY" : "PASS"
+        @debug "CORK Krylov step" maxlog=1 m mdim rank=S.r ritz=length(requested) converged=length(phys) states=length(ks) disk_ritz=length(diskρ) unconverged=nunconverged max_residual=maxρ drift nstable stable_checks status applies=S.napply
         if converged
             Ψ = nothing
             if eigenvectors
@@ -1080,7 +1086,7 @@ function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ
         end
         if m == mdim
             max_im = maximum(x -> abs(x[2]), requested; init = 0.0)
-            error("Reached full CORK Krylov dimension m=$mdim for matrix size N=$N without a stable requested spectrum (Weyl estimate $(round(expected; digits=1)) levels, $(length(requested)) Ritz roots in the window, $(length(phys)) accepted, max |Im k| = $max_im vs imag_tol = $imag_tol). The boundary discretization is too coarse for the window (increase `ppw`/`min_pts` of the kernel; roots shifted off the real axis by more than `imag_tol` are rejected) or the window holds too many levels (narrow it or lower `Rmax`/`nlevels`).")
+            error("Reached full CORK Krylov dimension m=$mdim for matrix size N=$N without a stable requested spectrum ($nunconverged of $(length(diskρ)) Ritz values inside the window disk have a residual above res_tol = $res_tol (largest $maxρ), $(length(requested)) Ritz roots in the window, $(length(phys)) accepted, max |Im k| = $max_im vs imag_tol = $imag_tol). The boundary discretization is too coarse for the window (increase `ppw`/`min_pts` of the kernel; roots shifted off the real axis by more than `imag_tol` are rejected) or the window holds too many levels (narrow it or lower `Rmax`/`nlevels`).")
         end
         prev = copy(ks); have_prev = true; m = min(m + mstep, mdim)
     end
@@ -1189,7 +1195,7 @@ Execute the complete Chebyshev-CORK pipeline on the interval `[k₀-dk/2,k₀+dk
   physical vectors, requested Ritz roots, all guarded Ritz roots, requested
   edge roots, edge convergence flags, and final compact Krylov dimension.
 """
-function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=true, eigenvectors::Bool=solver.eigenvectors, p::Int=solver.p, expected::Real=0.0)
+function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=true, eigenvectors::Bool=solver.eigenvectors, p::Int=solver.p)
     k0f = Float64(k0); Δ = Float64(dk)/2; Δpoly = Δ*(1+solver.guard)
     @timeit_debug "cork_solve_core" begin
         @debug "CORK solve" maxlog=1 k0=k0f dk p guard=solver.guard npts=length(pts.xy)
@@ -1206,7 +1212,7 @@ function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=t
                 F = lu(A0)
             end
         end
-        S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = adaptive_cork(P.B, F, p, P.N; k0=k0f, Δ=Δ, Δpoly=Δpoly, block_size=solver.block_size, mstart=solver.mstart, mstep=solver.mstep, stable_checks=solver.stable_checks, imag_tol=solver.imag_tol, edge_tol=solver.edge_tol, res_tol=solver.res_tol, stable_tol=solver.stable_tol, imag_search_tol=solver.imag_search_tol, eigenvectors, expected)
+        S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = adaptive_cork(P.B, F, p, P.N; k0=k0f, Δ=Δ, Δpoly=Δpoly, block_size=solver.block_size, mstart=solver.mstart, mstep=solver.mstep, stable_checks=solver.stable_checks, imag_tol=solver.imag_tol, edge_tol=solver.edge_tol, res_tol=solver.res_tol, stable_tol=solver.stable_tol, imag_search_tol=solver.imag_search_tol, eigenvectors)
         @debug "CORK solve finished" maxlog=1 krylov_dim=mfinal rank=S.r napply=S.napply nroots=length(ks)
         (P, S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal)
     end
@@ -1235,8 +1241,8 @@ function solve(solver::CORKSolver, pts::BoundaryPoints, k0, dk; multithreaded::B
     return λ, ts
 end
 
-function _cork_solve(solver::CORKSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, p::Int=solver.p, expected::Real=0.0, vectors::Bool=false)
-    P, S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = _cork_solve_core(solver, pts, k0, dk; multithreaded, eigenvectors=vectors || solver.eigenvectors, p, expected)
+function _cork_solve(solver::CORKSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, p::Int=solver.p, vectors::Bool=false)
+    P, S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = _cork_solve_core(solver, pts, k0, dk; multithreaded, eigenvectors=vectors || solver.eigenvectors, p)
     λ = ComplexF64[complex(x[1],x[2]) for x in ks]; ts = Float64[x[3] for x in ks]
     return λ, ts, Ψ
 end
@@ -1265,13 +1271,7 @@ function solve_vectors(solver::CORKSolver, pts::BoundaryPoints, k0, dk; multithr
     return λ, ts, Ψ
 end
 
-# Evaluate the Weyl estimate for the number of levels in `[k-dk/2,k+dk/2]`; an empty Ritz set is only
-# accepted as converged when this estimate is below one half.
-_cork_expected_count(solver::CORKSolver, billiard::AbsBilliard, k, dk) =
-    weyl_window_count(billiard, Float64(k - dk / 2), Float64(dk); fundamental_only = solver.kernel.symmetry !== nothing)
-
-# CORK convergence is judged on the accepted Ritz set only, so levels that the Chebyshev polynomial or the
-# Krylov space cannot resolve are dropped without any signal. Compare the number of accepted roots in
+# Levels that the Chebyshev polynomial cannot resolve are dropped without any signal. Compare the number of accepted roots in
 # `[k1,k2]` with the Weyl count (area, perimeter and corner terms) and warn on a large deficit. The tolerance
 # `max(0.3N, 3)` leaves room for Weyl fluctuations, so this is a warning and not an error.
 function _cork_warn_if_incomplete(solver::CORKSolver, billiard::AbsBilliard, nfound::Integer, k1, k2)
@@ -1300,7 +1300,7 @@ Find the accepted CORK eigenvalue nearest `k` in `[k-dk/2,k+dk/2]`.
 - `Tuple{ComplexF64,Float64}`: Nearest accepted wavenumber and its residual, or `(nothing, nothing)` if none was found.
 """
 function solve_wavenumber(solver::CORKSolver, billiard::Bi, k, dk; multithreaded::Bool=true) where {Bi<:AbsBilliard}
-    pts = evaluate_points(solver, billiard, k); ks, ts, _ = _cork_solve(solver, pts, k, dk; multithreaded, expected = _cork_expected_count(solver, billiard, k, dk))
+    pts = evaluate_points(solver, billiard, k); ks, ts, _ = _cork_solve(solver, pts, k, dk; multithreaded)
     isempty(ks) && return nothing, nothing
     idx = findmin(abs.(ks .- k))[2]
     return ks[idx], ts[idx]
@@ -1334,7 +1334,7 @@ splits the range into windows and tunes `p`) for wide ranges.
 """
 function solve_spectrum(solver::CORKSolver, billiard::Bi, k, dk; multithreaded::Bool=true) where {Bi<:AbsBilliard}
     pts = evaluate_points(solver, billiard, k)
-    ks, ts, _ = _cork_solve(solver, pts, k, dk; multithreaded, expected = _cork_expected_count(solver, billiard, k, dk))
+    ks, ts, _ = _cork_solve(solver, pts, k, dk; multithreaded)
     _cork_warn_if_incomplete(solver, billiard, length(ks), k - dk / 2, k + dk / 2)
     return ks, ts
 end
