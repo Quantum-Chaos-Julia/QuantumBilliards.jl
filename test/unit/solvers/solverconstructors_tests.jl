@@ -487,12 +487,12 @@ end
     rect = RectangleBilliard(1.0, 0.7)
 
     @testset "fields and type parameters" begin
-        outer = DoubleLayerPotentialSolver(10.0, annulus)
+        outer = CombinedFieldIntegralEquationSolver(10.0, annulus)
         inner = CombinedFieldIntegralEquationSolver(8.0, annulus)
         solver = CompositeBIMSolver(outer, inner)
         @test solver isa CompositeBIMSolver{Float64,typeof((outer, inner)),Nothing,Tuple{}}
         @test solver isa CFIE
-        @test solver.component_solvers === (outer, inner)                   # stored in the given order, DLP and CFIE may be mixed
+        @test solver.component_solvers === (outer, inner)                   # stored in the given order
         @test solver.symmetry === nothing
         @test solver.sym_characters == ()
         @test fieldnames(CompositeBIMSolver) == (:component_solvers, :symmetry, :sym_characters, :loop_solver)
@@ -502,27 +502,27 @@ end
     end
 
     @testset "loop_solver: solver index of every boundary loop" begin
-        @test CompositeBIMSolver(DoubleLayerPotentialSolver(10.0, rect)).loop_solver == [1]         # no hole: the single outer loop
-        @test CompositeBIMSolver(DoubleLayerPotentialSolver(10.0, annulus)).loop_solver == [1, 2]   # annulus: outer loop and hole loop
+        @test CompositeBIMSolver(CombinedFieldIntegralEquationSolver(10.0, rect)).loop_solver == [1]         # no hole: the single outer loop
+        @test CompositeBIMSolver(CombinedFieldIntegralEquationSolver(10.0, annulus)).loop_solver == [1, 2]   # annulus: outer loop and hole loop
         sinai = SinaiBilliard(1.0, 0.25)
-        @test CompositeBIMSolver(DoubleLayerPotentialSolver(10.0, sinai), DoubleLayerPotentialSolver(10.0, sinai)).loop_solver == [1, 2]
+        @test CompositeBIMSolver(CombinedFieldIntegralEquationSolver(10.0, sinai), CombinedFieldIntegralEquationSolver(10.0, sinai)).loop_solver == [1, 2]
         sws = SquareWithinSquareBilliard(1.0)
-        @test CompositeBIMSolver(DoubleLayerPotentialSolver(10.0, sws)).loop_solver == [1, 2, 2]    # one mirrored hole object: its two loops share solver 2
+        @test CompositeBIMSolver(CombinedFieldIntegralEquationSolver(10.0, sws)).loop_solver == [1, 2, 2]    # one mirrored hole object: its two loops share solver 2
     end
 
     @testset "single component and common symmetry" begin
-        one_component = CompositeBIMSolver(DoubleLayerPotentialSolver(10.0, annulus))
+        one_component = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(10.0, annulus))
         @test length(one_component.component_solvers) == 1
 
-        first_solver = DoubleLayerPotentialSolver(10.0, rect; sym_characters=(1, 1))
-        second_solver = DoubleLayerPotentialSolver(10.0, rect; symmetry=first_solver.symmetry, sym_characters=first_solver.sym_characters)
+        first_solver = CombinedFieldIntegralEquationSolver(10.0, rect; sym_characters=(1, 1))
+        second_solver = CombinedFieldIntegralEquationSolver(10.0, rect; symmetry=first_solver.symmetry, sym_characters=first_solver.sym_characters)
         solver = CompositeBIMSolver(first_solver, second_solver)
         @test solver.symmetry === first_solver.symmetry                     # the symmetry of the first component is shared
         @test solver.sym_characters == first_solver.sym_characters
     end
 
     @testset "numeric type follows the first component" begin
-        solver = CompositeBIMSolver(DoubleLayerPotentialSolver(10f0, annulus))
+        solver = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(10f0, annulus))
         @test _bim_numeric_type(solver) === Float32
         @test solver isa CompositeBIMSolver{Float32}
     end
@@ -531,25 +531,27 @@ end
         @test_throws ArgumentError CompositeBIMSolver()                                       # at least one component
         @test_throws MethodError CompositeBIMSolver(1.0)                                      # components must be SweepBIMSolvers
         @test_throws MethodError CompositeBIMSolver(DecompositionMethodSolver(2.0, 3.0))
-        @test_throws MethodError CompositeBIMSolver(BeynSolver(DoubleLayerPotentialSolver(10.0, annulus)))
-        symmetric = DoubleLayerPotentialSolver(10.0, rect; sym_characters=(1, 1))
-        plain = DoubleLayerPotentialSolver(10.0, rect)
+        @test_throws MethodError CompositeBIMSolver(BeynSolver(CombinedFieldIntegralEquationSolver(10.0, annulus)))
+        @test_throws ArgumentError CompositeBIMSolver(DoubleLayerPotentialSolver(10.0, annulus))              # only CFIE components
+        @test_throws ArgumentError CompositeBIMSolver(CombinedFieldIntegralEquationSolver(10.0, annulus), DoubleLayerPotentialSolver(10.0, annulus))
+        symmetric = CombinedFieldIntegralEquationSolver(10.0, rect; sym_characters=(1, 1))
+        plain = CombinedFieldIntegralEquationSolver(10.0, rect)
         @test_throws ArgumentError CompositeBIMSolver(symmetric, plain)                        # symmetry and characters must agree
         @test_throws ArgumentError CompositeBIMSolver(plain, symmetric)
-        other_character = DoubleLayerPotentialSolver(10.0, rect; symmetry=symmetric.symmetry, sym_characters=(1.0 + 0im, -1.0 + 0im))
+        other_character = CombinedFieldIntegralEquationSolver(10.0, rect; symmetry=symmetric.symmetry, sym_characters=(1.0 + 0im, -1.0 + 0im))
         @test_throws ArgumentError CompositeBIMSolver(symmetric, other_character)
     end
 
     @testset "independently built components with the same sym_characters" begin
-        a = DoubleLayerPotentialSolver(10.0, rect; sym_characters=(1, 1))
-        b = DoubleLayerPotentialSolver(10.0, rect; sym_characters=(1, 1))
+        a = CombinedFieldIntegralEquationSolver(10.0, rect; sym_characters=(1, 1))
+        b = CombinedFieldIntegralEquationSolver(10.0, rect; sym_characters=(1, 1))
         @test a.sym_characters == b.sym_characters
         @test a.symmetry == b.symmetry
         @test (CompositeBIMSolver(a, b); true)
     end
 
     @testset "SweepBIMSolver contract" begin
-        solver = CompositeBIMSolver(DoubleLayerPotentialSolver(10.0, annulus))
+        solver = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(10.0, annulus))
         S = typeof(solver)
         @test sc_has(evaluate_points, S, typeof(annulus), Float64)
         @test sc_has(boundary_matrix_size, S, sc_PTS_T)
@@ -633,7 +635,7 @@ end
     @testset "every sweep kernel is accepted" begin
         annulus = AnnularBilliard(0.3, 0.0)
         cfie = CombinedFieldIntegralEquationSolver(10.0, circle)
-        composite = CompositeBIMSolver(DoubleLayerPotentialSolver(10.0, annulus))
+        composite = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(10.0, annulus))
         @test BeynSolver(cfie) isa BeynSolver{Float64,typeof(cfie)}
         @test BeynSolver(composite) isa BeynSolver{Float64,typeof(composite)}
     end

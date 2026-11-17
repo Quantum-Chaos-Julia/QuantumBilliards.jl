@@ -83,7 +83,7 @@ tk_poly(a, δ) = sum(a[l+1] * δ^l for l in 0:length(a)-1)
 
     @testset "composite: component blocks and global to local maps" begin
         annulus = AnnularBilliard(0.3, 0.1)
-        comp = CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, annulus; min_pts=32), CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=24))
+        comp = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=32), CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=24))
         pts = evaluate_points(comp, annulus, 3.0)
         cache = _taylor_cache(comp, pts)
         @test cache.N == 56 && cache.solver === comp
@@ -243,7 +243,7 @@ end
 @testset "_kernel_taylor!: annulus composite, same and cross component entries" begin
     annulus = AnnularBilliard(0.3, 0.1)
     k = 3.0
-    comp = CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, annulus; min_pts=32), CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=24))
+    comp = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=32), CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=24))
     pts = evaluate_points(comp, annulus, k)
     cache = _taylor_cache(comp, pts)
     outer_idx, hole_idx = 1:32, 33:56
@@ -252,8 +252,8 @@ end
         for (i, j) in [(3, 33 + 5), (30, 33 + 20)]                      # source on the CFIE hole: D + i k S
             @test tk_coeffs(cache, k, 8, i, j)[1:3] ≈ tk_cross_coeffs(pts, k, i, j; cfie=true) rtol = 1e-10 atol = 1e-13
         end
-        for (i, j) in [(33 + 5, 3), (33 + 20, 30)]                      # source on the DLP outer circle: D only
-            @test tk_coeffs(cache, k, 8, i, j)[1:3] ≈ tk_cross_coeffs(pts, k, i, j; cfie=false) rtol = 1e-10 atol = 1e-13
+        for (i, j) in [(33 + 5, 3), (33 + 20, 30)]                      # source on the CFIE outer circle: D + i k S
+            @test tk_coeffs(cache, k, 8, i, j)[1:3] ≈ tk_cross_coeffs(pts, k, i, j; cfie=true) rtol = 1e-10 atol = 1e-13
         end
     end
 
@@ -268,10 +268,10 @@ end
     @testset "same component entries use the component Kress kernels" begin
         G1, R1 = cache.Gs[1], cache.Rmats[1]
         G2, R2 = cache.Gs[2], cache.Rmats[2]
-        @test tk_coeffs(cache, k, 8, 4, 19)[1:3] ≈ tk_kress_coeffs(cache.comp_pts[1], R1, G1, k, 4, 19) rtol = 1e-10 atol = 1e-13
+        @test tk_coeffs(cache, k, 8, 4, 19)[1:3] ≈ tk_kress_coeffs(cache.comp_pts[1], R1, G1, k, 4, 19; cfie=true) rtol = 1e-10 atol = 1e-13
         @test tk_coeffs(cache, k, 8, 33 + 3, 33 + 15)[1:3] ≈ tk_kress_coeffs(cache.comp_pts[2], R2, G2, k, 3, 15; cfie=true) rtol = 1e-10 atol = 1e-13
-        @test tk_coeffs(cache, k, 6, 10, 10)[2:end] == zeros(ComplexF64, 6)                  # DLP diagonal: k independent
-        @test any(!iszero, tk_coeffs(cache, k, 6, 33 + 10, 33 + 10)[2:end])                  # CFIE diagonal: i k S_ii depends on k
+        @test any(!iszero, tk_coeffs(cache, k, 6, 10, 10)[2:end])                            # CFIE diagonal: i k S_ii depends on k (outer)
+        @test any(!iszero, tk_coeffs(cache, k, 6, 33 + 10, 33 + 10)[2:end])                  # CFIE diagonal: i k S_ii depends on k (hole)
     end
 
     @testset "blocks of the matrix: global indices map onto the component kernels" begin
@@ -325,9 +325,9 @@ end
         @test maximum(abs, _construct_matrices_multi_k_taylor(solver, pts, k0, ks, 16)[1] - A) < 1e-9
     end
 
-    @testset "annulus composite with a DLP outer and a CFIE hole component" begin
+    @testset "annulus composite with CFIE outer and hole components" begin
         annulus = AnnularBilliard(0.3, 0.1)
-        solver = CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, annulus; min_pts=32), CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=24))
+        solver = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=32), CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=24))
         pts = evaluate_points(solver, annulus, k0)
         A = construct_matrices(solver, pts, ks[1])
         errs = [maximum(abs, _construct_matrices_multi_k_taylor(solver, pts, k0, ks, p)[1] - A) for p in degrees]
@@ -372,7 +372,7 @@ end
 
     @testset "annulus composite, full" begin
         annulus = AnnularBilliard(0.3, 0.1)
-        solver = CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, annulus; min_pts=32), CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=24))
+        solver = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=32), CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=24))
         pts = evaluate_points(solver, annulus, k0)
         A, dA, ddA = _construct_matrices_multi_k_taylor_derivatives(solver, pts, k0, ks[1:1], 12)
         Ap, A0, Am = (construct_matrices(solver, pts, k0 + s) for s in (h, 0.0, -h))

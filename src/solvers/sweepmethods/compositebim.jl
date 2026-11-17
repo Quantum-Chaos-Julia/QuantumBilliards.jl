@@ -1,10 +1,12 @@
 ################################################################################
 # COMPOSITE BOUNDARY INTEGRAL METHOD
 #
-# Each connected component is assigned its own DLP or CFIE component solver, so
-# different components may use different boundary parametrizations, grading
-# strategies, and integral formulations while remaining coupled through one
-# Fredholm operator.
+# Each connected component is assigned its own CFIE component solver, so
+# different components may use different boundary parametrizations and grading
+# strategies while remaining coupled through one Fredholm operator. Only the
+# combined-field formulation is supported: it is free of spurious interior
+# resonances of the individual loops, which the coupled operator on a multiply
+# connected boundary requires.
 #
 # Let the physical boundary be the disjoint union
 #
@@ -15,28 +17,20 @@
 #
 #                            A(k) μ = 0,
 #
-# where the diagonal block A_aa is determined by the solver assigned to Γₐ:
+# where the diagonal block A_aa is determined by the CFIE solver assigned to Γₐ:
 #
-#                 A_aa(k) = I - D_aa(k)                 (DLP),
-#
-#                 A_aa(k) = I - (D_aa(k)+ikS_aa(k))     (CFIE).
+#                 A_aa(k) = I - (D_aa(k)+ikS_aa(k)).
 #
 # For a≠b, source and target points lie on distinct connected components and
 # the corresponding kernels are smooth. The off-diagonal blocks therefore use
 # direct Nyström quadrature,
 #
-#                 A_ab(k) = -D_ab(k)                    (DLP source),
-#
-#                 A_ab(k) = -(D_ab(k)+ikS_ab(k))         (CFIE source).
-#
-# The source component determines whether a cross-component block contributes
-# only the double-layer kernel or the combined double-/single-layer kernel.
+#                 A_ab(k) = -(D_ab(k)+ikS_ab(k)).
 #
 # BOUNDARY DISCRETIZATION
 # Each connected component retains the boundary discretization and Kress
 # quadrature scheme of its assigned component solver. Thus all same-component
-# interactions are evaluated with the corresponding DLP or CFIE Kress
-# quadrature scheme, including any smooth, single-corner, or global corner
+# interactions are evaluated with the CFIE Kress quadrature scheme, including any smooth, single-corner, or global corner
 # grading of that component. Interactions between distinct components are
 # nonsingular and are evaluated directly with ordinary Nyström quadrature.
 ################################################################################
@@ -47,17 +41,16 @@
 Boundary-integral eigensolver for geometries with multiple connected physical
 boundary components.
 
-`CompositeBIMSolver` assigns one [`DoubleLayerPotentialSolver`](@ref) or
-[`CombinedFieldIntegralEquationSolver`](@ref) to each connected boundary
-component and assembles the resulting discretizations into one globally
-coupled Fredholm operator.
+`CompositeBIMSolver` assigns one [`CombinedFieldIntegralEquationSolver`](@ref)
+to each connected boundary component and assembles the resulting
+discretizations into one globally coupled Fredholm operator. Only the CFIE
+formulation is supported; a [`DoubleLayerPotentialSolver`](@ref) component is
+rejected with an `ArgumentError`.
 
 Each diagonal block retains the Kress quadrature scheme and grading strategy
 of its assigned component solver. Interactions between distinct connected
 components are smooth and are evaluated directly with ordinary Nyström
-quadrature. A source component using DLP contributes a double-layer
-cross-component kernel, whereas a source component using CFIE contributes the
-combined `D(k)+ikS(k)` kernel.
+quadrature using the combined `D(k)+ikS(k)` kernel.
 
 Hole components are identified from the domain structure, not from curve
 orientation: the hole loops of a `MultiplyConnectedDomain` (e.g.
@@ -81,7 +74,7 @@ one boundary group. A reduction generator outside `G'` raises an
 subgroup of `G'`.
 
 ## Attributes
-* `component_solvers::CS`: Tuple with one DLP or CFIE solver per boundary component: the outer boundary first, then one per hole object.
+* `component_solvers::CS`: Tuple with one CFIE solver per boundary component: the outer boundary first, then one per hole object.
 * `symmetry::Sy`: Optional discrete symmetry shared by all component solvers.
 * `sym_characters::Ch`: Character tuple selecting the common representation of `symmetry`.
 * `loop_solver::Vector{Int}`: Index into `component_solvers` of the solver of every boundary loop, in loop order (outer loop first, then the loops of each hole object).
@@ -99,14 +92,15 @@ struct CompositeBIMSolver{T<:Real,CS<:Tuple,Sy<:Union{AbsSymmetry,Nothing},Ch<:T
 end
 
 """
-    CompositeBIMSolver(component_solvers::SweepBIMSolver...)
+    CompositeBIMSolver(component_solvers::CombinedFieldIntegralEquationSolver...)
 
 Construct a composite boundary-integral solver from one component solver per
 connected physical boundary component.
 
-The supplied component solvers may independently use DLP or CFIE formulations
-and their own boundary grading strategies. All component solvers must,
-however, use the same discrete symmetry and character because symmetry
+All component solvers must be [`CombinedFieldIntegralEquationSolver`](@ref)s;
+any other component (in particular a [`DoubleLayerPotentialSolver`](@ref))
+raises an `ArgumentError`. They may use their own boundary grading strategies,
+but must share the same discrete symmetry and character because symmetry
 reduction is applied to the globally coupled full-boundary operator.
 
 A reduced solver acts through the symmetry group `G'` of the billiard (see
@@ -119,13 +113,14 @@ splits into blocks is rounded to a multiple of the number of blocks. A solver
 without symmetry keeps the unreduced discretization.
 
 ## Arguments
-* `component_solvers::SweepBIMSolver...`: Component solvers assigned in the same order as the connected boundary components returned during boundary decomposition: the outer boundary first, then one per hole object (`1 + number of holes` solvers for a `MultiplyConnectedDomain` billiard).
+* `component_solvers::CombinedFieldIntegralEquationSolver...`: Component solvers assigned in the same order as the connected boundary components returned during boundary decomposition: the outer boundary first, then one per hole object (`1 + number of holes` solvers for a `MultiplyConnectedDomain` billiard).
 
 ## Returns
 * `solver::CompositeBIMSolver`: Configured composite boundary-integral solver.
 """
 function CompositeBIMSolver(component_solvers::Vararg{SweepBIMSolver})
     isempty(component_solvers) && throw(ArgumentError("CompositeBIMSolver requires at least one component solver"))
+    all(cs -> cs isa CombinedFieldIntegralEquationSolver, component_solvers) || throw(ArgumentError("CompositeBIMSolver supports only CombinedFieldIntegralEquationSolver components (got $(join(unique(nameof.(typeof.(component_solvers))), ", ")))"))
     symmetry = component_solvers[1].symmetry
     sym_characters = component_solvers[1].sym_characters
     all(cs -> cs.symmetry == symmetry && cs.sym_characters == sym_characters, component_solvers) || throw(ArgumentError("All component solvers passed to CompositeBIMSolver must share the same symmetry and sym_characters"))
@@ -168,11 +163,10 @@ function _composite_components(::AbsDomain, billiard::AbsBilliard)
     return [comp], [false]
 end
 
-# Dispatch boundary sampling of one connected component to its assigned DLP or
-# CFIE solver. Each component therefore retains exactly the grading strategy,
+# Dispatch boundary sampling of one connected component to its assigned CFIE
+# solver. Each component therefore retains exactly the grading strategy,
 # resolution rule, and Kress-compatible boundary parametrization implemented by
 # its native solver rather than introducing a separate composite discretization.
-_composite_component_points(cs::DoubleLayerPotentialSolver, group::Vector, k::T; multiple::Int=1, N_override::Union{Nothing,Int}=nothing) where {T<:Real} = _dlp_evaluate_points(cs, cs.grading, group, k; multiple, N_override)
 _composite_component_points(cs::CombinedFieldIntegralEquationSolver, group::Vector, k::T; multiple::Int=1, N_override::Union{Nothing,Int}=nothing) where {T<:Real} = _cfie_evaluate_points(cs, cs.grading, group, k; multiple, N_override)
 
 # Merge the independently discretized connected components into one flat
@@ -261,7 +255,7 @@ end
 # parameter coordinates, derivatives, Kress quadrature weights, physical
 # arclength weights, and geometry are preserved. The reconstructed component
 # can therefore be passed directly to `boundary_geom_cache`, `kress_R!`, and
-# the native DLP/CFIE same-component kernel-entry routines.
+# the native CFIE same-component kernel-entry routines.
 function _composite_component_slice(pts::BoundaryPoints{T}, rng::UnitRange{Int}, compid::Int) where {T<:Real}
     z = SVector{2,T}(zero(T), zero(T))
     return BoundaryPoints(pts.xy[rng], pts.tangent[rng], pts.tangent_2[rng], pts.ts[rng], pts.tphys[rng], pts.ws[rng], pts.ws_der[rng], pts.s[rng], pts.ds[rng], compid, true, z, z, z, z)
@@ -367,35 +361,17 @@ function _composite_symmetry_orbits(::Type{T}, solver::CompositeBIMSolver, pts::
     return _combine_composite_orbits(T, local_orbits)
 end
 
-# Dispatch a same-component kernel entry to the solver assigned to that
-# connected component. A DLP source component returns D_ij, whereas a CFIE
-# source component returns (D+ikS)_ij.
+# Dispatch a same-component kernel entry to the CFIE solver assigned to that
+# connected component; it returns (D+ikS)_ij.
 # These routines return the boundary kernel itself rather than the complete
 # Fredholm entry; the identity contribution and overall minus sign are applied
 # by the composite matrix assembly.
-@inline _composite_component_kernel_entry(::DoubleLayerPotentialSolver, pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, k::Union{T,Complex{T}}, i::Int, j::Int) where {T<:Real} = _dlp_kernel_entry(pts, Rmat, G, k, i, j)
 @inline _composite_component_kernel_entry(::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, k::Union{T,Complex{T}}, i::Int, j::Int) where {T<:Real} = _cfie_kernel_entry(pts, Rmat, G, k, i, j)
 
-# Evaluate a smooth double-layer interaction from a source node on one
-# connected component to a target point on a different component. Since
-# distinct connected components cannot contain the same boundary point
-# no logarithmic splitting or Kress singular quadrature is required.
-@inline function _composite_cross_kernel_entry(::DoubleLayerPotentialSolver, pb::BoundaryPoints{T}, xi::T, yi::T, k::Union{T,Complex{T}}, j::Int) where {T<:Real}
-    xj, yj = pb.xy[j]
-    dx = xi-xj
-    dy = yi-yj
-    r = hypot(dx, dy)
-    invr = inv(r)
-    tx, ty = pb.tangent[j]
-    inn = ty*dx - tx*dy
-    h1 = _bim_hankelh1(1, k*r)
-    return pb.ws[j]*im*k/2*inn*h1*invr
-end
-
-# Evaluate a smooth combined-field interaction from a CFIE source component to
-# a target point on a different connected component. As for the DLP cross
-# interaction, source and target cannot coincide, so the kernels are evaluated
-# directly without Kress logarithmic splitting.
+# Evaluate a smooth combined-field interaction from a source node on one
+# connected component to a target point on a different component. Source and
+# target cannot coincide, so the kernels are evaluated directly without Kress
+# logarithmic splitting.
 #
 # The double-layer contribution is
 #
@@ -424,13 +400,12 @@ end
 # Assemble the full, unfolded composite Fredholm matrix in connected-component
 # block form. Each diagonal block corresponds to interactions whose source and
 # target lie on the same component. These blocks reuse the assigned component
-# solver's native Kress quadrature scheme exactly, including its DLP or CFIE
+# solver's native Kress quadrature scheme exactly, including its CFIE
 # kernel, grading, logarithmic splitting, and analytic diagonal limits.
 #
 # For two distinct components a≠b, the corresponding off-diagonal block is
-# smooth and is assembled by direct Nyström quadrature. The solver assigned to
-# the source component b determines the operator in that block: a DLP source
-# contributes D_ab, while a CFIE source contributes D_ab+ikS_ab.
+# smooth and is assembled by direct Nyström quadrature with the CFIE kernel
+# D_ab+ikS_ab.
 #
 # Consequently the globally coupled matrix has the block structure
 #
@@ -495,7 +470,7 @@ end
 #
 # where K is evaluated according to the connected components containing the
 # target and source nodes. If both nodes belong to the same component, the
-# assigned component solver's Kress-discretized DLP or CFIE kernel is used.
+# assigned component solver's Kress-discretized CFIE kernel is used.
 # Otherwise the corresponding smooth cross-component kernel is evaluated by
 # ordinary Nyström quadrature.
 function _composite_fredholm_reduced!(A::AbstractMatrix{Complex{T}}, solver::CompositeBIMSolver, comp_pts::Vector{BoundaryPoints{T}}, Gs::Vector{BoundaryGeomCache{T}}, Rmats::Vector{Matrix{T}}, offs::Vector{Int}, g2c::Vector{Int}, g2l::Vector{Int}, orbits::SymmetryOrbitMap{T}, k::Union{T,Complex{T}}; multithreaded::Bool=true) where {T<:Real}
@@ -571,7 +546,7 @@ Construct the complete composite boundary discretization of `billiard`.
 
 The physical boundary is separated into closed components (the outer
 boundary, then one component per hole) and each component is sampled with its
-assigned DLP or CFIE component solver. Hole components are flipped after
+assigned CFIE component solver. Hole components are flipped after
 sampling without changing the boundary-node ordering. This preserves the
 canonical indexing required by exact symmetry index maps while giving hole
 boundaries the opposite normal orientation required by the boundary-integral
@@ -579,7 +554,7 @@ formulation. The number of component solvers must equal the number of
 connected boundary components.
 
 ## Arguments
-* `solver::CompositeBIMSolver`: Composite solver containing one DLP or CFIE solver per connected boundary component.
+* `solver::CompositeBIMSolver`: Composite solver containing one CFIE solver per connected boundary component.
 * `billiard::Bi`: Billiard whose physical boundary is discretized.
 * `k`: Wavenumber used by the component solvers to determine their boundary resolutions.
 
@@ -630,7 +605,7 @@ connected-component blocks. For every component, the geometry cache and Kress
 quadrature matrix are reconstructed from that component's own discretization.
 
 Same-component blocks retain the complete Kress quadrature scheme of their
-assigned DLP or CFIE solver. Cross-component blocks are nonsingular and are
+assigned CFIE solver. Cross-component blocks are nonsingular and are
 evaluated directly with ordinary Nyström quadrature. A DLP source component
 contributes its double-layer kernel, while a CFIE source component contributes
 the combined `D(k)+ikS(k)` kernel.

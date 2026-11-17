@@ -32,7 +32,7 @@
 #
 #   DLP:        A(k) = I - D(k),
 #   CFIE:       A(k) = I - [D(k) + ikS(k)],
-#   Composite:  componentwise DLP/CFIE with smooth cross-component blocks.
+#   Composite:  componentwise CFIE with smooth cross-component blocks.
 ################################################################################
 
 # Evaluate a Taylor polynomial by Horner's rule at a given point δ.

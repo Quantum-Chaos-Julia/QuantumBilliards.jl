@@ -129,7 +129,7 @@ eb_cfie_circle() = CombinedFieldIntegralEquationSolver(3.0, eb_circle; min_pts=2
 eb_rect = RectangleBilliard(1.0, 0.6)
 eb_cfie_sector() = CombinedFieldIntegralEquationSolver(5.0, eb_rect; min_pts=32, sym_characters=(-1, 1))
 eb_annulus = AnnularBilliard(0.3, 0.1)
-eb_composite() = CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, eb_annulus; min_pts=32), CombinedFieldIntegralEquationSolver(5.0, eb_annulus; min_pts=24))
+eb_composite() = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, eb_annulus; min_pts=32), CombinedFieldIntegralEquationSolver(5.0, eb_annulus; min_pts=24))
 
 @testset "synthetic problem: roots, derivatives and Taylor hook" begin
     s = eb_problem()
@@ -270,7 +270,7 @@ end
     @test eb_relerr(ddA, eb_fd2(kernel, pts, EB_K0, 1e-3)) < 1e-5
 end
 
-@testset "construct_matrices(::ExpandedBIMSolver, pts, k): composite annulus with a DLP outer and a CFIE hole component" begin
+@testset "construct_matrices(::ExpandedBIMSolver, pts, k): composite annulus with CFIE outer and hole components" begin
     kernel = eb_composite()
     solver = ExpandedBIMSolver(kernel)
     pts = evaluate_points(solver, eb_annulus, EB_K0)

@@ -57,7 +57,7 @@ end
     end
 end
 
-# solver: Composite BIM sweep (DLP outer component, CFIE hole component)
+# solver: Composite BIM sweep (CFIE outer and hole components)
 # billiard: D2 symmetry registry with an asymmetric DomainHole (RectangleBilliard(1, 1) frame, off-axis hole disc)
 # reference: contract of the guards (no spectrum): unreduced evaluation works, symmetry-reduced and fundamental-domain use raises
 # functions to test: evaluate_points, get_boundary_curves, area

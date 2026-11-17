@@ -17,9 +17,10 @@
 #   * evaluate_points: component sizes from the component solvers, contiguous blocks, per-point component labels, nodes and
 #     weights of every block equal to the standalone solver on the same circle, outward normals of the domain (the hole normals
 #     point into the hole), per-component grading;
-#   * the block structure of the full matrix: the diagonal blocks equal the single-component DLP / CFIE matrices (for the hole
-#     block through the orientation flip D -> -D, S -> S, i.e. 2 I - 2 A_DLP + A_CFIE of the standalone circle) and the
-#     off-diagonal blocks equal the smooth Nystrom kernels written out from the merged nodes;
+#   * the block structure of the full matrix: the diagonal blocks equal the single-component CFIE matrices (for the hole
+#     block through the orientation flip D -> -D, S -> S, i.e. 2 I - 2 A_DLP + A_CFIE of the standalone circle, with the standalone
+#     DLP matrix A_DLP as the reference for D) and the off-diagonal blocks equal the smooth Nystrom kernels written out from the
+#     merged nodes; only CFIE components are supported, a DLP component raises an ArgumentError at construction;
 #   * the symmetry reduced matrix against the orbit-summed columns of the full matrix, with the orbits assembled block by
 #     block from BilliardGeometry.symmetry_index_orbits;
 #   * the direct matrix against the analytic Taylor matrix, boundary_matrix_size, threaded = serial, argument validation;
@@ -171,12 +172,12 @@ end
     @test g2l == [1, 2, 1, 1, 2, 3, 4]
 end
 
-@testset "evaluate_points: annulus with a DLP outer and a CFIE hole component" begin
+@testset "evaluate_points: annulus with CFIE outer and hole components" begin
     # nonzero center keeps the unreduced construction (one full circle per loop): outer circle of radius 1 about o, hole of radius 0.3 about o + (0.1, 0)
     o = SVector(0.2, 0.1)
     annulus = AnnularBilliard(0.3, 0.1; center=[0.2, 0.1])
     k = 3.0
-    outer_solver = DoubleLayerPotentialSolver(5.0, annulus; min_pts=32)
+    outer_solver = CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=32)
     hole_solver = CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=24)
     solver = CompositeBIMSolver(outer_solver, hole_solver)
     pts = evaluate_points(solver, annulus, k)
@@ -195,7 +196,7 @@ end
 
     @testset "nodes and weights equal the standalone solvers on the same circles" begin
         circle = CircleBilliard(1.0)
-        ref = evaluate_points(DoubleLayerPotentialSolver(5.0, circle; min_pts=32), circle, k)
+        ref = evaluate_points(CombinedFieldIntegralEquationSolver(5.0, circle; min_pts=32), circle, k)
         @test pts.xy[rng1] ≈ ref.xy .+ [o]
         @test pts.ws[rng1] == ref.ws && pts.ds[rng1] ≈ ref.ds && pts.ts[rng1] == ref.ts
         θ = [(j - 1 / 2) * 2π / 24 for j in 1:24]
@@ -217,7 +218,7 @@ end
     end
 
     @testset "Float32 solver gives Float32 points" begin
-        s32 = CompositeBIMSolver(DoubleLayerPotentialSolver(5f0, annulus; min_pts=32), DoubleLayerPotentialSolver(5f0, annulus; min_pts=24))
+        s32 = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5f0, annulus; min_pts=32), CombinedFieldIntegralEquationSolver(5f0, annulus; min_pts=24))
         pts32 = evaluate_points(s32, annulus, 3f0)
         @test pts32 isa BoundaryPoints{Float32}
         @test length(pts32) == 56
@@ -227,7 +228,7 @@ end
 @testset "evaluate_points: Sinai billiard with a corner graded outer component" begin
     sinai = SinaiBilliard(1.0, 0.25)
     k = 3.0
-    outer_solver = DoubleLayerPotentialSolver(5.0, sinai; min_pts=64, grading=GlobalCornerGrading())
+    outer_solver = CombinedFieldIntegralEquationSolver(5.0, sinai; min_pts=64, grading=GlobalCornerGrading())
     hole_solver = CombinedFieldIntegralEquationSolver(5.0, sinai; min_pts=24)
     solver = CompositeBIMSolver(outer_solver, hole_solver)
     pts = evaluate_points(solver, sinai, k)
@@ -245,7 +246,7 @@ end
 
 @testset "composite helpers on merged points" begin
     annulus = AnnularBilliard(0.3, 0.1)
-    solver = CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, annulus; min_pts=32), CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=24))
+    solver = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=32), CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=24))
     pts = evaluate_points(solver, annulus, 3.0)
 
     @testset "_composite_offsets" begin
@@ -257,7 +258,7 @@ end
         bad.w_dm[6] = 1.0
         @test_throws ErrorException _composite_offsets(bad, 2)           # labels are not contiguous
         circle = CircleBilliard(1.0)
-        raw = evaluate_points(DoubleLayerPotentialSolver(5.0, circle; min_pts=32), circle, 3.0)
+        raw = evaluate_points(CombinedFieldIntegralEquationSolver(5.0, circle; min_pts=32), circle, 3.0)
         @test_throws ErrorException _composite_offsets(raw, 2)           # no component bookkeeping at all
     end
 
@@ -283,7 +284,7 @@ end
 @testset "construct_matrices: annulus block structure" begin
     annulus = AnnularBilliard(0.3, 0.1)
     k = 3.0
-    outer_solver = DoubleLayerPotentialSolver(5.0, annulus; min_pts=32)
+    outer_solver = CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=32)
     hole_solver = CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=24)
     solver = CompositeBIMSolver(outer_solver, hole_solver)
     pts = evaluate_points(solver, annulus, k)
@@ -298,16 +299,16 @@ end
         @test A[rng2, rng2] == construct_matrices(hole_solver, _composite_component_slice(pts, rng2, 2), k)
     end
 
-    @testset "outer block equals the DLP matrix of the unit circle" begin
+    @testset "outer block equals the CFIE matrix of the unit circle" begin
         circle = CircleBilliard(1.0)
-        s = DoubleLayerPotentialSolver(5.0, circle; min_pts=32)
+        s = CombinedFieldIntegralEquationSolver(5.0, circle; min_pts=32)
         @test A[rng1, rng1] ≈ construct_matrices(s, evaluate_points(s, circle, k), k) atol = 1e-12
     end
 
     @testset "hole block: outward normal of the domain flips D and keeps S" begin
         circle = CircleBilliard(0.3)
         cfie = CombinedFieldIntegralEquationSolver(5.0, circle; min_pts=24)
-        dlp = DoubleLayerPotentialSolver(5.0, circle; min_pts=24)
+        dlp = DoubleLayerPotentialSolver(5.0, circle; min_pts=24)       # standalone reference for D only, not a composite component
         raw = evaluate_points(cfie, circle, k)
         A_cfie = construct_matrices(cfie, raw, k)                       # I - D - i k S
         A_dlp = construct_matrices(dlp, raw, k)                         # I - D
@@ -317,9 +318,9 @@ end
     end
 
     @testset "off-diagonal blocks are the smooth Nystrom kernels" begin
-        # source on the hole (CFIE): -(D + i k S), source on the outer circle (DLP): -D
+        # both sources are CFIE components: -(D + i k S) for sources on the hole as well as on the outer circle
         @test all(isapprox(A[i, j], -(cb_cross_dlp(pts, k, i, j) + im * k * cb_cross_slp(pts, k, i, j)); atol=1e-13) for i in rng1, j in rng2)
-        @test all(isapprox(A[i, j], -cb_cross_dlp(pts, k, i, j); atol=1e-13) for i in rng2, j in rng1)
+        @test all(isapprox(A[i, j], -(cb_cross_dlp(pts, k, i, j) + im * k * cb_cross_slp(pts, k, i, j)); atol=1e-13) for i in rng2, j in rng1)
         @test maximum(abs.(A[rng1, rng2])) > 1e-3 && maximum(abs.(A[rng2, rng1])) > 1e-3
     end
 
@@ -335,7 +336,7 @@ end
     sinai = SinaiBilliard(1.0, 0.25)
     k = 3.0
     outer_solver = CombinedFieldIntegralEquationSolver(5.0, sinai; min_pts=64, grading=GlobalCornerGrading())
-    hole_solver = DoubleLayerPotentialSolver(5.0, sinai; min_pts=24)
+    hole_solver = CombinedFieldIntegralEquationSolver(5.0, sinai; min_pts=24)
     solver = CompositeBIMSolver(outer_solver, hole_solver)
     pts = evaluate_points(solver, sinai, k)
     offs = _composite_offsets(pts, 2)
@@ -345,7 +346,7 @@ end
     @test size(A) == (88, 88)
     @test A[rng1, rng1] == construct_matrices(outer_solver, _composite_component_slice(pts, rng1, 1), k)
     @test A[rng2, rng2] == construct_matrices(hole_solver, _composite_component_slice(pts, rng2, 2), k)
-    @test all(isapprox(A[i, j], -cb_cross_dlp(pts, k, i, j); atol=1e-13) for i in rng1, j in rng2)      # DLP source on the hole
+    @test all(isapprox(A[i, j], -(cb_cross_dlp(pts, k, i, j) + im * k * cb_cross_slp(pts, k, i, j)); atol=1e-13) for i in rng1, j in rng2)
     @test all(isapprox(A[i, j], -(cb_cross_dlp(pts, k, i, j) + im * k * cb_cross_slp(pts, k, i, j)); atol=1e-13) for i in rng2, j in rng1)
 end
 
@@ -388,7 +389,7 @@ end
 @testset "reduced matrix equals orbit-summed full matrix: rectangle, inferred CompositeReflection, corner graded component" begin
     rect = RectangleBilliard(1.0, 0.6)
     k = 3.0
-    inferred = DoubleLayerPotentialSolver(5.0, rect; sym_characters=(1, -1))       # only used to obtain the inferred (Y, X) symmetry
+    inferred = CombinedFieldIntegralEquationSolver(5.0, rect; sym_characters=(1, -1))       # only used to obtain the inferred (Y, X) symmetry
     sym, chars = inferred.symmetry, inferred.sym_characters
     full = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, rect; min_pts=64, grading=GlobalCornerGrading()))
     red = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, rect; min_pts=64, grading=GlobalCornerGrading(), symmetry=sym, sym_characters=chars))
@@ -406,8 +407,8 @@ end
 # CompositeReflection objects; BilliardGeometry defines `==` for CompositeReflection, so CompositeBIMSolver accepts them.
 @testset "CompositeBIMSolver accepts separately inferred, equal CompositeReflection symmetries" begin
     rect = RectangleBilliard(1.0, 0.6)
-    a = DoubleLayerPotentialSolver(5.0, rect; sym_characters=(1, -1))
-    b = DoubleLayerPotentialSolver(5.0, rect; sym_characters=(1, -1))
+    a = CombinedFieldIntegralEquationSolver(5.0, rect; sym_characters=(1, -1))
+    b = CombinedFieldIntegralEquationSolver(5.0, rect; sym_characters=(1, -1))
     @test a.sym_characters == b.sym_characters
     @test a.symmetry.reflections == b.symmetry.reflections
     @test a.symmetry == b.symmetry
@@ -420,7 +421,7 @@ end
 
     @testset "annulus, full matrix" begin
         annulus = AnnularBilliard(0.3, 0.1)
-        solver = CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, annulus; min_pts=32), CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=24))
+        solver = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=32), CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=24))
         pts = evaluate_points(solver, annulus, k0)
         T = _construct_matrices_multi_k_taylor(solver, pts, k0, ks, 10)
         @test length(T) == 3
@@ -452,13 +453,13 @@ end
     k = 3.0
 
     @testset "no symmetry: number of nodes of all components" begin
-        solver = CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, annulus; min_pts=32), DoubleLayerPotentialSolver(5.0, annulus; min_pts=24))
+        solver = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=32), CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=24))
         pts = evaluate_points(solver, annulus, k)
         @test boundary_matrix_size(solver, pts) == length(pts) == 56
     end
 
     @testset "XY reflection: a quarter of every component" begin
-        solver = CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, rect; min_pts=32, symmetry=XYAxisReflection(), sym_characters=(1, 1)))
+        solver = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, rect; min_pts=32, symmetry=XYAxisReflection(), sym_characters=(1, 1)))
         pts = evaluate_points(solver, rect, k)
         @test boundary_matrix_size(solver, pts) == length(pts) ÷ 4
         @test size(construct_matrices(solver, pts, k)) == (boundary_matrix_size(solver, pts), boundary_matrix_size(solver, pts))
@@ -470,7 +471,7 @@ end
 
     @testset "annulus, full matrix (block and cross loops threaded)" begin
         annulus = AnnularBilliard(0.3, 0.1)
-        solver = CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, annulus; min_pts=40), CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=40))
+        solver = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=40), CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=40))
         pts = evaluate_points(solver, annulus, k)
         @test length(pts) == 80
         @test construct_matrices(solver, pts, k; multithreaded=true) == construct_matrices(solver, pts, k; multithreaded=false)
@@ -510,7 +511,7 @@ end
     annulus = AnnularBilliard(0.3, 0.1)
 
     @testset "annulus (hole), no symmetry" begin
-        solver = CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, annulus; min_pts=32), CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=24))
+        solver = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=32), CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=24))
         geom = cb_geom_reuse_checks(solver, annulus)
         @test length(geom.comp_pts) == 2
         @test geom.orbits === nothing
@@ -518,7 +519,7 @@ end
 
     @testset "annulus (hole), X reflection" begin
         # the since-B7 annulus carries an X axis reflection registry; the composite orbits are assembled block by block
-        solver = CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, annulus; min_pts=32, symmetry=XAxisReflection(), sym_characters=(-1,)),
+        solver = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=32, symmetry=XAxisReflection(), sym_characters=(-1,)),
                                     CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=32, symmetry=XAxisReflection(), sym_characters=(-1,)))
         geom = cb_geom_reuse_checks(solver, annulus)
         @test geom.orbits !== nothing
@@ -539,24 +540,34 @@ end
     sinai = SinaiBilliard(1.0, 0.25)
     k = 3.0
     dlp = DoubleLayerPotentialSolver(5.0, annulus; min_pts=32)
+    cfie_outer = CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=32)
     cfie = CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=24)
 
+    @testset "DLP components are rejected at construction" begin
+        @test_throws ArgumentError CompositeBIMSolver(dlp)
+        @test_throws ArgumentError CompositeBIMSolver(dlp, cfie)
+        @test_throws ArgumentError CompositeBIMSolver(cfie_outer, dlp)
+        @test_throws ArgumentError CompositeBIMSolver(dlp, dlp)
+        @test_throws "CombinedFieldIntegralEquationSolver" CompositeBIMSolver(dlp, cfie)
+        @test CompositeBIMSolver(cfie_outer, cfie) isa CompositeBIMSolver
+    end
+
     @testset "the number of component solvers must equal the number of boundary components" begin
-        @test_throws ArgumentError evaluate_points(CompositeBIMSolver(dlp), annulus, k)
-        @test_throws ArgumentError evaluate_points(CompositeBIMSolver(dlp, cfie, cfie), annulus, k)
-        @test_throws ArgumentError evaluate_points(CompositeBIMSolver(dlp, cfie), CircleBilliard(1.0), k)
-        @test length(evaluate_points(CompositeBIMSolver(dlp, cfie), annulus, k)) == 56
-        @test length(evaluate_points(CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, sinai; min_pts=32), cfie), sinai, k)) > 0
+        @test_throws ArgumentError evaluate_points(CompositeBIMSolver(cfie_outer), annulus, k)
+        @test_throws ArgumentError evaluate_points(CompositeBIMSolver(cfie_outer, cfie, cfie), annulus, k)
+        @test_throws ArgumentError evaluate_points(CompositeBIMSolver(cfie_outer, cfie), CircleBilliard(1.0), k)
+        @test length(evaluate_points(CompositeBIMSolver(cfie_outer, cfie), annulus, k)) == 56
+        @test length(evaluate_points(CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, sinai; min_pts=32), cfie), sinai, k)) > 0
     end
 
     @testset "construct_matrices requires the points of evaluate_points(::CompositeBIMSolver, ...)" begin
-        solver = CompositeBIMSolver(dlp, cfie)
-        @test_throws ErrorException construct_matrices(solver, evaluate_points(dlp, CircleBilliard(1.0), k), k)
-        @test_throws ErrorException construct_matrices(CompositeBIMSolver(dlp, cfie, cfie), evaluate_points(solver, annulus, k), k)
+        solver = CompositeBIMSolver(cfie_outer, cfie)
+        @test_throws ErrorException construct_matrices(solver, evaluate_points(cfie_outer, CircleBilliard(1.0), k), k)
+        @test_throws ErrorException construct_matrices(CompositeBIMSolver(cfie_outer, cfie, cfie), evaluate_points(solver, annulus, k), k)
     end
 
     @testset "orbit maps" begin
-        solver = CompositeBIMSolver(dlp, cfie)
+        solver = CompositeBIMSolver(cfie_outer, cfie)
         pts = evaluate_points(solver, annulus, k)
         @test_throws ArgumentError _composite_symmetry_orbits(Float64, solver, pts)              # no symmetry active
         @test_throws ArgumentError _combine_composite_orbits(Float64, SymmetryOrbitMap{Float64}[])
@@ -572,11 +583,11 @@ end
 ############################## symmetric holes #################################
 ################################################################################
 
-# Composite DLP solver with one outer solver and one solver for the single hole object of `b`; `kwargs` pass the reduction
+# Composite CFIE solver with one outer solver and one solver for the single hole object of `b`; `kwargs` pass the reduction
 # (symmetry, sym_characters) to both. The scaling factor 0.01 keeps the node counts at min_pts unless a test raises it.
 function cb_hole_solver(b, outer_min, hole_min; scale=0.01, kwargs...)
-    return CompositeBIMSolver(DoubleLayerPotentialSolver(scale, b; min_pts=outer_min, kwargs...),
-                              DoubleLayerPotentialSolver(scale, b; min_pts=hole_min, kwargs...))
+    return CompositeBIMSolver(CombinedFieldIntegralEquationSolver(scale, b; min_pts=outer_min, kwargs...),
+                              CombinedFieldIntegralEquationSolver(scale, b; min_pts=hole_min, kwargs...))
 end
 
 # The (Y, X) reduction of D2 with the characters (chi_Y, chi_X) = (1, -1).
@@ -604,7 +615,7 @@ end
 
 @testset "_loop_solver and the loop_solver field" begin
     b = hf_symmetrized_disc_billiard()
-    outer = DoubleLayerPotentialSolver(0.01, b; min_pts=32)
+    outer = CombinedFieldIntegralEquationSolver(0.01, b; min_pts=32)
     hole = CombinedFieldIntegralEquationSolver(0.01, b; min_pts=12)
     solver = CompositeBIMSolver(outer, hole)
     @test solver.loop_solver isa Vector{Int}
@@ -613,15 +624,15 @@ end
     @test all(a -> _loop_solver(solver, a) === hole, 2:5)                # all copies use the solver of their hole object
 
     annulus = AnnularBilliard(0.3, 0.1)
-    dlp = DoubleLayerPotentialSolver(5.0, annulus; min_pts=32)
+    cfie_outer = CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=32)
     cfie = CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=24)
-    two = CompositeBIMSolver(dlp, cfie)
+    two = CompositeBIMSolver(cfie_outer, cfie)
     @test two.loop_solver == [1, 2]
-    @test _loop_solver(two, 1) === dlp && _loop_solver(two, 2) === cfie
+    @test _loop_solver(two, 1) === cfie_outer && _loop_solver(two, 2) === cfie
 
-    @test CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, RectangleBilliard(1.0, 0.6); min_pts=32)).loop_solver == [1]
+    @test CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, RectangleBilliard(1.0, 0.6); min_pts=32)).loop_solver == [1]
     cb2 = cb_two_loop_hole_billiard()
-    @test CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, cb2; min_pts=32), DoubleLayerPotentialSolver(5.0, cb2; min_pts=16)).loop_solver == [1, 2, 2]
+    @test CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, cb2; min_pts=32), CombinedFieldIntegralEquationSolver(5.0, cb2; min_pts=16)).loop_solver == [1, 2, 2]
 end
 
 @testset "evaluate_points: solver does not match the billiard" begin
@@ -629,13 +640,13 @@ end
     b = hf_symmetrized_disc_billiard()
     annulus = AnnularBilliard(0.3, 0.1)
     # wrong number of solvers for the groups of the billiard
-    one_solver = CompositeBIMSolver(DoubleLayerPotentialSolver(0.01, b; min_pts=32))
+    one_solver = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(0.01, b; min_pts=32))
     @test_throws ArgumentError evaluate_points(one_solver, b, k)
     @test_throws "component group" evaluate_points(one_solver, b, k)
-    three = CompositeBIMSolver(DoubleLayerPotentialSolver(0.01, b; min_pts=32), DoubleLayerPotentialSolver(0.01, b; min_pts=12), DoubleLayerPotentialSolver(0.01, b; min_pts=12))
+    three = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(0.01, b; min_pts=32), CombinedFieldIntegralEquationSolver(0.01, b; min_pts=12), CombinedFieldIntegralEquationSolver(0.01, b; min_pts=12))
     @test_throws ArgumentError evaluate_points(three, b, k)
     # same number of groups, different loop structure: a solver built for an annulus used on four copies and the other way round
-    ann_solver = CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, annulus; min_pts=32), DoubleLayerPotentialSolver(5.0, annulus; min_pts=24))
+    ann_solver = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=32), CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=24))
     @test_throws ArgumentError evaluate_points(ann_solver, b, k)
     @test_throws "loop structure" evaluate_points(ann_solver, b, k)
     hole_solver = cb_hole_solver(b, 32, 12)
@@ -740,7 +751,7 @@ end
         @test boundary_matrix_size(solver, pts) == length(pts) == 86
         # a hole billiard without symmetry registry is unaffected as well
         annulus = AnnularBilliard(0.3, 0.1)
-        s = CompositeBIMSolver(DoubleLayerPotentialSolver(0.01, annulus; min_pts=30), DoubleLayerPotentialSolver(0.01, annulus; min_pts=14))
+        s = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(0.01, annulus; min_pts=30), CombinedFieldIntegralEquationSolver(0.01, annulus; min_pts=14))
         @test diff(_composite_offsets(evaluate_points(s, annulus, k), 2)) == [30, 14]
     end
 

@@ -401,7 +401,7 @@ end
     # Composite discretization of the annulus (unit circle with an eccentric hole of radius 0.3): 32 outer nodes, then 24 hole
     # nodes. u is hand-built; only the stored fields are read.
     annulus = AnnularBilliard(0.3, 0.1)
-    solver = CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, annulus; min_pts=32), DoubleLayerPotentialSolver(5.0, annulus; min_pts=24))
+    solver = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=32), CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=24))
     pts = evaluate_points(solver, annulus, 3.0)
     N = length(pts)
     u = collect(range(-1.0, -2.0, N))

@@ -487,7 +487,7 @@ Vergini-Saraceno, DLP and CFIE solvers.
 """
 function _require_no_holes(solver::AbsSolver, billiard::AbsBilliard)
     genus(billiard) == 0 && return nothing
-    throw(ArgumentError("$(nameof(typeof(solver))) does not support billiards with holes; use a CompositeBIMSolver (one component solver per boundary loop)"))
+    throw(ArgumentError("$(nameof(typeof(solver))) does not support billiards with holes; use a CompositeBIMSolver (one CombinedFieldIntegralEquationSolver component per boundary loop group)"))
 end
 
 """

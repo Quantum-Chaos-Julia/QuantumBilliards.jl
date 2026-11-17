@@ -492,7 +492,7 @@ end
     end
 
     @testset "CompositeBIMSolver is not guarded" begin
-        solver = CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, annulus; min_pts=16), DoubleLayerPotentialSolver(5.0, annulus; min_pts=16))
+        solver = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=16), CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=16))
         @test evaluate_points(solver, annulus, k) isa BoundaryPoints
     end
 end

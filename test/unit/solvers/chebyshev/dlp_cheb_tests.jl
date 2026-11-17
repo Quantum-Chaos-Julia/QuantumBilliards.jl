@@ -321,7 +321,7 @@ end
 
     @testset "CompositeBIMSolver has no Chebyshev matrix construction" begin
         annulus = AnnularBilliard(0.3, 0.1)
-        comp = CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, annulus; min_pts=32), DoubleLayerPotentialSolver(5.0, annulus; min_pts=24))
+        comp = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=32), CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=24))
         pts = evaluate_points(comp, annulus, k)
         @test_throws ErrorException _construct_matrices_multi_k_cheb(comp, pts, ComplexF64[k], cfg)
         @test tune_cheb_config(comp, pts, k, cfg) === cfg                # no plan to tune: the configuration is passed through

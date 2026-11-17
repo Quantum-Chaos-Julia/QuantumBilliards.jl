@@ -549,7 +549,7 @@ end
 # eccentric hole of radius 0.3, 32 outer and 24 hole nodes). No eigen solve: u is hand-built.
 function hu_annulus_composite_pts(k)
     annulus = AnnularBilliard(0.3, 0.1)
-    solver = CompositeBIMSolver(DoubleLayerPotentialSolver(5.0, annulus; min_pts=32), DoubleLayerPotentialSolver(5.0, annulus; min_pts=24))
+    solver = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=32), CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=24))
     return annulus, solver, evaluate_points(solver, annulus, k)
 end
 

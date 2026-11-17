@@ -258,26 +258,8 @@ end
 ####################### COMPOSITE KERNEL WITH DERIVATIVES #####################
 ################################################################################
 
-# For a clean interface, we define a generic function that dispatches to the appropriate kernel entry with derivatives based on the solver type.
-@inline _composite_component_kernel_entry_with_derivatives(::DoubleLayerPotentialSolver, pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, k::Union{T,Complex{T}}, i::Int, j::Int) where {T<:Real} = _dlp_kernel_entry_with_derivatives(pts, Rmat, G, k, i, j)
+# Composite solvers support CFIE components only, so the component kernel entry with derivatives is the CFIE one.
 @inline _composite_component_kernel_entry_with_derivatives(::CombinedFieldIntegralEquationSolver, pts::BoundaryPoints{T}, Rmat::AbstractMatrix{T}, G::BoundaryGeomCache{T}, k::Union{T,Complex{T}}, i::Int, j::Int) where {T<:Real} = _cfie_kernel_entry_with_derivatives(pts, Rmat, G, k, i, j)
-
-# Evaluate a smooth DLP interaction between two distinct boundary components of a multiply connected domain, together with its first two wavenumber
-# derivatives. The target `(xi,yi)` lies on one component and `pb.xy[j]` on another, so the kernel is nonsingular and requires no Kress quadrature scheme.
-@inline function _composite_cross_kernel_entry_with_derivatives(::DoubleLayerPotentialSolver, pb::BoundaryPoints{T}, xi::T, yi::T, k::Union{T,Complex{T}}, j::Int) where {T<:Real}
-    xj, yj = pb.xy[j]
-    dx = xi-xj
-    dy = yi-yj
-    r = hypot(dx, dy)
-    invr = inv(r)
-    tx, ty = pb.tangent[j]
-    inn = ty*dx-tx*dy
-    h1 = _bim_hankelh1(1, k*r)
-    h0 = _bim_hankelh1(0, k*r)
-    αL2 = im*k/2
-    a, da, dda = _ebim_lin1_deriv(αL2*inn, r, invr, h0, h1, k)
-    return pb.ws[j]*a, pb.ws[j]*da, pb.ws[j]*dda
-end
 
 # Evaluate a smooth CFIE interaction between two distinct boundary components of a multiply connected domain, together with its first two wavenumber
 # derivatives. The target `(xi,yi)` lies on one component and `pb.xy[j]` on another, so the kernel is nonsingular and requires no Kress quadrature scheme.
@@ -358,7 +340,7 @@ function _ebim_fredholm_reduced_with_derivatives!(entry_fn, A::AbstractMatrix{Co
     return A, dA, ddA
 end
 
-# Assemble the full Fredholm matrix and its first two wavenumber derivatives for a multiply connected domain. Same-component blocks use the DLP or CFIE
+# Assemble the full Fredholm matrix and its first two wavenumber derivatives for a multiply connected domain. Same-component blocks use the CFIE
 # kernel and Kress quadrature scheme of their component solver, while cross-component blocks are smooth and use direct quadrature.
 function _composite_fredholm_full_with_derivatives!(A::AbstractMatrix{Complex{T}}, dA::AbstractMatrix{Complex{T}}, ddA::AbstractMatrix{Complex{T}}, solver::CompositeBIMSolver, comp_pts::Vector{BoundaryPoints{T}}, Gs::Vector{BoundaryGeomCache{T}}, Rmats::Vector{Matrix{T}}, offs::Vector{Int}, k::Union{T,Complex{T}}; multithreaded::Bool=true) where {T<:Real}
     nc = length(comp_pts)

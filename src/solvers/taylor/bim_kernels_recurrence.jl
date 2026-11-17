@@ -132,55 +132,6 @@ satisfies `w.a[n+1]=Kᵢⱼ⁽ⁿ⁾(k)/n!`; the Fredholm transformation
 end
 
 """
-    _kernel_taylor!(::DoubleLayerPotentialSolver, w::TaylorWorkspace, pts, xi::Float64, yi::Float64, k::Float64, p::Int, j::Int) -> Vector{ComplexF64}
-
-Compute normalized Taylor coefficients of a smooth cross-component DLP entry.
-For target `xᵢ=(xi,yi)` and source `xⱼ`,
-
-    Dᵢⱼ(k) = (i/2)wⱼ(inn/r)[kH₁⁽¹⁾(kr)],
-
-where `r=|xᵢ-xⱼ|` and `inn=nⱼ⋅(xᵢ-xⱼ)`. Since the two points belong to
-distinct physical boundary components, `r>0` and no Kress split is required.
-
-If
-
-    kH₁⁽¹⁾((k+δ)r) = Σₙhₙδⁿ,
-
-then
-
-    Dᵢⱼ(k+δ) = Σₙ[(i/2)wⱼ(inn/r)hₙ]δⁿ.
-
-The returned vector therefore satisfies `w.a[n+1]=Dᵢⱼ⁽ⁿ⁾(k)/n!`.
-
-## Arguments
-- `::DoubleLayerPotentialSolver`: DLP source-component solver used for
-  multiple dispatch.
-- `w::TaylorWorkspace`: Reusable Taylor workspace.
-- `pts`: Boundary data for the source component.
-- `xi::Float64`: Target x-coordinate.
-- `yi::Float64`: Target y-coordinate.
-- `k::Float64`: Taylor expansion wavenumber.
-- `p::Int`: Maximum Taylor degree.
-- `j::Int`: Local source index on the source component.
-
-## Returns
-- `Vector{ComplexF64}`: `w.a`, containing normalized Taylor coefficients of
-  the smooth cross-component DLP entry through degree `p`.
-"""
-@inline function _kernel_taylor!(::DoubleLayerPotentialSolver, w::TaylorWorkspace, pts, xi::Float64, yi::Float64, k::Float64, p::Int, j::Int)::Vector{ComplexF64}
-    a = w.a; fill!(a,0)
-    xj,yj = pts.xy[j]; dx = xi-xj; dy = yi-yj; r = hypot(dx,dy); r2 = r*r
-    tx,ty = pts.tangent[j]; inn = ty*dx-tx*dy; z = k*r
-    h0 = _bim_hankelh1(0,z); h1 = _bim_hankelh1(1,z)
-    radial1_taylor!(w.H1,k,r2,p,k*h1,k*r*h0)
-    c = pts.ws[j]*(im/2)*inn/r
-    @inbounds @simd for l = 1:p+1
-        a[l] = c*w.H1[l]
-    end
-    return a
-end
-
-"""
     _kernel_taylor!(::CombinedFieldIntegralEquationSolver, w::TaylorWorkspace, pts, xi::Float64, yi::Float64, k::Float64, p::Int, j::Int) -> Vector{ComplexF64}
 
 Compute normalized Taylor coefficients of a smooth cross-component CFIE entry
@@ -271,7 +222,7 @@ index to its component and local index, allowing same-component and smooth
 cross-component interactions to be selected without rebuilding geometry.
 
 ## Arguments
-- `solver::CompositeBIMSolver`: Composite solver containing one DLP or CFIE
+- `solver::CompositeBIMSolver`: Composite solver containing one CFIE
   component solver for each physical boundary component.
 - `pts`: Globally merged composite boundary discretization.
 
@@ -368,13 +319,13 @@ entry. The global target and source indices are mapped to component-local
 indices using `g2c` and `g2l`.
 
 For a same-component interaction, the component solver evaluates its
-Kress-corrected DLP or CFIE kernel. For a cross-component interaction, the
+Kress-corrected CFIE kernel. For a cross-component interaction, the
 interaction is smooth and the solver belonging to the source component
-selects the corresponding direct DLP or CFIE Taylor kernel.
+selects the corresponding direct CFIE Taylor kernel.
 
 ## Arguments
 - `solver::CompositeBIMSolver`: Composite BIM solver containing the
-  component-specific DLP/CFIE solvers.
+  component-specific CFIE solvers.
 - `w::TaylorWorkspace`: Reusable Taylor workspace.
 - `cache`: Composite Taylor cache containing component-local boundary data,
   Kress matrices, geometry caches, and global-to-local maps.

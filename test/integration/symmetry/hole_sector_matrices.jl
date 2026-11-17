@@ -27,31 +27,31 @@ function _hs_match(reduced::Vector{ComplexF64}, full::Vector{ComplexF64})
     return worst, length(pool)
 end
 
-# Composite DLP solver (outer solver and one hole solver) with node counts outer_N / hole_N and the given reduction, its nodes and its matrix.
-function _hs_dlp_matrix(b, outer_N, hole_N, k; kwargs...)
-    solver = CompositeBIMSolver(DoubleLayerPotentialSolver(0.01, b; min_pts=outer_N, kwargs...),
-                                DoubleLayerPotentialSolver(0.01, b; min_pts=hole_N, kwargs...))
+# Composite CFIE solver (outer solver and one hole solver) with node counts outer_N / hole_N and the given reduction, its nodes and its matrix.
+function _hs_cfie_matrix(b, outer_N, hole_N, k; kwargs...)
+    solver = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(0.01, b; min_pts=outer_N, kwargs...),
+                                CombinedFieldIntegralEquationSolver(0.01, b; min_pts=hole_N, kwargs...))
     pts = evaluate_points(solver, b, k)
     return solver, pts, construct_matrices(solver, pts, k; multithreaded=false)
 end
 
-# solver: Composite BIM sweep (DLP outer and hole components), matrix level
-# kernel/basis: DLP, SmoothPeriodicGrading, forced node counts 32 (outer) and 12 (per hole loop), k = 6.3
+# solver: Composite BIM sweep (CFIE outer and hole components), matrix level
+# kernel/basis: CFIE, SmoothPeriodicGrading, forced node counts 32 (outer) and 12 (per hole loop), k = 6.3
 # billiard: quarter square [0,1]^2 of RectangleBilliard(1, 1) with D2_symmetry() and SymmetrizedHoles(DomainHole(disc of radius 0.1 about (0.4, 0.2)), D2_symmetry())
 # symmetry: G' = D2, the four irreps (chi_Y, chi_X) of CompositeReflection(Y, X)
 # reference: cross-method, the unreduced composite matrix (80 nodes) on the same nodes
 # functions to test: evaluate_points, boundary_matrix_size, construct_matrices (reduced composite with hole copies)
-@testset "Composite DLP - D2 quarter square, SymmetrizedHoles(disc, D2) - four sectors vs unreduced matrix" begin
+@testset "Composite CFIE - D2 quarter square, SymmetrizedHoles(disc, D2) - four sectors vs unreduced matrix" begin
     b = hf_symmetrized_disc_billiard()
     k = 6.3
-    _, pts_full, A_full = _hs_dlp_matrix(b, 32, 12, k)
+    _, pts_full, A_full = _hs_cfie_matrix(b, 32, 12, k)
     @test size(A_full) == (80, 80)
     λ_full = ComplexF64.(eigvals(A_full))
     sym = CompositeReflection(YAxisReflection(), XAxisReflection())
 
     sectors = Vector{ComplexF64}[]
     for χ_Y in (1, -1), χ_X in (1, -1)
-        solver, pts, A = _hs_dlp_matrix(b, 32, 12, k; symmetry=sym, sym_characters=(χ_Y, χ_X))
+        solver, pts, A = _hs_cfie_matrix(b, 32, 12, k; symmetry=sym, sym_characters=(χ_Y, χ_X))
         @test pts.xy == pts_full.xy                                      # the reduced solver samples the whole boundary
         @test boundary_matrix_size(solver, pts) == 20
         @test size(A) == (20, 20)
@@ -68,22 +68,22 @@ end
     @test left == 0
 end
 
-# solver: Composite BIM sweep (DLP outer and hole components), matrix level
-# kernel/basis: DLP, SmoothPeriodicGrading, forced node counts 32 (outer) and 12 (hole), k = 6.3
+# solver: Composite BIM sweep (CFIE outer and hole components), matrix level
+# kernel/basis: CFIE, SmoothPeriodicGrading, forced node counts 32 (outer) and 12 (hole), k = 6.3
 # billiard: same quarter square with SymmetricHole(quarter disc of radius 0.1 about (0.5, 0), D2_symmetry(), center (0.5, 0)), G' = {X}
 # symmetry: XAxisReflection with chi_X = +1 and -1 (Y is not in G')
 # reference: cross-method, the unreduced composite matrix (44 nodes) on the same nodes; the G' error for Y
 # functions to test: evaluate_points, boundary_matrix_size, construct_matrices
-@testset "Composite DLP - D2 quarter square, SymmetricHole (G' = {X}) - two sectors vs unreduced matrix" begin
+@testset "Composite CFIE - D2 quarter square, SymmetricHole (G' = {X}) - two sectors vs unreduced matrix" begin
     b = hf_quarter_disc_billiard()
     k = 6.3
-    _, pts_full, A_full = _hs_dlp_matrix(b, 32, 12, k)
+    _, pts_full, A_full = _hs_cfie_matrix(b, 32, 12, k)
     @test size(A_full) == (44, 44)
     λ_full = ComplexF64.(eigvals(A_full))
 
     sectors = Vector{ComplexF64}[]
     for χ_X in (1, -1)
-        solver, pts, A = _hs_dlp_matrix(b, 32, 12, k; symmetry=XAxisReflection(), sym_characters=(χ_X,))
+        solver, pts, A = _hs_cfie_matrix(b, 32, 12, k; symmetry=XAxisReflection(), sym_characters=(χ_X,))
         @test pts.xy == pts_full.xy
         @test boundary_matrix_size(solver, pts) == 22
         @test size(A) == (22, 22)
@@ -96,8 +96,8 @@ end
     @test left == 0
 
     @testset "Y is not in G'" begin
-        bad = CompositeBIMSolver(DoubleLayerPotentialSolver(0.01, b; min_pts=32, symmetry=YAxisReflection(), sym_characters=(1,)),
-                                 DoubleLayerPotentialSolver(0.01, b; min_pts=12, symmetry=YAxisReflection(), sym_characters=(1,)))
+        bad = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(0.01, b; min_pts=32, symmetry=YAxisReflection(), sym_characters=(1,)),
+                                 CombinedFieldIntegralEquationSolver(0.01, b; min_pts=12, symmetry=YAxisReflection(), sym_characters=(1,)))
         pts = evaluate_points(bad, b, k)
         @test_throws ArgumentError boundary_matrix_size(bad, pts)
         @test_throws "G'" boundary_matrix_size(bad, pts)
