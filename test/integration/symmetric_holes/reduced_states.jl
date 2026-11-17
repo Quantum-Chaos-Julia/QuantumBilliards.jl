@@ -35,14 +35,20 @@ end
     state = data.states[1]
     solver = data.solver
 
-    u, s, nrm = boundary_function(state, b, solver)
+    bf = boundary_function(state, b, solver)
+    @test bf isa BoundaryFunction && bf.k == state.k
+    @test first(bf.outer) == 1 && last(bf.outer) < length(bf.u)      # outer square block first, hole circle after it
+    @test bf.L ≈ 8.0                                                 # perimeter of the outer component only
+    u, s, nrm = bf
     @test length(u) == length(s) == length(state.pts)
     @test all(isfinite, u) && isfinite(nrm)
     @test issorted(s) && s[1] > 0
     @test s[end] < 8.0 + 2pi * 0.25          # cumulative arclength over the outer square and the hole circle
     @test norm(u) > 0
 
-    H, qs, ps = husimi_function(state, b, solver)
+    hf = husimi_function(state, b, solver)
+    @test hf isa HusimiFunction && hf.k == state.k
+    H, qs, ps = hf
     @test size(H) == (length(qs), length(ps))
     @test all(isfinite, H) && all(H .>= -1e-12)
     @test sum(H) ≈ 1 atol = 1e-8
@@ -50,10 +56,14 @@ end
     @test minimum(ps) >= -1 && maximum(ps) <= 1
 
     # the SpectralData methods give the same objects (u only up to the arbitrary complex phase of the eigenvector)
-    u2, s2, nrm2 = boundary_function(data, 1)
+    bf2 = boundary_function(data, 1)
+    @test bf2.k == state.k && bf2.outer == bf.outer && bf2.L ≈ bf.L
+    u2, s2, nrm2 = bf2
     @test s2 ≈ s && nrm2 ≈ nrm
     @test abs(dot(u, u2)) / (norm(u) * norm(u2)) ≈ 1 atol = 1e-10
-    H2, _, _ = husimi_function(data, 1)
+    hf2 = husimi_function(data, 1)
+    @test hf2.k == state.k
+    H2, _, _ = hf2
     @test H2 ≈ H
 end
 
@@ -70,7 +80,9 @@ end
     solver = data.solver
 
     @testset "unfolded (fundamental_only = false)" begin
-        Psi, xg, yg = wavefunction(state, b, solver; ppw=3.0, use_chebyshev=false, fundamental_only=false)
+        wf = wavefunction(state, b, solver; ppw=3.0, use_chebyshev=false, fundamental_only=false)
+        @test wf isa Wavefunction && wf.k == state.k
+        Psi, xg, yg = wf
         @test size(Psi) == (length(xg), length(yg))
         @test all(isfinite, Psi)
         scale = maximum(abs, Psi)

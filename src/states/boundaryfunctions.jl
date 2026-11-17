@@ -80,7 +80,7 @@ function _rellich(pts::BoundaryPoints{T},u::AbstractVector{N},k::T) where {N<:Nu
 end
 
 """
-    boundary_function(state::S, billiard::AbsBilliard; ppw::Real = 5.0, multithreaded::Bool = true) where {S<:AbsState} → (u::Vector, s::Vector, norm::Real)
+    boundary_function(state::S, billiard::AbsBilliard; ppw::Real = 5.0, multithreaded::Bool = true) where {S<:AbsState} → BoundaryFunction
 
 Computes the normal-derivative boundary function \$u(s) = \\partial_n\\psi(s)\$ of
 a basis eigenstate along the boundary of `billiard`, together with the arc-length
@@ -116,17 +116,17 @@ boundary via `apply_symmetries_to_boundary_points` and
    multithreaded.
 
 ## Returns
-*  `u` : The normal-derivative boundary function values (symmetry-unfolded if
-   applicable).
-*  `s` : The arc-length coordinates corresponding to `u`.
-*  `norm` : The Rellich-identity normalization of the boundary function
-   computed by [`_rellich`](@ref), before any symmetry unfolding; should be
-   close to `1` for a correctly normalized eigenstate.
+*  [`BoundaryFunction`](@ref) with `u` the normal-derivative values (symmetry-unfolded
+   if applicable), `s` and `ds` the arc-length coordinates and quadrature weights of
+   the nodes, `k = state.k`, `L` the perimeter of `billiard`, `outer = 1:length(u)`
+   and `norm` the Rellich-identity normalization computed by [`_rellich`](@ref)
+   before any symmetry unfolding, which should be close to `1` for a correctly
+   normalized eigenstate. It iterates as `(u, s, norm)`.
 """
 function boundary_function(state::S, billiard::AbsBilliard; ppw::Real=5.0, multithreaded::Bool=true) where {S<:AbsState}
-    type = eltype(state.vec)
     u, pts, norm = _basis_boundary_function_pts(state, billiard; ppw, multithreaded)
-    return u, pts.s::Vector{type}, norm
+    T = eltype(pts.s)
+    return BoundaryFunction(u, pts.s, pts.ds, T(state.k), T(norm), _outer_perimeter(billiard, T), 1:length(u))
 end
 
 function _basis_boundary_function_pts(state::S, billiard::AbsBilliard; ppw::Real=5.0, multithreaded::Bool=true) where {S<:AbsState}
@@ -157,7 +157,7 @@ function _basis_boundary_function_pts(state::S, billiard::AbsBilliard; ppw::Real
 end
 
 """
-    boundary_function(state::BIMEigenstate) → (u::Vector, s::Vector, norm::Real)
+    boundary_function(state::BIMEigenstate) → BoundaryFunction
 
 Returns the Rellich-normalized boundary normal derivative \$u(s) = \\partial_n\\psi(s)\$
 of a [`BIMEigenstate`](@ref) that stores it.
@@ -176,9 +176,11 @@ density are fixed at `compute_eigenstate` time, not resampled or re-solved
 per call.
 
 ## Returns
-*  `u` : The Rellich-normalized physical boundary normal derivative `∂ₙψ`, on the complete physical boundary.
-*  `s` : The arc-length coordinates corresponding to `u`. Not, in general, uniformly spaced (a `GlobalCornerGrading` solver clusters nodes near corners) — see [`husimi_function(state, billiard, solver)`](@ref).
-*  `norm` : The Rellich-identity value of the raw (pre-rescaling) density used to normalize `u` (`state.bnd_norm`); kept for interface parity with the basis-solver method, not itself expected to be close to `1`.
+*  [`BoundaryFunction`](@ref) that iterates as `(u, s, norm)`:
+   * `u` : The Rellich-normalized physical boundary normal derivative `∂ₙψ`, on the complete physical boundary.
+   * `s` : The arc-length coordinates corresponding to `u`. Not, in general, uniformly spaced (a `GlobalCornerGrading` solver clusters nodes near corners) — see [`husimi_function(state, billiard, solver)`](@ref). `ds` holds the quadrature weights.
+   * `norm` : The Rellich-identity value of the raw (pre-rescaling) density used to normalize `u` (`state.bnd_norm`); kept for interface parity with the basis-solver method, not itself expected to be close to `1`. `NaN` when the state stores none.
+   * `k` is `state.k`, `outer` the nodes of the outer loop (all nodes for a billiard without holes) and `L` the outer perimeter, `sum(ds[outer])` here because no billiard is available (the methods taking a `billiard` use its perimeter).
 
 Throws an `ArgumentError` when `state.u === nothing` (states produced by accelerated BIM solvers such as [`BeynSolver`](@ref) keep only the layer density); use [`boundary_function(state, billiard, solver)`](@ref) or the [`SpectralData`](@ref) methods, which recompute `u`.
 
@@ -186,7 +188,28 @@ Throws an `ArgumentError` when `state.u === nothing` (states produced by acceler
 For a [`CompositeBIMSolver`](@ref) state of a billiard with holes, `u` and `s` cover every boundary loop (outer first, then the hole loops) and `s` is continuous over the concatenation. `u` is the derivative along the outward normal of the billiard region (pointing into a hole on hole loops), so the Rellich identity holds unchanged. The per-loop blocks are identified by `state.pts.w_dm`. [`momentum_function`](@ref) assumes a single closed curve and is not meaningful on the concatenated loops.
 """
 function boundary_function(state::BIMEigenstate)
-    return _stored_boundary_u(state), state.pts.s, state.bnd_norm
+    return _bim_boundary_function(state, _stored_boundary_u(state), state.bnd_norm, nothing)
+end
+
+# Nodes of the outer loop. Component numbers of a composite discretization are stored in `pts.w_dm`
+# (outer loop first, component 1); single-curve discretizations store none.
+function _outer_range(pts::BoundaryPoints{T}) where {T<:Real}
+    n = length(pts.xy)
+    length(pts.w_dm) == n || return 1:n
+    return 1:count(==(one(T)), pts.w_dm)
+end
+
+# Perimeter of the outer boundary loop of `billiard`.
+function _outer_perimeter(billiard::AbsBilliard, ::Type{T}) where {T<:Real}
+    genus(billiard) == 0 && return T(sum(crv.length for crv in full_boundary(billiard)))
+    return T(sum(crv.length for crv in first(full_boundary_components(billiard).curves)))
+end
+
+function _bim_boundary_function(state::BIMEigenstate{K,T}, u::Vector{<:Number}, norm, L::Union{Nothing,T}) where {K,T<:Real}
+    pts = state.pts
+    outer = _outer_range(pts)
+    Lout = L === nothing ? T(sum(view(pts.ds, outer))) : L
+    return BoundaryFunction(u, pts.s, pts.ds, state.k, norm === nothing ? T(NaN) : T(norm), Lout, outer)
 end
 
 # Shared guard of the solver-free `BIMEigenstate` boundary-function methods: they only read stored fields, so a
@@ -199,12 +222,14 @@ end
 # Disambiguates `boundary_function(bim_state, billiard)` from the generic
 # `S<:AbsState` method above, which would otherwise silently match and fail
 # on fields (`k_basis`, `basis`) BIMEigenstate doesn't have. No `solver` is
-# available here to recompute a missing `state.u`, so this simply forwards
-# to the 1-arg read of the precomputed fields (which throws when `u` is missing).
-boundary_function(state::BIMEigenstate, billiard::AbsBilliard) = boundary_function(state)
+# available here to recompute a missing `state.u`, so this reads the precomputed
+# fields (and throws when `u` is missing); the perimeter `L` comes from `billiard`.
+function boundary_function(state::BIMEigenstate{K,T}, billiard::AbsBilliard) where {K,T<:Real}
+    return _bim_boundary_function(state, _stored_boundary_u(state), state.bnd_norm, _outer_perimeter(billiard, T))
+end
 
 """
-    boundary_function(state::BIMEigenstate, billiard::AbsBilliard, solver::AbsBIMSolver; multithreaded::Bool = true) → (u::Vector, s::Vector, norm::Real)
+    boundary_function(state::BIMEigenstate, billiard::AbsBilliard, solver::AbsBIMSolver; multithreaded::Bool = true) → BoundaryFunction
 
 Returns the Rellich-normalized boundary normal derivative of a
 [`BIMEigenstate`](@ref), recomputing it via [`solve_state`](@ref) when the
@@ -216,12 +241,12 @@ to [`boundary_function(state::BIMEigenstate)`](@ref).
 ## Keyword arguments
 *  `multithreaded::Bool = true` : Whether the recomputation via [`solve_state`](@ref) is multithreaded. Unused when `state.u !== nothing`.
 """
-function boundary_function(state::BIMEigenstate, billiard::AbsBilliard, solver::AbsBIMSolver; multithreaded::Bool=true)
+function boundary_function(state::BIMEigenstate{K,T}, billiard::AbsBilliard, solver::AbsBIMSolver; multithreaded::Bool=true) where {K,T<:Real}
     u = state.u; norm = state.bnd_norm
     if u === nothing
         _, _, u, norm = solve_state(_bim_kernel(solver), state.pts, state.k, billiard; multithreaded)
     end
-    return u, state.pts.s, norm
+    return _bim_boundary_function(state, u, norm, _outer_perimeter(billiard, T))
 end
 
 """
@@ -356,6 +381,25 @@ function momentum_function(u::AbstractVector{U}, s::AbstractVector{T}, ds::Abstr
     return power, ks
 end
 
+# Restriction of a per-node vector to the outer loop; the whole vector (no copy) when it is the outer loop.
+_outer_loop(x::AbstractVector, outer::UnitRange{Int}) = outer == eachindex(x) ? x : x[outer]
+
+"""
+    momentum_function(bf::BoundaryFunction) → (power::Vector, ks::Vector)
+
+Compute the momentum-space representation of the boundary function `bf` on its
+outer loop with [`momentum_function(u, s, ds)`](@ref momentum_function), which
+selects the fast FFT path for a uniform arclength grid and the quadrature path
+otherwise.
+
+## Returns
+*  `power` : The one-sided boundary momentum weight `|c_m|²`.
+*  `ks` : The angular wavenumbers corresponding to `power`.
+"""
+function momentum_function(bf::BoundaryFunction)
+    return momentum_function(_outer_loop(bf.u, bf.outer), _outer_loop(bf.s, bf.outer), _outer_loop(bf.ds, bf.outer))
+end
+
 """
     momentum_function(state::BIMEigenstate) → (power::Vector, ks::Vector)
 
@@ -401,9 +445,9 @@ _momentum_function_state(state::BIMEigenstate, billiard::AbsBilliard, solver; kw
 _momentum_function_state(state::BasisEigenstate, billiard::AbsBilliard, solver; kwargs...) = momentum_function(state, billiard; kwargs...)
 
 """
-    boundary_function(data::SpectralData, i::Integer; kwargs...) → (u, s, norm)
+    boundary_function(data::SpectralData, i::Integer; kwargs...) → BoundaryFunction
 
-Compute the boundary normal derivative of the `i`-th eigenstate stored in `data`.
+Compute the [`BoundaryFunction`](@ref) of the `i`-th eigenstate stored in `data`.
 """
 function boundary_function(data::SpectralData, i::Integer; kwargs...)
     states = _require_states(data)
@@ -411,17 +455,15 @@ function boundary_function(data::SpectralData, i::Integer; kwargs...)
 end
 
 """
-    boundary_function(data::SpectralData; kwargs...) → (us, ss, norms)
+    boundary_function(data::SpectralData; kwargs...) → Vector{BoundaryFunction}
 
-Compute the boundary normal derivative of every eigenstate stored in `data`,
-returning `(us::Vector, ss::Vector, norms::Vector)` with one entry per state,
-the same layout as `wavefunction(data)` and `husimi_function(data)`. Use
-`boundary_function(data, i)` for the unwrapped `(u, s, norm)` of a single state.
+Compute the [`BoundaryFunction`](@ref) of every eigenstate stored in `data`,
+with one entry per state, the same layout as `wavefunction(data)` and
+`husimi_function(data)`. Use `boundary_function(data, i)` for a single state.
 """
 function boundary_function(data::SpectralData; kwargs...)
     states = _require_states(data)
-    results = [boundary_function(data, i; kwargs...) for i in eachindex(states)]
-    return first.(results), getindex.(results, 2), getindex.(results, 3)
+    return [boundary_function(data, i; kwargs...) for i in eachindex(states)]
 end
 
 """

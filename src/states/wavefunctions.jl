@@ -331,9 +331,7 @@ Reconstruct BIM eigenstates on a common Cartesian grid.
   transparently).
 
 ## Returns
-- `Psi2ds::Vector{Matrix}`: Reconstructed wavefunctions.
-- `xgrid::Vector{T}`: Cartesian x coordinates.
-- `ygrid::Vector{T}`: Cartesian y coordinates.
+- `Vector{Wavefunction}`: One [`Wavefunction`](@ref) per state, carrying the `k` of its state. All objects share the coordinate vectors `x` and `y`.
 """
 function wavefunction(states::AbstractVector{<:BIMEigenstate{K,T}}, billiard::AbsBilliard, solver::AbsBIMSolver; ppw::Real = 5, inside_only::Bool = true, fundamental_only::Bool = true, min_chunk::Int = 4096, use_chebyshev::Bool = true, show_progress::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(T), nan_mask::Bool = false) where {K<:Number,T<:Real}
     isempty(states) && throw(ArgumentError("states must be nonempty"))
@@ -362,7 +360,7 @@ function wavefunction(states::AbstractVector{<:BIMEigenstate{K,T}}, billiard::Ab
             Psi = _evaluate_wavefunctions(ks, us, bds, pts, indices, nx, ny, nothing, ϕ_slp, Val(:direct); min_chunk, show_progress, nan_mask)
         end
     end
-    return Psi, xgrid, ygrid
+    return [Wavefunction(Psi[i], xgrid, ygrid, ks[i]) for i in eachindex(Psi)]
 end
 
 """
@@ -392,13 +390,10 @@ Reconstruct one BIM eigenstate.
   transparently).
 
 ## Returns
-- `Psi::Matrix`: Reconstructed wavefunction.
-- `xgrid::Vector{T}`: Cartesian x coordinates.
-- `ygrid::Vector{T}`: Cartesian y coordinates.
+- `Wavefunction`: The reconstructed wavefunction with `k = state.k`; it iterates as `(psi, x, y)`.
 """
 function wavefunction(state::BIMEigenstate{K,T}, billiard::AbsBilliard, solver::AbsBIMSolver; ppw::Real = 5, inside_only::Bool = true, fundamental_only::Bool = true, min_chunk::Int = 4096, use_chebyshev::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(T), nan_mask::Bool = false) where {K<:Number,T<:Real}
-    Psi, xgrid, ygrid = wavefunction([state], billiard, solver; ppw, inside_only, fundamental_only, min_chunk, use_chebyshev, show_progress = false, cheb_config, nan_mask)
-    return Psi[1], xgrid, ygrid
+    return only(wavefunction([state], billiard, solver; ppw, inside_only, fundamental_only, min_chunk, use_chebyshev, show_progress = false, cheb_config, nan_mask))
 end
 
 ################################################################################
@@ -481,9 +476,7 @@ complete billiard with `apply_symmetries_to_wavefunction`.
   transparently).
 
 ## Returns
-- `Psi2d::Matrix{T}`: Wavefunction values on the Cartesian grid.
-- `x_grid::Vector{T}`: Cartesian x coordinates.
-- `y_grid::Vector{T}`: Cartesian y coordinates.
+- `Wavefunction`: The wavefunction on the Cartesian grid with `k = state.k`; it iterates as `(psi, x, y)`.
 """
 function wavefunction(state::S, billiard::AbsBilliard; ppw::Real = 5.0, inside_only::Bool = true, fundamental_only::Bool = true, memory_limit::Real = 10.0e9, multithreaded::Bool = true, nan_mask::Bool = false) where {S<:BasisEigenstate}
     let k = state.k, symmetries = state.basis.symmetries
@@ -512,7 +505,7 @@ function wavefunction(state::S, billiard::AbsBilliard; ppw::Real = 5.0, inside_o
                 Psi2d, x_grid, y_grid = apply_symmetries_to_wavefunction(Psi2d, x_grid, y_grid, symmetries, state.basis.sym_characters)
             end
         end
-        return Psi2d, x_grid, y_grid
+        return Wavefunction(convert(Matrix{type}, Psi2d), convert(Vector{type}, x_grid), convert(Vector{type}, y_grid), state.k)
     end
 end
 
@@ -524,8 +517,8 @@ end
 # over every stored state (dispatching on whether it wraps BIMEigenstates,
 # reconstructed on one shared grid, or BasisEigenstates, each on its own
 # per-state grid), while `wavefunction(data, i)` reconstructs a single state
-# with the same unwrapped (Matrix, x, y) shape as calling `wavefunction`
-# directly on that state.
+# and returns the same `Wavefunction` as calling `wavefunction` directly on
+# that state.
 ################################################################################
 
 # The `SpectralData` entry points forward one keyword set to every state type. A keyword that is valid only
@@ -538,8 +531,7 @@ const _BASIS_ONLY_WAVEFUNCTION_KWARGS = (:memory_limit, :multithreaded)
 _wavefunction_data(states::AbstractVector{<:BIMEigenstate}, billiard::AbsBilliard, solver; kwargs...) = wavefunction(states, billiard, solver; _drop_kwargs(kwargs, _BASIS_ONLY_WAVEFUNCTION_KWARGS)...)
 function _wavefunction_data(states::AbstractVector{<:BasisEigenstate}, billiard::AbsBilliard, solver; kwargs...)
     kw = _drop_kwargs(kwargs, _BIM_ONLY_WAVEFUNCTION_KWARGS)
-    results = [wavefunction(s, billiard; kw...) for s in states]
-    return first.(results), getindex.(results, 2), getindex.(results, 3)
+    return [wavefunction(s, billiard; kw...) for s in states]
 end
 
 _wavefunction_state(state::BIMEigenstate, billiard::AbsBilliard, solver; kwargs...) = wavefunction(state, billiard, solver; _drop_kwargs(kwargs, _BASIS_ONLY_WAVEFUNCTION_KWARGS)...)
@@ -549,12 +541,12 @@ _wavefunction_state(state::BasisEigenstate, billiard::AbsBilliard, solver; kwarg
     wavefunction(data::SpectralData; kwargs...)
 
 Reconstruct every eigenstate stored in `data` (see [`compute_spectrum`](@ref),
-[`compute_eigenstate`](@ref)). For `data.states::AbstractVector{<:BIMEigenstate}`
-this reuses the shared-grid batched reconstruction and returns
-`(Psi::Vector{Matrix}, xgrid, ygrid)`; for `data.states::AbstractVector{<:BasisEigenstate}`
-each state is reconstructed on its own grid and `(Psis::Vector{Matrix}, xs::Vector, ys::Vector)`
-is returned. `kwargs` are forwarded to the underlying single-/batched-state
-`wavefunction` method.
+[`compute_eigenstate`](@ref)) and return a `Vector{Wavefunction}` with one
+[`Wavefunction`](@ref) per state. For `data.states::AbstractVector{<:BIMEigenstate}`
+this reuses the shared-grid batched reconstruction, so all objects share the
+coordinate vectors; for `data.states::AbstractVector{<:BasisEigenstate}` each
+state is reconstructed on its own grid. `kwargs` are forwarded to the underlying
+single-/batched-state `wavefunction` method.
 """
 function wavefunction(data::SpectralData; kwargs...)
     states = _require_states(data)
@@ -565,8 +557,7 @@ end
     wavefunction(data::SpectralData, i::Integer; kwargs...)
 
 Reconstruct the `i`-th eigenstate stored in `data`, returning the same
-unwrapped `(Psi::Matrix, x, y)` shape as calling `wavefunction` on a single
-state directly.
+[`Wavefunction`](@ref) as calling `wavefunction` on the single state directly.
 """
 function wavefunction(data::SpectralData, i::Integer; kwargs...)
     states = _require_states(data)

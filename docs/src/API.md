@@ -146,6 +146,9 @@ BasisEigenstate
 BasisState
 BIMEigenstate
 compute_eigenstate
+Wavefunction
+BoundaryFunction
+HusimiFunction
 wavefunction
 compute_psi
 boundary_limits

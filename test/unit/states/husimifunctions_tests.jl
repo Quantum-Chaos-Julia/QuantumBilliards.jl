@@ -24,7 +24,10 @@
 # Helper definitions use the prefix `hu_` / `HU_`.
 #
 # FINDINGS (no source change): the batched basis form drops states that throw, silently. This is current documented/observed
-# behaviour and is pinned below. Single-state and batched forms both return (H, qs, ps) / (Hs, qs, ps).
+# behaviour and is pinned below. Single-state forms return a HusimiFunction (iterating as (H, qs, ps)), batched and
+# SpectralData forms return a Vector{HusimiFunction}; every object carries the k of its state (or the numeric k argument).
+# The BoundaryFunction forms husimi_function(bf[, qs, ps]) are checked against the numeric forms on the stored arrays and
+# against the state forms (husimi_function(boundary_function(state, billiard)).H == husimi_function(state, billiard).H).
 # The single-axis reflection path was checked through boundary_function in boundaryfunctions_tests.jl (Limacon) and is
 # consistent; the single-axis bug of apply_symmetries_to_wavefunction does not affect the boundary-function path.
 
@@ -91,6 +94,9 @@ function hu_check_constant(H, qs, ps, k; var=true)
 end
 
 hu_bim_state(k, u, pts) = BIMEigenstate{Float64,Float64}(k, 0.0, nothing, 1e-9, pts, u, nothing)
+
+# Two HusimiFunction objects with equal type, density, grids and wavenumber (the objects define no ==).
+hu_same(a::HusimiFunction, b::HusimiFunction) = typeof(a) == typeof(b) && a.H == b.H && a.qs == b.qs && a.ps == b.ps && a.k == b.k
 hu_j0_state() = BasisEigenstate(HU_J01, [1.0], 1e-12, FourierBessel(1; sym_x=1, sym_y=1))
 hu_j1_state() = BasisEigenstate(HU_J11, [1.0], 1e-12, FourierBessel(1; sym_x=-1, sym_y=1))      # J1(k r) cos(theta)
 
@@ -269,7 +275,7 @@ end
     @test length(qs) == 256                                           # one boundary position per node at this k
 
     @testset "real scale factors and a global complex phase do not change the density" begin
-        @test husimi_function(k, s, ds, -3.7 .* u, L)[1] ≈ H atol = 1e-12 * maximum(H)
+        @test husimi_function(k, s, ds, -3.7 .* u, L).H ≈ H atol = 1e-12 * maximum(H)
         Hp, _, ps = husimi_function(k, s, ds, exp(0.8im) .* u, L)        # real up to a global phase: full_p = false is accepted
         @test Hp ≈ H atol = 1e-12 * maximum(H)
     end
@@ -381,12 +387,95 @@ end
     s, ds, L = hu_uniform_grid(Float64, 256)
     pts = hu_pts(s, ds)
     u = cos.(k * HU_P0 .* s)
-    @test husimi_function(k, pts, u) == husimi_function(k, s, ds, u, sum(ds))
-    @test husimi_function(k, pts, u; c=5.0, w=6.0) == husimi_function(k, s, ds, u, sum(ds); c=5.0, w=6.0)
+    @test husimi_function(k, pts, u) isa HusimiFunction{Float64}
+    @test hu_same(husimi_function(k, pts, u), husimi_function(k, s, ds, u, sum(ds)))
+    @test hu_same(husimi_function(k, pts, u; c=5.0, w=6.0), husimi_function(k, s, ds, u, sum(ds); c=5.0, w=6.0))
     qs = [0.2, 1.0, 3.0]; ps = collect(range(0, 1; length=11))
-    @test husimi_function(k, pts, u, qs, ps) == husimi_function(k, s, ds, u, sum(ds), qs, ps)
-    @test husimi_function(k, pts, exp.(1im .* k .* HU_P0 .* s), qs, collect(range(-1, 1; length=11)); full_p=true)[1] ≈
-          husimi_function(k, s, ds, exp.(1im .* k .* HU_P0 .* s), sum(ds), qs, collect(range(-1, 1; length=11)); full_p=true)[1]
+    @test hu_same(husimi_function(k, pts, u, qs, ps), husimi_function(k, s, ds, u, sum(ds), qs, ps))
+    @test husimi_function(k, pts, exp.(1im .* k .* HU_P0 .* s), qs, collect(range(-1, 1; length=11)); full_p=true).H ≈
+          husimi_function(k, s, ds, exp.(1im .* k .* HU_P0 .* s), sum(ds), qs, collect(range(-1, 1; length=11)); full_p=true).H
+    @test husimi_function(k, pts, u).k === k && husimi_function(k, pts, u, qs, ps).k === k      # the numeric k is stored
+end
+
+@testset "husimi_function numeric forms return a HusimiFunction carrying the numeric k" begin
+    k = HU_K
+    s, ds, L = hu_uniform_grid(Float64, 256)
+    u = cos.(k * HU_P0 .* s)
+    qs = [0.3, 1.1, 2.9]; ps = collect(range(-1, 1; length=21))
+
+    @testset "automatic grid, fast uniform path" begin
+        hf = husimi_function(k, s, ds, u, L)
+        @test hf isa HusimiFunction{Float64} && hf.k === k
+        @test hf.H isa Matrix{Float64} && hf.qs isa Vector{Float64} && hf.ps isa Vector{Float64}
+        @test size(hf.H) == (length(hf.qs), length(hf.ps))
+        H, qs0, ps0 = hf
+        @test H === hf.H && qs0 === hf.qs && ps0 === hf.ps
+    end
+
+    @testset "automatic grid, general path (graded grid)" begin
+        sg, dsg, Lg = hu_graded_grid(512)
+        hf = husimi_function(k, sg, dsg, cos.(k * HU_P0 .* sg), Lg)
+        @test hf isa HusimiFunction{Float64} && hf.k === k
+        @test size(hf.H) == (length(hf.qs), length(hf.ps))
+    end
+
+    @testset "prescribed grids are stored as given" begin
+        hf = husimi_function(k, s, ds, u, L, qs, ps; full_p=true)
+        @test hf isa HusimiFunction{Float64} && hf.k === k
+        @test hf.qs == qs && hf.ps == ps
+        @test size(hf.H) == (3, 21)
+    end
+
+    @testset "Float32 data give a Float32 object" begin
+        s32, ds32, L32 = hu_uniform_grid(Float32, 256)
+        hf = husimi_function(20.0f0, s32, ds32, ones(Float32, 256), L32)
+        @test hf isa HusimiFunction{Float32} && hf.k isa Float32 && hf.k === 20.0f0
+        @test hf.H isa Matrix{Float32} && hf.qs isa Vector{Float32} && hf.ps isa Vector{Float32}
+    end
+end
+
+@testset "husimi_function(::BoundaryFunction)" begin
+    k = HU_K
+    s, ds, L = hu_uniform_grid(Float64, 256)
+    u = cos.(k * HU_P0 .* s)
+    bf = BoundaryFunction(u, s, ds, k, 0.9, L, 1:256)
+
+    @testset "equals the numeric form on the outer loop with k = bf.k and L = bf.L" begin
+        hf = husimi_function(bf)
+        @test hf isa HusimiFunction{Float64} && hf.k === bf.k
+        @test hu_same(hf, husimi_function(k, s, ds, u, L))
+        @test hu_same(husimi_function(bf; c=5.0, w=6.0), husimi_function(k, s, ds, u, L; c=5.0, w=6.0))
+        @test hu_err(hf.H, hu_expected((q, p) -> hu_cos_density(k, HU_P0, q, p), hf.qs, hf.ps)) < 1e-8
+    end
+
+    @testset "prescribed grids" begin
+        qs = [0.3, 1.1, 2.9, 4.0]
+        psfull = collect(range(-1, 1; length=21)); pshalf = collect(range(0, 1; length=11))
+        hf = husimi_function(bf, qs, psfull; full_p=true)
+        @test hu_same(hf, husimi_function(k, s, ds, u, L, qs, psfull; full_p=true))
+        @test hf.qs == qs && hf.ps == psfull && hf.k === k
+        hh = husimi_function(bf, qs, pshalf)                               # full_p = false: p >= 0 evaluated and reflected
+        @test hu_same(hh, husimi_function(k, s, ds, u, L, qs, pshalf))
+        @test hh.ps ≈ antisym_vec(pshalf)
+        @test hh.H ≈ reverse(hh.H; dims=2) atol = 1e-12 * maximum(hh.H)
+        @test_throws ArgumentError husimi_function(bf, qs, psfull)         # negative momenta need full_p = true
+    end
+
+    @testset "complex u switches to the full momentum grid" begin
+        bfc = BoundaryFunction(exp.(1im * k * HU_P0 .* s), s, ds, k, 0.9, L, 1:256)
+        hf = husimi_function(bfc)
+        @test hf.ps[1] ≈ -1
+        @test hu_err(hf.H, hu_expected((q, p) -> hu_plane_density(k, HU_P0, p), hf.qs, hf.ps)) < 1e-8
+    end
+
+    @testset "only the nodes of the outer loop are used" begin
+        # 256 outer nodes followed by 32 junk nodes of a hole loop: the Husimi function ignores them
+        sj = [s; L .+ (1:32) .* 0.1]; dsj = [ds; fill(0.1, 32)]; uj = [u; fill(1e3, 32)]
+        bfj = BoundaryFunction(uj, sj, dsj, k, 0.9, L, 1:256)
+        @test hu_same(husimi_function(bfj), husimi_function(bf))
+        @test hu_same(husimi_function(bfj, [0.3, 1.1], collect(range(-1, 1; length=11)); full_p=true),
+                      husimi_function(bf, [0.3, 1.1], collect(range(-1, 1; length=11)); full_p=true))
+    end
 end
 
 @testset "husimi_function(::BasisEigenstate) - circle J0 mode" begin
@@ -417,8 +506,8 @@ end
     end
 
     @testset "full_p, ppw, w, multithreaded" begin
-        @test husimi_function(st, HU_CIRCLE; full_p=true)[1] ≈ H atol = 1e-12 * maximum(H)
-        @test husimi_function(st, HU_CIRCLE; multithreaded=false)[1] ≈ H atol = 1e-12 * maximum(H)
+        @test husimi_function(st, HU_CIRCLE; full_p=true).H ≈ H atol = 1e-12 * maximum(H)
+        @test husimi_function(st, HU_CIRCLE; multithreaded=false).H ≈ H atol = 1e-12 * maximum(H)
         Hb, qb, _ = husimi_function(st, HU_CIRCLE; ppw=3000.0)
         hu_check_constant(Hb, qb, ps, k; var=false)
         Hw, _, pw = husimi_function(st, HU_CIRCLE; w=1.0)
@@ -438,7 +527,7 @@ end
     # the boundary nodes enter with their cumulative weights (one node spacing offset, 0.003 rad), which perturbs the
     # density at the 1e-3 level
     @test hu_err(H, hu_expected((q, p) -> hu_cos_density(k, p1, q, p), qs, ps)) < 5e-3
-    @test husimi_function(st, HU_CIRCLE; full_p=true)[1] ≈ H atol = 1e-12 * maximum(H)
+    @test husimi_function(st, HU_CIRCLE; full_p=true).H ≈ H atol = 1e-12 * maximum(H)
 end
 
 @testset "husimi_function(::BasisEigenstate) - single-axis reflection basis on the Limacon" begin
@@ -462,7 +551,7 @@ end
         H, qs, ps = husimi_function(st, HU_CIRCLE, hu_SweepStub())
         hu_check_density(H, qs, ps)
         hu_check_constant(H, qs, ps, st.k; var=false)                 # exp(-k) at |p| = 1 is not negligible for k = 5.5: <p^2> is truncated
-        @test husimi_function(st, HU_CIRCLE, hu_SweepStub(); full_p=true)[1] ≈ H atol = 1e-12 * maximum(H)
+        @test husimi_function(st, HU_CIRCLE, hu_SweepStub(); full_p=true).H ≈ H atol = 1e-12 * maximum(H)
     end
 
     @testset "graded grid, J01 mode: constant u, general path" begin
@@ -480,41 +569,59 @@ end
         hu_check_constant(H, qs, ps, st.k; var=false)
     end
 
-    @testset "several states: Hs, qs, ps, each equal to the single-state result" begin
+    @testset "several states: one HusimiFunction each, equal to the single-state result" begin
         s, ds, _ = hu_uniform_grid(Float64, 256)
         pts = hu_pts(s, ds)
         s1 = hu_bim_state(HU_J02, fill(1.0, 256), pts)
-        s2 = hu_bim_state(HU_J02, cos.(10 .* s), pts)
-        Hs, qss, pss = husimi_function([s1, s2], HU_CIRCLE, hu_SweepStub())
-        @test length(Hs) == length(pss) == length(qss) == 2
+        s2 = hu_bim_state(HU_J02 + 0.5, cos.(10 .* s), pts)
+        hs = husimi_function([s1, s2], HU_CIRCLE, hu_SweepStub())
+        @test hs isa Vector{HusimiFunction{Float64}}
+        @test length(hs) == 2
         for (i, st) in enumerate((s1, s2))
-            H, qs, ps = husimi_function(st, HU_CIRCLE, hu_SweepStub())
-            @test Hs[i] == H && qss[i] == qs && pss[i] == ps
+            @test hu_same(hs[i], husimi_function(st, HU_CIRCLE, hu_SweepStub()))
+            @test hs[i].k === st.k                                    # k of the own state of every object
         end
-        @test pss[1][1] ≈ -1 && qss[1][1] >= 0                         # third element holds the momentum grids
+        @test hs[1].ps[1] ≈ -1 && hs[1].qs[1] >= 0
+    end
+
+    @testset "single state: HusimiFunction with k = state.k" begin
+        s, ds, _ = hu_uniform_grid(Float64, 256)
+        st = hu_bim_state(HU_J02, fill(1.0, 256), hu_pts(s, ds))
+        hf = husimi_function(st, HU_CIRCLE, hu_SweepStub())
+        @test hf isa HusimiFunction{Float64} && hf.k === st.k
+        @test hf.H isa Matrix{Float64} && hf.qs isa Vector{Float64} && hf.ps isa Vector{Float64}
+        @test size(hf.H) == (length(hf.qs), length(hf.ps))
     end
 end
 
 @testset "husimi_function(states, billiard) - several basis eigenstates" begin
     s0 = hu_j0_state(); s1 = hu_j1_state()
 
-    @testset "Hs, qs, ps equal the single-state results" begin
-        Hs, qss, pss = husimi_function([s0, s1], HU_CIRCLE)
-        @test Hs isa Vector{Matrix{Float64}} && pss isa Vector{Vector{Float64}} && qss isa Vector{Vector{Float64}}
-        @test length(Hs) == 2
+    @testset "one HusimiFunction each, equal to the single-state results" begin
+        hs = husimi_function([s0, s1], HU_CIRCLE)
+        @test hs isa Vector{HusimiFunction{Float64}}
+        @test length(hs) == 2
         for (i, st) in enumerate((s0, s1))
-            H, qs, ps = husimi_function(st, HU_CIRCLE)
-            @test Hs[i] == H && qss[i] == qs && pss[i] == ps
+            @test hu_same(hs[i], husimi_function(st, HU_CIRCLE))
+            @test hs[i].k === st.k                                    # k of the own state of every object
         end
-        Hc, qc, pc = husimi_function([s0, s1], HU_CIRCLE; c=5.0)
-        @test length(pc[1]) == 2 * ceil(Int, 5 * sqrt(s0.k)) + 1
+        hc = husimi_function([s0, s1], HU_CIRCLE; c=5.0)
+        @test length(hc[1].ps) == 2 * ceil(Int, 5 * sqrt(s0.k)) + 1
     end
 
     @testset "a state that throws is dropped from the result (current behaviour)" begin
         bad = BasisEigenstate(s0.k, [1.0, 2.0], 1e-12, s0.basis)       # coefficient vector of the wrong length
-        Hs, qss, pss = @test_logs husimi_function([s0, bad, s1], HU_CIRCLE)
-        @test length(Hs) == length(pss) == length(qss) == 2
-        @test Hs[1] == husimi_function(s0, HU_CIRCLE)[1] && Hs[2] == husimi_function(s1, HU_CIRCLE)[1]
+        hs = @test_logs husimi_function([s0, bad, s1], HU_CIRCLE)
+        @test hs isa Vector{HusimiFunction{Float64}}
+        @test length(hs) == 2
+        @test hu_same(hs[1], husimi_function(s0, HU_CIRCLE)) && hu_same(hs[2], husimi_function(s1, HU_CIRCLE))
+        @test hs[1].k === s0.k && hs[2].k === s1.k                    # the surviving objects keep the k of their own states
+    end
+
+    @testset "every state fails: empty vector" begin
+        bad = BasisEigenstate(s0.k, [1.0, 2.0], 1e-12, s0.basis)
+        hs = husimi_function([bad, bad], HU_CIRCLE)
+        @test isempty(hs) && hs isa Vector{<:HusimiFunction}
     end
 end
 
@@ -522,20 +629,27 @@ end
     @testset "basis eigenstates" begin
         s0 = hu_j0_state(); s1 = hu_j1_state()
         data = SpectralData(HU_CIRCLE, nothing, [s0.k, s1.k], [1e-12, 1e-12], [false, false]; states=[s0, s1])
-        @test husimi_function(data, 2) == husimi_function(s1, HU_CIRCLE)
-        @test husimi_function(data, 1; c=5.0) == husimi_function(s0, HU_CIRCLE; c=5.0)
-        Hs, qss, pss = husimi_function(data)
-        Hr, qr, pr = husimi_function([s0, s1], HU_CIRCLE)
-        @test Hs == Hr && pss == pr && qss == qr
+        hf1 = husimi_function(data, 2)
+        @test hf1 isa HusimiFunction{Float64} && hf1.k === s1.k
+        @test hu_same(hf1, husimi_function(s1, HU_CIRCLE))
+        @test hu_same(husimi_function(data, 1; c=5.0), husimi_function(s0, HU_CIRCLE; c=5.0))
+        hs = husimi_function(data)
+        hr = husimi_function([s0, s1], HU_CIRCLE)
+        @test hs isa Vector{HusimiFunction{Float64}} && length(hs) == 2
+        @test all(hu_same(a, b) for (a, b) in zip(hs, hr))
+        @test hs[1].k === s0.k && hs[2].k === s1.k
     end
 
     @testset "BIM eigenstates go through the solver" begin
         s, ds, _ = hu_uniform_grid(Float64, 256)
         st = hu_bim_state(HU_J02, ones(256), hu_pts(s, ds))
         data = SpectralData(HU_CIRCLE, hu_SweepStub(), [HU_J02], [1e-9], [false]; states=[st])
-        @test husimi_function(data, 1) == husimi_function(st, HU_CIRCLE, hu_SweepStub())
-        Hs, qss, pss = husimi_function(data)
-        @test length(Hs) == 1 && Hs[1] == husimi_function(st, HU_CIRCLE, hu_SweepStub())[1]
+        hf = husimi_function(data, 1)
+        @test hf isa HusimiFunction{Float64} && hf.k === st.k
+        @test hu_same(hf, husimi_function(st, HU_CIRCLE, hu_SweepStub()))
+        hs = husimi_function(data)
+        @test hs isa Vector{HusimiFunction{Float64}} && length(hs) == 1
+        @test hu_same(hs[1], husimi_function(st, HU_CIRCLE, hu_SweepStub())) && hs[1].k === st.k
     end
 
     @testset "data without stored states" begin
@@ -594,4 +708,80 @@ end
     @test sum(H) ≈ 1 rtol = 1e-10
     @test all(isfinite, H) && all(>=(0), H)
     @test 0 <= minimum(qs) && maximum(qs) < 2π + 1e-12                   # the outer perimeter only, no hole arclength
+end
+
+@testset "husimi_function(boundary_function(state, billiard)) equals husimi_function(state, billiard)" begin
+    @testset "basis state" begin
+        for st in (hu_j0_state(), hu_j1_state())
+            bf = boundary_function(st, HU_CIRCLE)
+            hf = husimi_function(bf)
+            ref = husimi_function(st, HU_CIRCLE)
+            @test hf isa HusimiFunction{Float64} && hf.k === st.k
+            @test hf.H == ref.H && hf.qs == ref.qs && hf.ps == ref.ps
+            # the same density on a prescribed grid, evaluated from the stored arrays of the boundary function
+            qs = ref.qs[1:7:end]; ps = collect(range(-1.0, 1.0; length=15))
+            @test husimi_function(bf, qs, ps; full_p=true).H ≈ husimi_function(bf.k, bf.s, bf.ds, bf.u, bf.L, qs, ps; full_p=true).H
+        end
+    end
+
+    @testset "BIM state with stored u (uniform grid) and with the solver form" begin
+        s, ds, _ = hu_uniform_grid(Float64, 256)
+        pts = hu_pts(s, ds)
+        st = hu_bim_state(HU_J02, cos.(10 .* s), pts)
+        ref = husimi_function(st, HU_CIRCLE, hu_SweepStub())
+        for bf in (boundary_function(st, HU_CIRCLE), boundary_function(st, HU_CIRCLE, hu_SweepStub()))
+            hf = husimi_function(bf)
+            @test hf.H == ref.H && hf.qs == ref.qs && hf.ps == ref.ps && hf.k === st.k
+        end
+        # without a billiard L = sum(ds) = 2 pi of the circle, so the solver-free object gives the same density
+        @test husimi_function(boundary_function(st)).H == ref.H
+        # prescribed grid: consistent with the numeric form on the stored arrays
+        bf = boundary_function(st, HU_CIRCLE)
+        qs = [0.3, 1.1, 2.9]; ps = collect(range(-1.0, 1.0; length=15))
+        @test husimi_function(bf, qs, ps; full_p=true).H ≈ husimi_function(st.k, pts, st.u, qs, ps; full_p=true).H
+    end
+
+    @testset "BIM state with a graded grid (general path) and a recomputed u" begin
+        s, ds, _ = hu_graded_grid(512)
+        pts = hu_pts(s, ds)
+        st = hu_bim_state(HU_J01, fill(-HU_J01 * besselj(1, HU_J01), 512), pts)
+        ref = husimi_function(st, HU_CIRCLE, hu_SweepStub())
+        hf = husimi_function(boundary_function(st, HU_CIRCLE))
+        @test hf.H == ref.H && hf.qs == ref.qs && hf.ps == ref.ps
+        st_missing = BIMEigenstate{Float64,Float64}(HU_J01, 0.0, nothing, 1e-9, pts, nothing, nothing)
+        refm = husimi_function(st_missing, HU_CIRCLE, hu_SweepStub())
+        hfm = husimi_function(boundary_function(st_missing, HU_CIRCLE, hu_SweepStub()))
+        @test hfm.H == refm.H && hfm.k === st_missing.k
+    end
+
+    @testset "billiard with a hole: only the outer loop enters" begin
+        annulus, solver, pts = hu_annulus_composite_pts(3.0)
+        st = hu_bim_state(3.0, collect(range(1.0, 2.0, length(pts))), pts)
+        bf = boundary_function(st, annulus, solver)
+        @test bf.outer == 1:32 && bf.L ≈ 2π
+        hf = husimi_function(bf; c=5.0)
+        ref = husimi_function(st, annulus, solver; c=5.0)
+        @test hf.H == ref.H && hf.qs == ref.qs && hf.ps == ref.ps && hf.k === st.k
+        @test maximum(hf.qs) < bf.L                                           # the outer perimeter only
+        # the solver-free object has the same outer-loop L
+        @test husimi_function(boundary_function(st); c=5.0).H ≈ ref.H
+    end
+end
+
+@testset "HusimiFunction.k equals state.k in the single, vector and SpectralData forms" begin
+    s0 = hu_j0_state(); s1 = hu_j1_state()
+    @test husimi_function(s0, HU_CIRCLE).k === s0.k
+    @test [h.k for h in husimi_function([s0, s1], HU_CIRCLE)] == [s0.k, s1.k]
+    data = SpectralData(HU_CIRCLE, nothing, [s0.k, s1.k], [1e-12, 1e-12], [false, false]; states=[s0, s1])
+    @test husimi_function(data, 1).k === s0.k && husimi_function(data, 2).k === s1.k
+    @test [h.k for h in husimi_function(data)] == [s0.k, s1.k]
+
+    s, ds, _ = hu_uniform_grid(Float64, 256)
+    pts = hu_pts(s, ds)
+    b1 = hu_bim_state(HU_J02, ones(256), pts); b2 = hu_bim_state(HU_J02 + 0.7, ones(256), pts)
+    @test husimi_function(b2, HU_CIRCLE, hu_SweepStub()).k === b2.k
+    @test [h.k for h in husimi_function([b1, b2], HU_CIRCLE, hu_SweepStub())] == [b1.k, b2.k]
+    bdata = SpectralData(HU_CIRCLE, hu_SweepStub(), [b1.k, b2.k], [1e-9, 1e-9], [false, false]; states=[b1, b2])
+    @test husimi_function(bdata, 2).k === b2.k
+    @test [h.k for h in husimi_function(bdata)] == [b1.k, b2.k]
 end

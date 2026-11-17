@@ -111,9 +111,7 @@ The returned Poincare-Husimi density is normalized so that `sum(H)=1`.
 * `full_p::Bool=false`: Whether both momentum signs are evaluated explicitly. For 1d irreps (u real-valued up to a global complex phase), where we have p -> -p symmetry this should be false. 
 
 ## Returns
-* `H::Matrix{T}`: Normalized Poincare-Husimi density indexed as `H[q,p]`.
-* `qs::Vector{T}`: Boundary-position grid.
-* `ps::Vector{T}`: Full signed momentum grid.
+* [`HusimiFunction`](@ref) with `H` the normalized Poincare-Husimi density indexed as `H[q,p]`, `qs` the boundary-position grid, `ps` the full signed momentum grid and `k` the eigenwavenumber. It iterates as `(H, qs, ps)`.
 """
 function husimi_function(k::T, s::AbstractVector{T}, ds::AbstractVector{T}, u::AbstractVector{Num}, L::T, qs::AbstractVector{T}, ps::AbstractVector{T}; w::Real=7.0, full_p::Bool=false) where {T<:Real,Num<:Number}
     # For each boundary position `q`, the coherent-state amplitude is approximated by
@@ -174,7 +172,7 @@ function husimi_function(k::T, s::AbstractVector{T}, ds::AbstractVector{T}, u::A
         ps_out = antisym_vec(ps)
     end
     _normalize_husimi!(H)
-    return H,collect(qs),ps_out
+    return HusimiFunction(H,collect(qs),ps_out,k)
 end
 
 ################################################################################
@@ -279,15 +277,14 @@ Compute an automatically gridded Poincare-Husimi function.
 * `full_p::Bool=false`: Whether both momentum signs are evaluated explicitly. For 1d irreps (u real-valued up to a global complex phase), where we have p -> -p symmetry this should be false. Automatically escalated to `true` if `u` is not real up to a global phase.
 
 ## Returns
-* `H::Matrix{T}`: Normalized Poincare-Husimi density.
-* `qs::Vector{T}`: Boundary-position grid.
-* `ps::Vector{T}`: Full signed momentum grid.
+* [`HusimiFunction`](@ref) with the normalized density `H`, the boundary-position grid `qs`, the full signed momentum grid `ps` and `k`. It iterates as `(H, qs, ps)`.
 """
 function husimi_function(k::T, s::AbstractVector{T}, ds::AbstractVector{T}, u::AbstractVector{Num}, L::T; c::Real=10.0, w::Real=7.0, full_p::Bool=false) where {T<:Real,Num<:Number}
     full_p = full_p || !_is_global_phase_real(u)
     sig = inv(sqrt(k))
     if _husimi_uniform_arclength_grid(s,ds) && T(w)*sig<L/T(2)
-        return _husimi_uniform_arclength(k,s,ds,u,L;c=c,w=w,full_p=full_p)
+        H,qs,ps = _husimi_uniform_arclength(k,s,ds,u,L;c=c,w=w,full_p=full_p)
+        return HusimiFunction(H,qs,ps,k)
     end
     nq = max(2,ceil(Int,L*T(c)/sig))
     np = max(1,ceil(Int,T(c)/sig))
@@ -316,9 +313,7 @@ Compute the Poincare-Husimi function from a physical boundary discretization.
 * `full_p::Bool=false`: Whether both momentum signs are evaluated explicitly. For 1d irreps (u real-valued up to a global complex phase), where we have p -> -p symmetry this should be false. 
 
 ## Returns
-* `H::Matrix{T}`: Normalized Poincare-Husimi density.
-* `qs::Vector{T}`: Boundary-position grid.
-* `ps::Vector{T}`: Full signed momentum grid.
+* [`HusimiFunction`](@ref) with the normalized density `H`, the boundary-position grid `qs`, the full signed momentum grid `ps` and `k`.
 """
 function husimi_function(k::T, pts::BoundaryPoints{T}, u::AbstractVector{Num}; c::Real=10.0, w::Real=7.0, full_p::Bool=false) where {T<:Real,Num<:Number}
     L = sum(pts.ds)
@@ -342,13 +337,45 @@ Compute the Poincare-Husimi function on prescribed phase-space grids.
 * `full_p::Bool=false`: Whether both momentum signs are evaluated explicitly. For 1d irreps (u real-valued up to a global complex phase), where we have p -> -p symmetry this should be false. 
 
 ## Returns
-* `H::Matrix{T}`: Normalized Poincare-Husimi density.
-* `qs::Vector{T}`: Boundary-position grid.
-* `ps::Vector{T}`: Full signed momentum grid.
+* [`HusimiFunction`](@ref) with the normalized density `H`, the boundary-position grid `qs`, the full signed momentum grid `ps` and `k`.
 """
 function husimi_function(k::T, pts::BoundaryPoints{T}, u::AbstractVector{Num}, qs::AbstractVector{T}, ps::AbstractVector{T}; w::Real=7.0, full_p::Bool=false) where {T<:Real,Num<:Number}
     L = sum(pts.ds)
     return husimi_function(k,pts.s,pts.ds,u,L,qs,ps;w=w,full_p=full_p)
+end
+
+################################################################################
+# BOUNDARYFUNCTION API
+################################################################################
+
+"""
+    husimi_function(bf::BoundaryFunction; c::Real=10.0, w::Real=7.0, full_p::Bool=false) → HusimiFunction
+
+Compute the Poincare-Husimi function of the boundary function `bf` on its outer
+loop, with `k = bf.k` and period `bf.L`, on an automatically generated
+phase-space grid (see [`husimi_function(k, s, ds, u, L)`](@ref)).
+
+## Keyword Arguments
+* `c::Real=10.0`: Phase-space sampling density.
+* `w::Real=7.0`: Gaussian truncation radius in units of `1/√k`.
+* `full_p::Bool=false`: Whether both momentum signs are evaluated explicitly. Automatically escalated to `true` if `bf.u` is not real up to a global phase.
+"""
+function husimi_function(bf::BoundaryFunction; c::Real=10.0, w::Real=7.0, full_p::Bool=false)
+    return husimi_function(bf.k,_outer_loop(bf.s,bf.outer),_outer_loop(bf.ds,bf.outer),_outer_loop(bf.u,bf.outer),bf.L;c=c,w=w,full_p=full_p)
+end
+
+"""
+    husimi_function(bf::BoundaryFunction, qs::AbstractVector{T}, ps::AbstractVector{T}; w::Real=7.0, full_p::Bool=false) where {T<:Real} → HusimiFunction
+
+Compute the Poincare-Husimi function of the boundary function `bf` on its outer
+loop on the prescribed phase-space grids `qs` and `ps`.
+
+## Keyword Arguments
+* `w::Real=7.0`: Gaussian truncation radius in units of `1/√k`.
+* `full_p::Bool=false`: Whether both momentum signs are evaluated explicitly. `full_p=false` requires a nonnegative `ps` starting at `0` and `bf.u` real up to a global phase.
+"""
+function husimi_function(bf::BoundaryFunction{T}, qs::AbstractVector{T}, ps::AbstractVector{T}; w::Real=7.0, full_p::Bool=false) where {T<:Real}
+    return husimi_function(bf.k,_outer_loop(bf.s,bf.outer),_outer_loop(bf.ds,bf.outer),_outer_loop(bf.u,bf.outer),bf.L,qs,ps;w=w,full_p=full_p)
 end
 
 ################################################################################
@@ -392,9 +419,7 @@ the hole loops are excluded.
 * `full_p::Bool=false`: Whether both momentum signs are evaluated explicitly. For 1d irreps (u real-valued up to a global complex phase), where we have p -> -p symmetry this should be false. 
 
 ## Returns
-* `H::Matrix{T}`: Normalized Poincare-Husimi density.
-* `qs::Vector{T}`: Boundary-position grid.
-* `ps::Vector{T}`: Full signed momentum grid.
+* [`HusimiFunction`](@ref) with `k = state.k`; it iterates as `(H, qs, ps)`.
 """
 function husimi_function(state::BIMEigenstate{K,T}, billiard::AbsBilliard, solver::AbsBIMSolver; c::Real=10.0, w::Real=7.0, full_p::Bool=false) where {K,T<:Real}
     k=T(real(state.k))
@@ -423,9 +448,7 @@ Compute the Poincare-Husimi function of a basis eigenstate.
 * `full_p::Bool=false`: Whether both momentum signs are evaluated explicitly. For 1d irreps (u real-valued up to a global complex phase), where we have p -> -p symmetry this should be false. 
 
 ## Returns
-* `H::Matrix{T}`: Normalized Poincare-Husimi density.
-* `qs::Vector{T}`: Boundary-position grid.
-* `ps::Vector{T}`: Full signed momentum grid.
+* [`HusimiFunction`](@ref) with `k = state.k`; it iterates as `(H, qs, ps)`.
 """
 function husimi_function(state::S, billiard::AbsBilliard; ppw::Real=5.0, c::Real=10.0, w::Real=7.0, multithreaded::Bool=true, full_p::Bool=false) where {S<:AbsState}
     u,pts,_ = _basis_boundary_function_pts(state, billiard;ppw=ppw,multithreaded=multithreaded)
@@ -457,22 +480,17 @@ Each state uses its natural automatically generated phase-space grid.
 * `full_p::Bool=false`: Whether both momentum signs are evaluated explicitly. For 1d irreps (u real-valued up to a global complex phase), where we have p -> -p symmetry this should be false. 
 
 ## Returns
-* `Hs::Vector{Matrix{T}}`: Poincare-Husimi matrices.
-* `qs::Vector{Vector{T}}`: Corresponding boundary-position grids.
-* `ps::Vector{Vector{T}}`: Corresponding momentum grids.
+* `Vector{HusimiFunction}`: One [`HusimiFunction`](@ref) per state; states whose computation fails are dropped (logged with `@debug`), so the result may be shorter than `states`.
 """
 function husimi_function(states::AbstractVector{<:BIMEigenstate{K,T}}, billiard::AbsBilliard, solver::AbsBIMSolver;c::Real=10.0,w::Real=7.0,full_p::Bool=false) where {K,T<:Real}
     n = length(states)
-    Hs = Vector{Matrix{T}}(undef,n)
-    ps_return = Vector{Vector{T}}(undef,n)
-    qs_return = Vector{Vector{T}}(undef,n)
+    hs = Vector{HusimiFunction{T}}(undef,n)
     ok = Vector{Bool}(undef,n); fill!(ok,true)
     pbar = Progress(n;desc="Constructing Poincare-Husimi matrices, N=$n")
     progress_lock = ReentrantLock()
     Threads.@threads for i in eachindex(states)
         try
-            H,qs,ps = husimi_function(states[i],billiard,solver;c=c,w=w,full_p=full_p)
-            Hs[i] = H; ps_return[i] = ps; qs_return[i] = qs
+            hs[i] = husimi_function(states[i],billiard,solver;c=c,w=w,full_p=full_p)
         catch e
             @debug "Poincare-Husimi fail at k=$(states[i].k)" exception=(e,catch_backtrace())
             ok[i] = false
@@ -481,7 +499,7 @@ function husimi_function(states::AbstractVector{<:BIMEigenstate{K,T}}, billiard:
             next!(pbar)
         end
     end
-    return Hs[ok],qs_return[ok],ps_return[ok]
+    return hs[ok]
 end
 
 """
@@ -501,29 +519,24 @@ Compute Poincare-Husimi functions for several basis eigenstates.
 * `full_p::Bool=false`: Whether both momentum signs are evaluated explicitly. For 1d irreps (u real-valued up to a global complex phase), where we have p -> -p symmetry this should be false.
 
 ## Returns
-* `Hs::Vector{Matrix{T}}`: Poincare-Husimi matrices.
-* `qs::Vector{Vector{T}}`: Corresponding boundary-position grids.
-* `ps::Vector{Vector{T}}`: Corresponding momentum grids.
+* `Vector{HusimiFunction}`: One [`HusimiFunction`](@ref) per state; states whose computation fails are dropped (logged with `@debug`), so the result may be shorter than `states`.
 """
 function husimi_function(states::AbstractVector{S}, billiard::AbsBilliard; ppw::Real=5.0, c::Real=10.0, w::Real=7.0, multithreaded::Bool=true, full_p::Bool=false) where {S<:AbsState}
     n = length(states)
     T = typeof(real(first(states).k))
-    Hs = Vector{Matrix{T}}(undef,n)
-    ps_return = Vector{Vector{T}}(undef,n)
-    qs_return = Vector{Vector{T}}(undef,n)
+    hs = Vector{HusimiFunction{T}}(undef,n)
     ok = Vector{Bool}(undef,n); fill!(ok,true)
     pbar = Progress(n;desc="Constructing Poincare-Husimi matrices, N=$n")
     @inbounds for i in eachindex(states)
         try
-            H,qs,ps = husimi_function(states[i],billiard;ppw=ppw,c=c,w=w,multithreaded=multithreaded,full_p=full_p)
-            Hs[i] = H; ps_return[i] = ps; qs_return[i] = qs
+            hs[i] = husimi_function(states[i],billiard;ppw=ppw,c=c,w=w,multithreaded=multithreaded,full_p=full_p)
         catch e
             @debug "Poincare-Husimi fail at k=$(states[i].k)" exception=(e,catch_backtrace())
             ok[i] = false
         end
         next!(pbar)
     end
-    return Hs[ok],qs_return[ok],ps_return[ok]
+    return hs[ok]
 end
 
 ################################################################################
@@ -537,9 +550,9 @@ _husimi_function_state(state::BIMEigenstate, billiard::AbsBilliard, solver; kwar
 _husimi_function_state(state::BasisEigenstate, billiard::AbsBilliard, solver; kwargs...) = husimi_function(state, billiard; kwargs...)
 
 """
-    husimi_function(data::SpectralData; kwargs...) → (Hs, qs, ps)
+    husimi_function(data::SpectralData; kwargs...) → Vector{HusimiFunction}
 
-Compute the Poincare-Husimi function of every eigenstate stored in `data`.
+Compute the [`HusimiFunction`](@ref) of every eigenstate stored in `data`.
 """
 function husimi_function(data::SpectralData; kwargs...)
     states = _require_states(data)
@@ -547,9 +560,9 @@ function husimi_function(data::SpectralData; kwargs...)
 end
 
 """
-    husimi_function(data::SpectralData, i::Integer; kwargs...) → (H, qs, ps)
+    husimi_function(data::SpectralData, i::Integer; kwargs...) → HusimiFunction
 
-Compute the Poincare-Husimi function of the `i`-th eigenstate stored in `data`.
+Compute the [`HusimiFunction`](@ref) of the `i`-th eigenstate stored in `data`.
 """
 function husimi_function(data::SpectralData, i::Integer; kwargs...)
     states = _require_states(data)

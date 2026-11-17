@@ -19,7 +19,10 @@ or [`CompositeBIMSolver`](@ref)); basis solvers such as
 [`CornerAdaptedFourierBessel`](@ref) or [`RealPlaneWaves`](@ref).
 [`compute_spectrum`](@ref) returns a [`SpectralData`](@ref) from which
 [`wavefunction`](@ref), [`boundary_function`](@ref) and
-[`husimi_function`](@ref) reconstruct the states.
+[`husimi_function`](@ref) reconstruct the states and return the sampled function
+objects [`Wavefunction`](@ref), [`BoundaryFunction`](@ref) and
+[`HusimiFunction`](@ref) (one object per state, a vector of objects for a whole
+[`SpectralData`](@ref)).
 
 ```julia
 using QuantumBilliards, BilliardGeometry

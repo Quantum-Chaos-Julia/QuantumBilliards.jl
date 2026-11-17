@@ -89,10 +89,15 @@ solver = BeynSolver(kernel; nlevels = 10, nq = 40, Rmax = 0.5,
 k_min, k_max = k_range_for_states(billiard, 250, 257)
 spectrum = compute_spectrum(solver, billiard, k_min, k_max; multithreaded = true)
 
-# states (SpectralData is indexable and sliceable)
-Psis, xs, ys = wavefunction(spectrum[1]; ppw = 5.0, inside_only = true)
-us, ss, norms = boundary_function(spectrum[1])
-Hs, qs, ps    = husimi_function(spectrum[1]; full_p = true)
+# states (SpectralData is indexable and sliceable); each call returns a vector of
+# Wavefunction, BoundaryFunction or HusimiFunction objects, one per state
+wfs = wavefunction(spectrum[1]; ppw = 5.0, inside_only = true)
+bfs = boundary_function(spectrum[1])
+hfs = husimi_function(spectrum[1]; full_p = true)
+
+# a single object holds psi, x, y, k (u, s, ds, k, norm, L, outer; H, qs, ps, k)
+# and also iterates as the tuple (psi, x, y)
+Psi, x, y = wavefunction(spectrum, 1)
 ```
 
 Visualization is provided by the companion package QBPlotting.jl (Makie based, not yet publicly available).

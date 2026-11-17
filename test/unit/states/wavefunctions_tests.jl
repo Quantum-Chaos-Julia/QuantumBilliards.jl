@@ -5,6 +5,8 @@
 #                                  compute_psi and wavefunction for BasisEigenstate (including the one-hot states of
 #                                  the BasisState(basis, k, i) constructor function) and BIMEigenstate;
 #                                  the SpectralData wrappers wavefunction(data) and wavefunction(data, i))
+# wavefunction returns a Wavefunction (iterating as (psi, x, y)) carrying k = state.k, a Vector{Wavefunction} for a BIM state
+# vector (shared coordinate vectors) and for SpectralData; the object types themselves are tested in sampledfunctions_tests.jl.
 # regularize! (boundaryfunctions.jl) and antisym_vec (husimifunctions.jl) are not defined in this file and are covered
 # with their own source files.
 #
@@ -518,6 +520,19 @@ end
         @test small == ref
         @test serial == ref
     end
+
+    @testset "returns a Wavefunction carrying k = state.k with real grids" begin
+        wf = wavefunction(st, WF_RECT)
+        @test wf isa Wavefunction{Float64,Float64}
+        @test wf.k === st.k
+        @test wf.psi isa Matrix{Float64} && wf.x isa Vector{Float64} && wf.y isa Vector{Float64}
+        @test size(wf.psi) == (length(wf.x), length(wf.y))
+        psi, x, y = wf                                                  # legacy tuple order
+        @test psi === wf.psi && x === wf.x && y === wf.y
+        wfu = wavefunction(st, WF_RECT; fundamental_only=false)
+        @test wfu isa Wavefunction{Float64,Float64} && wfu.k === st.k
+        @test size(wfu.psi) == (length(wfu.x), length(wfu.y))
+    end
 end
 
 @testset "wavefunction - rectangle odd-odd mode (sin x sin y)" begin
@@ -680,6 +695,9 @@ end
         psi, x, y = wavefunction(st, WF_CIRCLE, solver; use_chebyshev=false)
         @test psi isa Matrix{Float64}
         @test size(psi) == (length(x), length(y))
+        wf = wavefunction(st, WF_CIRCLE, solver; use_chebyshev=false)
+        @test wf isa Wavefunction{Float64,Float64} && wf.k === st.k
+        @test wf.x isa Vector{Float64} && wf.y isa Vector{Float64} && wf.psi == psi
         inside = wf_quadrant_interior(x, y, 0.6)
         @test count(inside) > 4e4
         @test psi[inside] ≈ -wf_j0(x, y)[inside] atol = 1e-10         # psi = -J0(k r) for u = d_n J0
@@ -716,6 +734,9 @@ end
         inside = wf_quadrant_interior(x, y, 0.6)
         expected = -(im * pi * WF_J01 / 2) * hankelh1(1, WF_J01) .* wf_j0(x, y)
         @test psi isa Matrix{ComplexF64}
+        wf = wavefunction(st, WF_CIRCLE, wf_DLPStub(); use_chebyshev=false)
+        @test wf isa Wavefunction{Float64,ComplexF64}                 # complex values, real grids and k
+        @test wf.k === st.k && wf.x isa Vector{Float64} && wf.y isa Vector{Float64}
         @test psi[inside] ≈ expected[inside] atol = 1e-10
     end
 
@@ -738,13 +759,28 @@ end
     s1 = wf_bim_u_state(WF_J01); s2 = wf_bim_u_state(WF_J02)
     solver = wf_SweepStub()
 
-    @testset "shared grid, one field per state" begin
-        Psi, x, y = wavefunction([s1, s2], WF_CIRCLE, solver; use_chebyshev=false, show_progress=false)
-        @test length(Psi) == 2
-        @test all(size(P) == (length(x), length(y)) for P in Psi)
+    @testset "shared grid, one Wavefunction per state" begin
+        wfs = wavefunction([s1, s2], WF_CIRCLE, solver; use_chebyshev=false, show_progress=false)
+        @test wfs isa Vector{Wavefunction{Float64,Float64}}
+        @test length(wfs) == 2
+        x, y = wfs[1].x, wfs[1].y
+        @test all(size(w.psi) == (length(x), length(y)) for w in wfs)
+        @test wfs[2].x === x && wfs[2].y === y                        # one shared coordinate vector pair, no copies
+        @test wfs[1].k === s1.k && wfs[2].k === s2.k                  # each object carries the k of its own state
         inside = wf_quadrant_interior(x, y, 0.6)
-        @test Psi[1][inside] ≈ -wf_j0(x, y, WF_J01)[inside] atol = 1e-10
-        @test Psi[2][inside] ≈ -wf_j0(x, y, WF_J02)[inside] atol = 1e-10
+        @test wfs[1].psi[inside] ≈ -wf_j0(x, y, WF_J01)[inside] atol = 1e-10
+        @test wfs[2].psi[inside] ≈ -wf_j0(x, y, WF_J02)[inside] atol = 1e-10
+    end
+
+    @testset "each object equals the single-state result" begin
+        wfs = wavefunction([s1, s2], WF_CIRCLE, solver; use_chebyshev=false, show_progress=false)
+        for (w, st) in zip(wfs, (s1, s2))
+            single = wavefunction(st, WF_CIRCLE, solver; use_chebyshev=false)
+            @test w.k === single.k
+            @test w.psi ≈ single.psi atol = 1e-10
+        end
+        one = wavefunction([s1], WF_CIRCLE, solver; use_chebyshev=false, show_progress=false)
+        @test one isa Vector{<:Wavefunction} && length(one) == 1
     end
 
     @testset "invalid input" begin
@@ -760,36 +796,53 @@ end
         st1, f1 = wf_rect_mode(1, 1); st2, f2 = wf_rect_mode(2, 2)
         data = SpectralData(WF_RECT, nothing, [st1.k, st2.k], [1e-12, 1e-12], [false, false]; states=[st1, st2])
 
-        Psi, xs, ys = wavefunction(data)
-        @test length(Psi) == length(xs) == length(ys) == 2
+        wfs = wavefunction(data)
+        @test wfs isa Vector{Wavefunction{Float64,Float64}} && length(wfs) == 2
         ref1 = wavefunction(st1, WF_RECT); ref2 = wavefunction(st2, WF_RECT)
-        @test Psi[1] == ref1[1] && xs[1] == ref1[2] && ys[1] == ref1[3]
-        @test Psi[2] == ref2[1] && xs[2] == ref2[2] && ys[2] == ref2[3]
+        @test wfs[1].psi == ref1.psi && wfs[1].x == ref1.x && wfs[1].y == ref1.y
+        @test wfs[2].psi == ref2.psi && wfs[2].x == ref2.x && wfs[2].y == ref2.y
+        @test wfs[1].k === st1.k && wfs[2].k === st2.k                # k of the own state of every object
 
-        psi, x, y = wavefunction(data, 2)
-        @test psi == ref2[1] && x == ref2[2] && y == ref2[3]
+        wf = wavefunction(data, 2)
+        @test wf isa Wavefunction{Float64,Float64} && wf.k === st2.k
+        @test wf.psi == ref2.psi && wf.x == ref2.x && wf.y == ref2.y
+        psi, x, y = wf
         inside = wf_rect_interior(x, y)
         @test psi[inside] ≈ wf_analytic(f2, x, y)[inside] atol = 1e-12
 
         @testset "keywords are forwarded" begin
-            psi_u, x_u, y_u = wavefunction(data, 1; fundamental_only=false)
-            @test size(psi_u) == (length(x_u), length(y_u))
-            @test length(x_u) == 2 * length(xs[1])
-            Psi_u, _, _ = wavefunction(data; fundamental_only=false)
-            @test Psi_u[1] == psi_u
+            wf_u = wavefunction(data, 1; fundamental_only=false)
+            @test size(wf_u.psi) == (length(wf_u.x), length(wf_u.y))
+            @test length(wf_u.x) == 2 * length(wfs[1].x)
+            wfs_u = wavefunction(data; fundamental_only=false)
+            @test wfs_u[1].psi == wf_u.psi && wfs_u[1].k === wf_u.k
         end
     end
 
     @testset "BIM eigenstates: shared grid" begin
         s2 = wf_bim_u_state(WF_J02)
         data = SpectralData(WF_CIRCLE, wf_SweepStub(), [WF_J02], [1e-9], [false]; states=[s2])
-        Psi, x, y = wavefunction(data; use_chebyshev=false, show_progress=false)
-        @test length(Psi) == 1 && x isa Vector{Float64} && y isa Vector{Float64}
+        wfs = wavefunction(data; use_chebyshev=false, show_progress=false)
+        @test wfs isa Vector{Wavefunction{Float64,Float64}} && length(wfs) == 1
+        x, y = wfs[1].x, wfs[1].y
+        @test x isa Vector{Float64} && y isa Vector{Float64}
+        @test wfs[1].k === s2.k
         inside = wf_quadrant_interior(x, y, 0.5)
-        @test Psi[1][inside] ≈ -wf_j0(x, y, WF_J02)[inside] atol = 1e-10
+        @test wfs[1].psi[inside] ≈ -wf_j0(x, y, WF_J02)[inside] atol = 1e-10
 
-        psi, x1, y1 = wavefunction(data, 1; use_chebyshev=false)
-        @test psi == Psi[1] && x1 == x && y1 == y
+        wf = wavefunction(data, 1; use_chebyshev=false)
+        @test wf isa Wavefunction{Float64,Float64} && wf.k === s2.k
+        @test wf.psi == wfs[1].psi && wf.x == x && wf.y == y
+    end
+
+    @testset "BIM eigenstates: k and shared grid for several states" begin
+        s1 = wf_bim_u_state(WF_J01); s2 = wf_bim_u_state(WF_J02)
+        data = SpectralData(WF_CIRCLE, wf_SweepStub(), [WF_J01, WF_J02], [1e-9, 1e-9], [false, false]; states=[s1, s2])
+        wfs = wavefunction(data; use_chebyshev=false, show_progress=false)
+        @test length(wfs) == 2
+        @test wfs[1].x === wfs[2].x && wfs[1].y === wfs[2].y
+        @test [w.k for w in wfs] == [s1.k, s2.k]
+        @test wavefunction(data, 2; use_chebyshev=false).k === s2.k
     end
 
     @testset "data without stored states" begin

@@ -58,6 +58,7 @@ end
 
 @group "states" begin
     run_file("unit/states/eigenstates_tests.jl")
+    run_file("unit/states/sampledfunctions_tests.jl")
     run_file("unit/states/wavefunctions_tests.jl")
     run_file("unit/states/boundaryfunctions_tests.jl")
     run_file("unit/states/husimifunctions_tests.jl")

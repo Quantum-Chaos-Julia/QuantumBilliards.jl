@@ -23,6 +23,10 @@
 #    s(t) = L (t - sin(2 pi t) / (2 pi)) gives a spectrally accurate trapezoid in t.
 # BIM states are hand-built (partial states with u, built through the type-parameter constructor, see
 # eigenstates_tests.jl) and the recomputation path goes through a test-local solver stub.
+# boundary_function returns a BoundaryFunction (iterating as (u, s, norm)); boundary_function(data) returns a
+# Vector{BoundaryFunction}. The object fields k, ds, L (billiard perimeter, or sum(ds[outer]) without a billiard), outer
+# (outer loop of a composite discretization) and norm (NaN without a stored Rellich value) are checked on the basis,
+# BIM and annulus states, and momentum_function(::BoundaryFunction) against momentum_function(u, s, ds) of the stored arrays.
 # Helper definitions use the prefix `bf_` / `BF_`.
 #
 # SOURCE FINDINGS:
@@ -111,6 +115,9 @@ end
 
 # Hand-built BIM state with a precomputed u (partial state, no density) on the given points.
 bf_bim_state(k, u, pts) = BIMEigenstate{Float64,Float64}(k, 0.0, nothing, 1e-9, pts, u, 1.25)
+
+# The legacy tuple of a BoundaryFunction, read from the fields (u, s, norm).
+bf_tuple(bf) = (bf.u, bf.s, bf.norm)
 
 # The common checks of the unfolded boundary data of a state with the analytic gradient `grad`.
 function bf_check_unfolded(st, billiard, grad; ncopies, perimeter, rtol_perimeter=1e-9)
@@ -285,6 +292,95 @@ end
     @test u ≈ u_sym[1:513] && nrm ≈ nrm_sym
 end
 
+@testset "boundary_function(::BasisEigenstate) returns a BoundaryFunction" begin
+    st = bf_j0_state()
+    bf = boundary_function(st, BF_CIRCLE)
+    _, pts, nrm = _basis_boundary_function_pts(st, BF_CIRCLE)
+
+    @testset "type, k and field contents" begin
+        @test bf isa BoundaryFunction{Float64,Float64}
+        @test bf.k === st.k
+        @test bf.u isa Vector{Float64} && bf.s isa Vector{Float64} && bf.ds isa Vector{Float64}
+        @test length(bf.u) == length(bf.s) == length(bf.ds) == length(pts.xy)
+        @test bf.s == pts.s && bf.ds == pts.ds && bf.norm == nrm
+        @test sum(bf.ds) ≈ 2pi rtol = 1e-9                              # weights of the unfolded boundary sum to the perimeter
+    end
+
+    @testset "outer is the whole boundary and L the perimeter of the billiard" begin
+        @test bf.outer === 1:length(bf.u)
+        @test bf.L ≈ 2pi
+        bfr = boundary_function(bf_rect_mode(1, 1)[1], BF_RECT)
+        @test bfr.outer == 1:length(bfr.u)
+        @test bfr.L ≈ 4 * (BF_A + BF_B)                                 # perimeter of the full rectangle
+        # no symmetries: only the fundamental boundary is sampled, but L is still the perimeter of the billiard
+        basis = FourierBessel(3)
+        vec = zeros(basis.dim); vec[findfirst(i -> basis.orders[i] == 0 && basis.trig[i] > 0, 1:basis.dim)] = 1.0
+        bfq = boundary_function(BasisEigenstate(BF_J01, vec, 1e-12, basis), BF_CIRCLE)
+        @test bfq.outer == 1:length(bfq.u) && bfq.L ≈ 2pi
+        @test bfq.s[end] ≈ pi / 2 rtol = 1e-9
+    end
+
+    @testset "iterates as (u, s, norm) and keywords are forwarded" begin
+        u, s, n = bf
+        @test u === bf.u && s === bf.s && n === bf.norm
+        bf3000 = boundary_function(st, BF_CIRCLE; ppw=3000.0)
+        @test bf3000 isa BoundaryFunction && length(bf3000.u) > length(bf.u) && bf3000.k === st.k
+    end
+end
+
+@testset "boundary_function(::BIMEigenstate) returns a BoundaryFunction" begin
+    pts = bf_circle_pts(Float64, 32)
+    u = collect(range(-1.0, -2.0, 32))
+    st = bf_bim_state(BF_J01, u, pts)
+
+    @testset "stored fields are shared, outer is the whole boundary, k = state.k" begin
+        bf = boundary_function(st)
+        @test bf isa BoundaryFunction{Float64,Float64}
+        @test bf.u === u && bf.s === pts.s && bf.ds === pts.ds
+        @test bf.k === st.k && bf.norm === 1.25
+        @test bf.outer === 1:32
+    end
+
+    @testset "L: sum(ds[outer]) without a billiard, the perimeter of the billiard with one" begin
+        @test boundary_function(st).L ≈ sum(pts.ds[1:32])
+        @test boundary_function(st).L ≈ 2pi
+        wide = CircleBilliard(2.0)                                       # only the perimeter of the billiard is read
+        @test boundary_function(st, wide).L ≈ 4pi
+        @test boundary_function(st, wide, bf_SweepStub()).L ≈ 4pi
+        @test boundary_function(st, BF_CIRCLE).L ≈ 2pi
+        # the data themselves do not depend on the form
+        for bf in (boundary_function(st, wide), boundary_function(st, wide, bf_SweepStub()))
+            @test bf.u === u && bf.s === pts.s && bf.k === st.k && bf.outer === 1:32
+        end
+    end
+
+    @testset "a state without a stored Rellich value gives norm = NaN" begin
+        st_nonorm = BIMEigenstate{Float64,Float64}(BF_J01, 0.0, nothing, 1e-9, pts, u, nothing)
+        @test isnan(boundary_function(st_nonorm).norm)
+        @test isnan(boundary_function(st_nonorm, BF_CIRCLE).norm)
+        @test isnan(boundary_function(st_nonorm, BF_CIRCLE, bf_SweepStub()).norm)
+        _, _, nrm = boundary_function(st_nonorm)
+        @test isnan(nrm)
+    end
+
+    @testset "recomputed u: the stub norm is stored and k = state.k" begin
+        st_missing = BIMEigenstate{Float64,Float64}(BF_J01, 0.0, nothing, 1e-9, pts, nothing, nothing)
+        bf = boundary_function(st_missing, BF_CIRCLE, bf_SweepStub())
+        @test bf.u == fill(BF_STUB_U, 32) && bf.norm == BF_STUB_NORM
+        @test bf.k === st_missing.k && bf.outer === 1:32 && bf.L ≈ 2pi
+    end
+
+    @testset "Float32 state gives a Float32 object" begin
+        pts32 = bf_circle_pts(Float32, 32)
+        st32 = BIMEigenstate{Float32,Float32}(1.5f0, 0.0f0, nothing, 1.0f-9, pts32, fill(-1.0f0, 32), 0.5f0)
+        bf = boundary_function(st32)
+        @test bf isa BoundaryFunction{Float32,Float32}
+        @test bf.k isa Float32 && bf.norm isa Float32 && bf.L isa Float32
+        @test bf.s === pts32.s && bf.k === 1.5f0
+        @test boundary_function(st32, CircleBilliard(1.0f0)).L isa Float32
+    end
+end
+
 @testset "boundary_function - circle J1 cos(theta) mode unfolds with the right signs" begin
     st = bf_j1_state()
     @test st.basis.sym_characters == [-1.0, -1.0, 1.0]                  # odd in x, even in y
@@ -367,11 +463,13 @@ end
     end
 
     @testset "with a billiard: forwards to the one-argument method" begin
-        @test boundary_function(st, BF_CIRCLE) == (u, pts.s, 1.25)
+        @test boundary_function(st, BF_CIRCLE) isa BoundaryFunction
+        @test bf_tuple(boundary_function(st, BF_CIRCLE)) == (u, pts.s, 1.25)
     end
 
     @testset "with a solver: stored u is used when present, recomputed through the kernel when missing" begin
-        @test boundary_function(st, BF_CIRCLE, bf_SweepStub()) == (u, pts.s, 1.25)
+        @test boundary_function(st, BF_CIRCLE, bf_SweepStub()) isa BoundaryFunction
+        @test bf_tuple(boundary_function(st, BF_CIRCLE, bf_SweepStub())) == (u, pts.s, 1.25)
         st_missing = BIMEigenstate{Float64,Float64}(BF_J01, 0.0, nothing, 1e-9, pts, nothing, nothing)
         u3, s3, n3 = boundary_function(st_missing, BF_CIRCLE, bf_SweepStub())
         @test u3 == fill(BF_STUB_U, 32) && s3 === pts.s && n3 == BF_STUB_NORM
@@ -424,9 +522,31 @@ end
         @test count(==(1.0), pts.w_dm) == 32 && count(==(2.0), pts.w_dm) == 24
     end
 
+    @testset "BoundaryFunction: outer is the outer loop, L its perimeter, k = state.k" begin
+        bf = boundary_function(st)
+        @test bf isa BoundaryFunction{Float64,Float64}
+        @test bf.outer === 1:32
+        @test bf.u === u && bf.s === pts.s && bf.ds === pts.ds && length(bf.u) == N     # all loops are stored
+        @test bf.k === st.k
+        @test bf.L ≈ sum(pts.ds[1:32])                                      # solver-free: sum(ds[outer])
+        @test bf.L ≈ 2π
+        @test bf.L < sum(pts.ds)                                            # the hole loop does not enter L
+        for bfm in (boundary_function(st, annulus), boundary_function(st, annulus, solver))
+            @test bfm.outer === 1:32
+            @test bfm.L ≈ 2π                                                # perimeter of the outer boundary of the billiard
+            @test bfm.k === st.k && length(bfm.u) == N
+        end
+    end
+
+    @testset "BoundaryFunction of a recomputed u keeps outer and L" begin
+        st_missing = BIMEigenstate{Float64,Float64}(3.0, 0.0, nothing, 1e-9, pts, nothing, nothing)
+        bf = boundary_function(st_missing, annulus, bf_SweepStub())
+        @test bf.outer === 1:32 && bf.L ≈ 2π && length(bf.u) == N
+    end
+
     @testset "with a billiard and a solver" begin
-        @test boundary_function(st, annulus) == (u, pts.s, 1.25)
-        @test boundary_function(st, annulus, solver) == (u, pts.s, 1.25)
+        @test bf_tuple(boundary_function(st, annulus)) == (u, pts.s, 1.25)
+        @test bf_tuple(boundary_function(st, annulus, solver)) == (u, pts.s, 1.25)
     end
 
     @testset "a missing u is recomputed with one value per node of all loops" begin
@@ -622,19 +742,77 @@ end
     end
 end
 
+@testset "momentum_function(::BoundaryFunction)" begin
+    @testset "equals momentum_function(u, s, ds) of the stored arrays" begin
+        pts = bf_graded_circle_pts(512)
+        st = bf_bim_state(BF_J01, cos.(3 .* pts.s), pts)
+        bf = boundary_function(st)
+        power, ks = momentum_function(bf)
+        @test power isa Vector{Float64} && ks isa Vector{Float64}
+        @test (power, ks) == momentum_function(bf.u, bf.s, bf.ds)
+        @test (power, ks) == momentum_function(st)
+        @test power[4] ≈ 0.5 atol = 1e-12                                 # u = cos(3 s) on the non-uniform grid
+    end
+
+    @testset "uniform real grid goes through the FFT path of the stored arrays" begin
+        pts = bf_circle_pts(Float64, 64)
+        u = 1 .+ cos.(2 .* pts.s) .+ 0.3 .* sin.(5 .* pts.s)
+        bf = boundary_function(bf_bim_state(BF_J01, u, pts))
+        @test momentum_function(bf) == momentum_function(u, pts.s, pts.ds)
+        @test momentum_function(bf) == momentum_function(u, pts.s)
+    end
+
+    @testset "complex u" begin
+        pts = bf_graded_circle_pts(512)
+        st = BIMEigenstate{ComplexF64,Float64}(BF_J01, 0.0, nothing, 1e-9, pts, exp.(3im .* pts.s), 1.25)
+        bf = boundary_function(st)
+        @test bf isa BoundaryFunction{Float64,ComplexF64}
+        power, ks = momentum_function(bf)
+        @test (power, ks) == momentum_function(bf.u, bf.s, bf.ds)
+        @test power[4] ≈ 1 atol = 1e-12
+    end
+
+    @testset "basis state: composition with boundary_function" begin
+        bf = boundary_function(bf_j1_state(), BF_CIRCLE)
+        @test momentum_function(bf) == momentum_function(bf.u[bf.outer], bf.s[bf.outer], bf.ds[bf.outer])
+        @test momentum_function(bf) == momentum_function(bf.u, bf.s, bf.ds)           # outer is the whole boundary
+        @test argmax(momentum_function(bf)[1]) == 2
+    end
+
+    @testset "billiard with a hole: only the outer loop enters" begin
+        annulus = AnnularBilliard(0.3, 0.1)
+        solver = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=32), CombinedFieldIntegralEquationSolver(5.0, annulus; min_pts=24))
+        pts = evaluate_points(solver, annulus, 3.0)
+        u = collect(range(-1.0, -2.0, length(pts)))
+        bf = boundary_function(bf_bim_state(3.0, u, pts), annulus)
+        @test bf.outer == 1:32
+        power, ks = momentum_function(bf)
+        @test (power, ks) == momentum_function(u[1:32], pts.s[1:32], pts.ds[1:32])
+        @test length(power) == length(ks) == 32 ÷ 2 + 1                   # 32 outer nodes, not all 56
+        @test (power, ks) != momentum_function(u, pts.s, pts.ds)
+    end
+end
+
 @testset "SpectralData wrappers - boundary_function and momentum_function" begin
     @testset "basis eigenstates" begin
         s0 = bf_j0_state(); s1 = bf_j1_state()
         data = SpectralData(BF_CIRCLE, nothing, [s0.k, s1.k], [1e-12, 1e-12], [false, false]; states=[s0, s1])
 
-        u1, sv1, n1 = boundary_function(data, 2)
-        @test (u1, sv1, n1) == boundary_function(s1, BF_CIRCLE)
-        us, ss, ns = boundary_function(data)
-        @test length(us) == length(ss) == length(ns) == 2
-        @test (us[1], ss[1], ns[1]) == boundary_function(s0, BF_CIRCLE) && (us[2], ss[2], ns[2]) == (u1, sv1, n1)
-        u_one, s_one, n_one = boundary_function(data[1])
-        @test length(u_one) == 1 && (u_one[1], s_one[1], n_one[1]) == boundary_function(s0, BF_CIRCLE)
-        @test boundary_function(data, 1; ppw=3000.0)[1] == boundary_function(s0, BF_CIRCLE; ppw=3000.0)[1]
+        bf1 = boundary_function(data, 2)
+        ref1 = boundary_function(s1, BF_CIRCLE)
+        @test bf1 isa BoundaryFunction{Float64,Float64} && bf1.k === s1.k
+        @test bf_tuple(bf1) == bf_tuple(ref1)
+        @test bf1.L == ref1.L && bf1.outer == ref1.outer && bf1.ds == ref1.ds
+        bfs = boundary_function(data)
+        @test bfs isa Vector{BoundaryFunction{Float64,Float64}} && length(bfs) == 2
+        ref0 = boundary_function(s0, BF_CIRCLE)
+        @test bf_tuple(bfs[1]) == bf_tuple(ref0) && bfs[1].L == ref0.L && bfs[1].ds == ref0.ds
+        @test bf_tuple(bfs[2]) == bf_tuple(bf1)
+        @test bfs[1].k === s0.k && bfs[2].k === s1.k                      # k of the own state of every object
+        bfd1 = boundary_function(data[1])                                  # data of one state: a vector with one object
+        @test bfd1 isa Vector{<:BoundaryFunction} && length(bfd1) == 1
+        @test bf_tuple(bfd1[1]) == bf_tuple(ref0)
+        @test boundary_function(data, 1; ppw=3000.0).u == boundary_function(s0, BF_CIRCLE; ppw=3000.0).u
 
         @test momentum_function(data, 2) == momentum_function(s1, BF_CIRCLE)
         powers, kss = momentum_function(data)
@@ -646,8 +824,13 @@ end
         pts = bf_graded_circle_pts(512)
         st = bf_bim_state(BF_J01, cos.(3 .* pts.s), pts)
         data = SpectralData(BF_CIRCLE, bf_SweepStub(), [BF_J01], [1e-9], [false]; states=[st])
-        @test boundary_function(data, 1) == (st.u, pts.s, 1.25)
-        @test boundary_function(data) == ([st.u], [pts.s], [1.25])
+        @test boundary_function(data, 1) isa BoundaryFunction
+        @test bf_tuple(boundary_function(data, 1)) == (st.u, pts.s, 1.25)
+        bfs = boundary_function(data)
+        @test bfs isa Vector{BoundaryFunction{Float64,Float64}} && length(bfs) == 1
+        @test bf_tuple(bfs[1]) == (st.u, pts.s, 1.25)
+        @test bfs[1].k === st.k && boundary_function(data, 1).k === st.k
+        @test bfs[1].outer === 1:512 && bfs[1].L ≈ 2pi                      # L from the billiard of the data
         @test momentum_function(data, 1) == momentum_function(st)
         p1, k1 = momentum_function(st)
         @test momentum_function(data) == ([p1], [k1])

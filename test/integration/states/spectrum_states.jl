@@ -2,10 +2,12 @@
 # `compute_spectrum` (BeynSolver with eigenvectors=true, VerginiSaracenoSolver with eigenvectors=true) are reconstructed with
 # `boundary_function`, `husimi_function` and `wavefunction` and compared with analytic mode shapes. Every comparison is made
 # after normalisation (least-squares scale or division by the mean), so no scale, phase or tension is pinned.
-# Conventions of the current API: `husimi_function(data, i)` returns (H, qs, ps) with H of size (length(qs), length(ps)),
-# `husimi_function(data)` returns (Hs, qs, ps); `wavefunction(data, i)` returns (Psi, x, y) with Psi[ix, iy];
-# `boundary_function(state, billiard, solver)` is needed for Beyn BIM states, because `state.u` is not stored (findings F8/F9 of
-# the plan: the Husimi general-path edge rows are wrong, so Husimi checks use interior rows only).
+# Conventions of the current API: `husimi_function(data, i)` returns a HusimiFunction (iterating as (H, qs, ps)) with H of size
+# (length(qs), length(ps)), `husimi_function(data)` a Vector{HusimiFunction}; `wavefunction(data, i)` returns a Wavefunction
+# (iterating as (Psi, x, y)) with Psi[ix, iy]; `boundary_function(data, i)` a BoundaryFunction (iterating as (u, s, norm)); every
+# object carries the wavenumber of its state. `boundary_function(state, billiard, solver)` is needed for Beyn BIM states, because
+# `state.u` is not stored (findings F8/F9 of the plan: the Husimi general-path edge rows are wrong, so Husimi checks use
+# interior rows only).
 
 using LinearAlgebra: norm, dot
 using SpecialFunctions: besselj
@@ -55,14 +57,21 @@ end
     @test abs(data.k[i0] - j01) < SPECTRUM_ATOL_BIM
 
     # boundary function: constant after normalisation
-    u, s, _ = boundary_function(data.states[i0], billiard, solver.kernel)
-    @test length(u) == length(s)
+    bf = boundary_function(data.states[i0], billiard, solver.kernel)
+    @test bf isa BoundaryFunction
+    @test bf.k == data.states[i0].k && bf.k ≈ data.k[i0]
+    @test bf.outer == 1:length(bf.u) && bf.L ≈ 2pi         # single closed curve: the whole boundary, the perimeter of the unit circle
+    u, s, _ = bf
+    @test length(u) == length(s) == length(bf.ds)
     um = mean(u)
     @test abs(um) > 0
     @test maximum(abs.(u ./ um .- 1)) < 1e-8
 
     # Husimi function: normalised, concentrated at p = 0, independent of q on interior rows
     H, qs, ps = husimi_function(data, i0)
+    hf = husimi_function(data, i0)
+    @test hf isa HusimiFunction && hf.k == data.states[i0].k
+    @test isapprox(hf.H, H; atol = 1e-8)
     @test size(H) == (length(qs), length(ps))
     @test sum(H) ≈ 1 atol = 1e-8
     @test all(H .>= -1e-12)
@@ -78,14 +87,18 @@ end
     @test issorted(Hp[1:ip0]) && issorted(Hp[ip0:end]; rev=true)
     @test Hp[1] < 0.2 * Hp[ip0] && Hp[end] < 0.2 * Hp[ip0]
     @test all(abs.(H[rows, :] .- mean(H[rows, :]; dims=1)) .<= 1e-6 * maximum(H))
-    # batch form returns (Hs, qs, ps)
-    Hs, qss, pss = husimi_function(data)
-    @test length(Hs) == length(data)
-    @test Hs[i0] ≈ H
-    @test pss[i0] ≈ ps && qss[i0] ≈ qs
+    # batch form returns one HusimiFunction per state, each carrying the k of its own state
+    hfs = husimi_function(data)
+    @test hfs isa Vector{<:HusimiFunction}
+    @test length(hfs) == length(data)
+    @test [h.k for h in hfs] == [st.k for st in data.states]
+    @test hfs[i0].H ≈ H
+    @test hfs[i0].ps ≈ ps && hfs[i0].qs ≈ qs
 
     # wavefunction proportional to besselj(0, k r) on interior points
-    Psi, xg, yg = wavefunction(data, i0; fundamental_only=false, use_chebyshev=false)
+    wf = wavefunction(data, i0; fundamental_only=false, use_chebyshev=false)
+    @test wf isa Wavefunction && wf.k == data.states[i0].k
+    Psi, xg, yg = wf
     @test size(Psi) == (length(xg), length(yg))
     k = data.k[i0]
     idx = [(ix, iy) for ix in 1:length(xg), iy in 1:length(yg) if xg[ix]^2 + yg[iy]^2 < 0.8^2]
@@ -107,9 +120,14 @@ end
     @test data.states[1].u === nothing
     @test_throws ArgumentError boundary_function(data.states[1])
     @test_throws "no stored boundary normal derivative" boundary_function(data.states[1], data.billiard)
-    u, s, _ = boundary_function(data, 1)
+    bf = boundary_function(data, 1)
+    @test bf isa BoundaryFunction && bf.k == data.states[1].k
+    u, s, _ = bf
     @test u !== nothing
     @test length(u) == length(s)
+    bfs = boundary_function(data)
+    @test bfs isa Vector{<:BoundaryFunction} && length(bfs) == length(data)
+    @test [b.k for b in bfs] == [st.k for st in data.states]
 end
 
 # solver: Vergini-Saraceno
@@ -127,7 +145,9 @@ end
         modes = [(m, n) for m in 1:2:15, n in 1:2:15 if abs(pi * sqrt((m / 2)^2 + (n / 1.4)^2) - k) < SPECTRUM_ATOL_VS]
         @test length(modes) == 1
         m, n = only(modes)
-        Psi, xg, yg = wavefunction(data, i; fundamental_only=false, multithreaded=true)
+        wf = wavefunction(data, i; fundamental_only=false, multithreaded=true)
+        @test wf isa Wavefunction && wf.k == data.states[i].k
+        Psi, xg, yg = wf
         @test size(Psi) == (length(xg), length(yg))
         idx = [(ix, iy) for ix in 1:length(xg), iy in 1:length(yg) if abs(xg[ix]) < 0.95 && abs(yg[iy]) < 0.65]
         psi = [Psi[ix, iy] for (ix, iy) in idx]
