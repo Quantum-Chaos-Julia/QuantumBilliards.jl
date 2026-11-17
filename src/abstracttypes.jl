@@ -161,8 +161,8 @@ billiard state.
 
 ## Description
 Every concrete subtype of `AbsState` stores at least a wavenumber `k`.
-States expressed in a genuine [`AbsBasis`](@ref) ([`BasisEigenstate`](@ref) and
-[`BasisState`](@ref)) additionally store the expansion coefficients `vec`, the
+States expressed in a genuine [`AbsBasis`](@ref) ([`BasisEigenstate`](@ref))
+additionally store the expansion coefficients `vec`, the
 wavenumber `k_basis` at which `basis` was evaluated and the `basis` itself.
 [`BIMEigenstate`](@ref) instead stores boundary data (layer density and/or
 physical boundary normal derivative) on a [`BoundaryPoints`](@ref)

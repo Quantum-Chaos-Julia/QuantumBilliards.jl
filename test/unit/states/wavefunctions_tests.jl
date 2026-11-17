@@ -2,7 +2,8 @@
 #   src/states/wavefunctions.jl   (grid helpers pad_limits, _debroglie_grid_size, rectify_grid, boundary_limits,
 #                                  _is_inside_full, _wavefunction_grid, _mask_fill, _bim_kernel;
 #                                  the layer potentials phi_slp / phi_dlp / phi_cfie;
-#                                  compute_psi and wavefunction for BasisEigenstate, BasisState, BIMEigenstate;
+#                                  compute_psi and wavefunction for BasisEigenstate (including the one-hot states of
+#                                  the BasisState(basis, k, i) constructor function) and BIMEigenstate;
 #                                  the SpectralData wrappers wavefunction(data) and wavefunction(data, i))
 # regularize! (boundaryfunctions.jl) and antisym_vec (husimifunctions.jl) are not defined in this file and are covered
 # with their own source files.
@@ -622,18 +623,21 @@ end
     @test size(psi_u) == (length(xu), length(yu))
 end
 
-@testset "wavefunction(::BasisState)" begin
+@testset "wavefunction(BasisState(basis, k, i), billiard)" begin
+    # BasisState is a constructor function returning a one-hot BasisEigenstate, so single basis functions are evaluated
+    # through the generic BasisEigenstate method. The basis has no symmetries; the unit circle grid covers its
+    # fundamental quadrant, and inside_only = false evaluates the basis function on the whole grid box.
     basis = FourierBessel(5)
     k = 3.0
     @test basis.orders[1] == 0 && basis.trig[1] > 0               # first function is J0(k r)
 
-    @testset "values of single Fourier-Bessel functions on the default grid" begin
+    @testset "values of single Fourier-Bessel functions on the circle grid" begin
         for i in 1:3
             st = BasisState(basis, k, i)
-            psi, x, y = wavefunction(st)
+            @test st isa BasisEigenstate
+            psi, x, y = wavefunction(st, WF_CIRCLE; inside_only=false)
             @test psi isa Matrix{Float64}
-            @test size(psi) == (512, 512)
-            @test (x[1], x[end]) == (-2.0, 2.0) && (y[1], y[end]) == (-2.0, 2.0)
+            @test size(psi) == (length(x), length(y))
             n = basis.orders[i]
             ang = [atan(yy, xx) for xx in x, yy in y]
             expected = besselj.(n, k .* wf_radius(x, y)) .* (basis.trig[i] > 0 ? cos.(n .* ang) : sin.(n .* ang))
@@ -641,20 +645,29 @@ end
         end
     end
 
-    @testset "grid limits and resolution" begin
+    @testset "inside_only masks the exterior of the disc" begin
+        psi, x, y = wavefunction(BasisState(basis, k, 1), WF_CIRCLE)
+        inside = wf_quadrant_interior(x, y, 1 - 1e-9)
+        @test count(inside) > 1e4
+        @test psi[inside] ≈ besselj.(0, k .* wf_radius(x, y))[inside] atol = 1e-12
+        @test all(psi[wf_disc_exterior(x, y)] .== 0)
+    end
+
+    @testset "resolution" begin
         st = BasisState(basis, k, 1)
-        psi, x, y = wavefunction(st; xlim=(-1.0, 1.0), ylim=(-3.0, 3.0), ppw=400.0)
-        @test (x[1], x[end]) == (-1.0, 1.0) && (y[1], y[end]) == (-3.0, 3.0)
-        @test length(x) == _debroglie_grid_size(k, 2.0, 400.0)
-        @test length(y) == _debroglie_grid_size(k, 6.0, 400.0)
-        @test length(y) > length(x) == 512
+        # the grid size has a floor of 512 points, so ppw must be large enough to exceed it
+        psi, x, y = wavefunction(st, WF_CIRCLE; ppw=1500.0, inside_only=false)
         @test size(psi) == (length(x), length(y))
+        @test length(x) == _debroglie_grid_size(k, x[end] - x[1], 1500.0) > 512
+        @test length(y) == _debroglie_grid_size(k, y[end] - y[1], 1500.0) > 512
+        psi5, x5, _ = wavefunction(st, WF_CIRCLE; inside_only=false)
+        @test length(x) > length(x5)
         @test psi ≈ besselj.(0, k .* wf_radius(x, y)) atol = 1e-12
     end
 
     @testset "only the selected basis function contributes" begin
-        psi1, _, _ = wavefunction(BasisState(basis, k, 1))
-        psi2, _, _ = wavefunction(BasisState(basis, k, 2))
+        psi1, _, _ = wavefunction(BasisState(basis, k, 1), WF_CIRCLE)
+        psi2, _, _ = wavefunction(BasisState(basis, k, 2), WF_CIRCLE)
         @test psi1 != psi2
     end
 end
@@ -823,7 +836,7 @@ using QuantumBilliards: _drop_kwargs, _BIM_ONLY_WAVEFUNCTION_KWARGS, _BASIS_ONLY
     @testset "old wavefunction keywords raise MethodError" begin
         basis = FourierBessel(5)
         st = BasisState(basis, 3.0, 1)
-        @test_throws MethodError wavefunction(st; b=10.0)                              # now ppw
-        @test_throws MethodError wavefunction(st; xlim=(-1.0, 1.0), ylim=(-1.0, 1.0), b=10.0)
+        @test_throws MethodError wavefunction(st, WF_CIRCLE; b=10.0)                   # now ppw
+        @test_throws MethodError wavefunction(st, WF_CIRCLE; xlim=(-1.0, 1.0), ylim=(-1.0, 1.0), b=10.0)
     end
 end

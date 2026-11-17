@@ -572,33 +572,3 @@ function wavefunction(data::SpectralData, i::Integer; kwargs...)
     states = _require_states(data)
     return _wavefunction_state(states[i], data.billiard, data.solver; kwargs...)
 end
-
-"""
-    wavefunction(state::BasisState; xlim::Tuple = (-2.0, 2.0), ylim::Tuple = (-2.0, 2.0), ppw::Real = 5.0)
-
-Evaluate a single basis function on a Cartesian grid.
-## Arguments
-- `state::BasisState`: Basis state to evaluate.
-
-## Kwargs
-- `xlim::Tuple = (-2.0, 2.0)`: Cartesian x limits.
-- `ylim::Tuple = (-2.0, 2.0)`: Cartesian y limits.
-- `ppw::Real = 5.0`: Approximate grid points per wavelength.
-
-## Returns
-- `Psi2d::Matrix{T}`: Basis-function values on the Cartesian grid.
-- `x_grid::Vector{T}`: Cartesian x coordinates.
-- `y_grid::Vector{T}`: Cartesian y coordinates.
-"""
-function wavefunction(state::BasisState; xlim = (-2.0, 2.0), ylim = (-2.0, 2.0), ppw::Real = 5.0)
-    let k = state.k, basis = state.basis
-        type = eltype(state.vec)
-        dx = xlim[2] - xlim[1]; dy = ylim[2] - ylim[1]
-        nx = _debroglie_grid_size(k, dx, ppw); ny = _debroglie_grid_size(k, dy, ppw)
-        x_grid::Vector{type} = collect(type, range(xlim..., nx)); y_grid::Vector{type} = collect(type, range(ylim..., ny))
-        pts_grid = [SVector(x, y) for y in y_grid for x in x_grid]
-        Psi::Vector{type} = basis_fun(basis, state.idx, k, pts_grid)
-        Psi2d::Array{type,2} = reshape(Psi, (nx, ny))
-        return Psi2d, x_grid, y_grid
-    end
-end

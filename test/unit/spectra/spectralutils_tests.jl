@@ -1,6 +1,6 @@
 # Unit tests for
 #   src/spectra/spectralutils.jl   (SpectralData, k_range, filter, append!/vcat, match_wavenumbers,
-#                                   _ten_ok, _finalize_spectrum, _vs_refine_window,
+#                                   _ten_ok, _finalize_spectrum, _vs_solve_window, _vs_refine_window,
 #                                   overlap_and_merge!, overlap_and_merge_ebim!, _local_gap,
 #                                   sweep_windows, weyl_window_count)
 #   src/solvers/acceleratedmethods/beyn.jl   (weyl_window_width, plan_weyl_windows,
@@ -857,5 +857,80 @@ end
         ki, ti, _ = _vs_refine_window(s, args, k0, Δk, 0.03, _VS_MAX_REFINEMENTS; multithreaded=false, merge_tol)
         @test sort(ki) == [0.2, 1.0, 1.8]
         @test all(t -> t <= 0.03, ti)
+    end
+end
+
+# Stub solver for _vs_solve_window with eigenvectors = true: same window rule as SpectraRefineStub; the vector of the
+# j-th level of a window is the constant column j * ones(basis.dim).
+struct SpectraVectorStub
+    roots::Vector{Float64}
+    eigenvectors::Bool
+end
+
+function QuantumBilliards.solve_vectors(s::SpectraVectorStub, basis, pts, k0::Real, w::Real; multithreaded::Bool=true)
+    sel = [r for r in s.roots if abs(r - k0) <= w]
+    X = zeros(basis.dim, length(sel))
+    for j in eachindex(sel)
+        X[:, j] .= j
+    end
+    return sel, [2 * (k0 - r)^2 for r in sel], X
+end
+QuantumBilliards.solve(s::SpectraVectorStub, basis, pts, k0::Real, w::Real; multithreaded::Bool=true) =
+    (sel = [r for r in s.roots if abs(r - k0) <= w]; (sel, [2 * (k0 - r)^2 for r in sel]))
+
+using QuantumBilliards: _vs_solve_window
+
+@testset "_vs_solve_window" begin
+    basis = FourierBessel(3)
+    roots = [0.5, 1.0, 1.2, 3.0]
+    k0, Δk, merge_tol = 1.0, 0.5, 1e-6
+
+    @testset "eigenvectors = true: concrete vector of BasisEigenstate" begin
+        s = SpectraVectorStub(roots, true)
+        ki, ti, si = _vs_solve_window(s, (basis, :pts), k0, Δk; multithreaded=false, merge_tol)
+        @test ki == [0.5, 1.0, 1.2]
+        @test length(si) == length(ki)
+        @test isconcretetype(eltype(si))
+        @test eltype(si) <: BasisEigenstate
+        @test eltype(si) == typeof(first(si))
+        for (j, st) in enumerate(si)
+            @test st.k == ki[j]
+            @test st.k_basis == k0
+            @test st.ten == ti[j]
+            @test st.basis === basis
+            @test st.vec == fill(Float64(j), basis.dim)
+        end
+    end
+
+    @testset "eigenvectors = true: empty window keeps the concrete element type" begin
+        s = SpectraVectorStub(roots, true)
+        ki, ti, si = _vs_solve_window(s, (basis, :pts), 2.0, 0.1; multithreaded=false, merge_tol)
+        @test isempty(ki) && isempty(ti) && isempty(si)
+        @test isconcretetype(eltype(si))
+        @test eltype(si) <: BasisEigenstate
+    end
+
+    @testset "eigenvectors = false: no states" begin
+        s = SpectraVectorStub(roots, false)
+        ki, ti, si = _vs_solve_window(s, (basis, :pts), k0, Δk; multithreaded=false, merge_tol)
+        @test ki == [0.5, 1.0, 1.2]
+        @test si === nothing
+    end
+
+    @testset "_vs_refine_window with eigenvectors = true keeps the states concrete" begin
+        s = SpectraVectorStub(roots, true)
+        @testset "single solve" begin
+            ki, ti, si = _vs_refine_window(s, (basis, :pts), k0, Δk, 10.0, _VS_MAX_REFINEMENTS; multithreaded=false, merge_tol)
+            @test length(si) == length(ki)
+            @test isconcretetype(eltype(si))
+            @test eltype(si) <: BasisEigenstate
+            @test [st.k for st in si] == ki
+        end
+
+        @testset "halving down to empty sub-windows" begin
+            ki, ti, si = _vs_refine_window(s, (basis, :pts), k0, 1.0, 0.03, _VS_MAX_REFINEMENTS; multithreaded=false, merge_tol)
+            @test length(si) == length(ki)
+            @test isconcretetype(eltype(si))
+        end
     end
 end

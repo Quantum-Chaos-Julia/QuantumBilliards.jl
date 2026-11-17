@@ -59,13 +59,7 @@ precision is replaced by zero; a complex-valued `vec` is left unfiltered.
 * `state::BasisEigenstate`: A new [`BasisEigenstate`](@ref) with `k_basis = k` and filtered coefficients.
 """
 function BasisEigenstate(k::K, vec::Vector{K}, ten::T, basis::Ba) where {K<:Number,T<:Real,Ba<:AbsBasis}
-    eps = T(set_precision(vec[1]))
-    if K <: Real
-        filtered_vec = K[abs(v) > eps ? v : zero(K) for v in vec]
-    else
-        filtered_vec = vec
-    end
-    return BasisEigenstate{K,T,Ba}(k, k, filtered_vec, ten, basis)
+    return BasisEigenstate(k, k, vec, ten, basis)
 end
 
 """

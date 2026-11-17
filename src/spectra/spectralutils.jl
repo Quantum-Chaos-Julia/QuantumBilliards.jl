@@ -306,7 +306,7 @@ function _vs_solve_window(solver, args::Tuple, k0, Δk; multithreaded::Bool, mer
     @timeit_debug "vs_window_solve" begin
         if solver.eigenvectors
             ki, ti, X = solve_vectors(solver, args..., k0, Δk + merge_tol; multithreaded)
-            si = AbsState[BasisEigenstate(ki[j], k0, X[:, j], ti[j], args[1]) for j in eachindex(ki)]
+            si = BasisEigenstate{eltype(ki),eltype(ti),typeof(args[1])}[BasisEigenstate(ki[j], k0, X[:, j], ti[j], args[1]) for j in eachindex(ki)]
             @debug "VS window solved" maxlog=1 k0 Δk nlevels=length(ki)
             return ki, ti, si
         end
@@ -387,7 +387,7 @@ function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billi
         ks = T[]
         ts = T[]
         control = Bool[]
-        states = AbsState[]
+        states = nothing
         L = CompositeCurve(get_boundary_curves(billiard)).length
         use_taylor = uses_taylor(basis)
         @debug "VS sweep" maxlog=1 k1 k2 nwindows=length(centers) use_taylor live_GiB=Base.gc_live_bytes()/2^30 maxrss_GiB=Sys.maxrss()/2^30
@@ -434,7 +434,7 @@ function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billi
                         append!(ks, ki)
                         append!(ts, ti)
                         append!(control, fill(false, length(ki)))
-                        si === nothing || append!(states, si)
+                        states = si
                     else
                         @timeit_debug "postprocessing" overlap_and_merge!(ks, ts, ki, ti, control, k0 - Δk, centers[i - 1] + widths[i - 1]; tol = merge_tol, states_left = si === nothing ? nothing : states, states_right = si)
                     end
@@ -454,14 +454,14 @@ function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billi
                     append!(ks, ki)
                     append!(ts, ti)
                     append!(control, fill(false, length(ki)))
-                    si === nothing || append!(states, si)
+                    states = si
                 else
                     @timeit_debug "postprocessing" overlap_and_merge!(ks, ts, ki, ti, control, k0 - Δk, centers[i - 1] + widths[i - 1]; tol = merge_tol, states_left = si === nothing ? nothing : states, states_right = si)
                 end
             end
         end
         keep = (k1T .<= real.(ks)) .& (real.(ks) .<= k2T)
-        return @timeit_debug "postprocessing" _finalize_spectrum(billiard, solver, ks[keep], ts[keep], control[keep]; states = solver.eigenvectors ? identity.(states[keep]) : nothing, accept_tol)
+        return @timeit_debug "postprocessing" _finalize_spectrum(billiard, solver, ks[keep], ts[keep], control[keep]; states = solver.eigenvectors ? states[keep] : nothing, accept_tol)
     end
 end
 
@@ -939,7 +939,7 @@ function compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; accept_tol::
                     append!(ks, Complex{T}.(ki[keep])); append!(ts, T.(ti[keep]))
                 end
             end
-            states===nothing && (states = AbsState[])
+            states===nothing && (states = BIMEigenstate{Complex{T},T}[])
             _cork_warn_if_incomplete(solver, billiard, length(ks), k1T, k2T)
             return _finalize_spectrum(billiard, solver, ks, ts, fill(false, length(ks)); states, accept_tol)
         end

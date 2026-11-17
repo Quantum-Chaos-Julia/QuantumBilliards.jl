@@ -1,8 +1,9 @@
 # Unit tests for
-#   src/states/eigenstates.jl   (BasisEigenstate and its two constructors, BIMEigenstate and its constructor,
+#   src/states/eigenstates.jl   (BasisEigenstate and its two constructors (the four-argument one delegates to the
+#                                five-argument one with k_basis = k), BIMEigenstate and its constructor,
 #                                the four compute_eigenstate methods: SweepBasisSolver, AcceleratedBasisSolver,
 #                                SweepBIMSolver, AcceleratedBIMSolver)
-#   src/states/basisstates.jl   (BasisState and its constructor)
+#   src/states/basisstates.jl   (the constructor function BasisState(basis, k, i), which returns a one-hot BasisEigenstate)
 # The enclosing SpectralData (its indexing, filtering, merging) is covered in spectra/spectralutils_tests.jl; here it
 # is only checked that compute_eigenstate wraps exactly one state in a length-1 SpectralData with the right fields.
 #
@@ -19,7 +20,6 @@
 # Helper definitions use the prefix `es_` / `ES_`.
 
 using StaticArrays
-using QuantumBilliards: BasisState
 
 const ES_CIRCLE = CircleBilliard(1.0)
 const ES_PTS = BoundaryPoints([SVector(cos(t), sin(t)) for t in range(0, 2pi, 9)[1:8]])
@@ -120,6 +120,24 @@ end
 end
 
 @testset "BasisEigenstate coefficient filtering" begin
+    @testset "four-argument constructor equals the five-argument one with k_basis = k" begin
+        for (k, vec, ten) in ((2.5, [1.0, 1e-17, -2.0, 0.0, -1e-16], 0.1),
+                              (1.5f0, Float32[1, 5f-9, -2, -1f-8], 0.25f0))
+            a = BasisEigenstate(k, vec, ten, ES_BASIS)
+            b = BasisEigenstate(k, k, vec, ten, ES_BASIS)
+            @test typeof(a) === typeof(b)
+            @test (a.k, a.k_basis, a.vec, a.ten) == (b.k, b.k_basis, b.vec, b.ten)
+            @test a.k_basis === k
+            @test a.basis === b.basis === ES_BASIS
+        end
+    end
+
+    @testset "tiny real coefficients (<= set_precision) are zeroed by the four-argument constructor" begin
+        vec = [1.0, 1e-16, -1e-16, 1e-17, 3e-16]
+        st = BasisEigenstate(2.0, vec, 0.1, ES_BASIS)
+        @test st.vec == [1.0, 0.0, 0.0, 0.0, 3e-16]
+        @test all(iszero, st.vec[2:4])
+    end
     @testset "real coefficients: |v| <= precision is zeroed" begin
         # precision for Float64 is 1e-16 (set_precision); the comparison is strict, so |v| == 1e-16 is zeroed
         vec = [1.0, 1e-17, -1e-17, 1e-16, 2e-16, -3e-16, 0.5]
@@ -153,21 +171,20 @@ end
     end
 end
 
-@testset "BasisState" begin
+@testset "BasisState(basis, k, i) constructor function" begin
     basis = FourierBessel(5)
-    @testset "struct" begin
+    @testset "returns a BasisEigenstate" begin
         st = BasisState(basis, 3.0, 2)
-        @test st isa BasisState{Float64,Float64,typeof(basis)}
+        @test st isa BasisEigenstate{Float64,Float64,typeof(basis)}
         @test st isa QuantumBilliards.AbsState
-        @test fieldnames(BasisState) == (:k, :k_basis, :vec, :idx, :dim, :eps, :basis)
         @test isconcretetype(typeof(st))
+        @test !(BasisState isa DataType)                            # a function, not a type
     end
 
     @testset "unit coefficient vector for every index" begin
         for i in 1:basis.dim
             st = BasisState(basis, 3.0, i)
             @test st.vec == [j == i ? 1.0 : 0.0 for j in 1:basis.dim]
-            @test st.idx == i
             @test count(!iszero, st.vec) == 1
         end
     end
@@ -176,23 +193,24 @@ end
         st = BasisState(basis, 3.0, 4)
         @test st.k == 3.0
         @test st.k_basis == st.k
-        @test st.dim == basis.dim == length(st.vec)
-        @test st.eps == 1e-16
+        @test st.ten == 0.0
+        @test length(st.vec) == basis.dim
         @test st.basis === basis
     end
 
     @testset "Float32 wavenumber" begin
         st = BasisState(basis, 3.0f0, 1)
-        @test st isa BasisState{Float32,Float32,typeof(basis)}
+        @test st isa BasisEigenstate{Float32,Float32,typeof(basis)}
         @test st.vec isa Vector{Float32}
-        @test st.eps === 1f-8
         @test st.k === 3.0f0
+        @test st.k_basis === 3.0f0
+        @test st.ten === 0.0f0
     end
 
     @testset "symmetry-adapted basis" begin
         sbasis = FourierBessel(3; sym_x=-1, sym_y=1)
         st = BasisState(sbasis, 2.0, 3)
-        @test st.dim == 3
+        @test length(st.vec) == 3
         @test st.vec == [0.0, 0.0, 1.0]
         @test st.basis.symmetries === sbasis.symmetries
     end
