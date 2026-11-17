@@ -33,6 +33,7 @@ end
 
 @group "symmetry" begin
     run_file("integration/symmetry/reflection_spectra.jl")
+    run_file("integration/symmetry/reduced_cork_spectra.jl")
     run_file("integration/symmetry/rotation_spectra.jl")
     run_file("integration/symmetry/hole_sector_matrices.jl")
 end
@@ -42,6 +43,7 @@ end
 @group "symmetric holes" begin
     run_file("integration/symmetric_holes/sinai_sector_spectra.jl")
     run_file("integration/symmetric_holes/reduced_ebim_spectra.jl")
+    run_file("integration/symmetric_holes/reduced_cork_spectra.jl")
     run_file("integration/symmetric_holes/reduced_states.jl")
     run_file("integration/symmetric_holes/annular_sector_spectra.jl")
     run_file("integration/symmetric_holes/squarewithinsquare_sector_spectra.jl")

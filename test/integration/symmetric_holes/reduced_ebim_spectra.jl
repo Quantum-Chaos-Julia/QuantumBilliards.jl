@@ -4,8 +4,6 @@
 # accelerated/ebim_spectra.jl, every reference level must be matched by a confident level and every confident level must lie at a
 # reference level. `accept_tol = nothing` and `min_pts = 200` are needed: with the default EBIM tension filter (5e-4) no level is
 # returned (not specific to the reduction, observed also with the unreduced kernel).
-# The reduced CORKSolver is deliberately not tested: reduced CORK fails with "Reached full CORK Krylov dimension" even for a hole-free
-# rectangle (known bug in src/, see the report of the Julia Test Writer; unreduced CORK works).
 
 @requires "integration/symmetric_holes/helpers.jl"
 
