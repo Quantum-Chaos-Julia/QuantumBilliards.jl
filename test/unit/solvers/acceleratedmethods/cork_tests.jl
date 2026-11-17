@@ -41,7 +41,7 @@ using QuantumBilliards: construct_matrices, _bim_numeric_type, TaylorWorkspace, 
                         build_cork_polynomial, evaluate_cork_polynomial, validate_polynomial, cork_validation_references, get_A0, cache_block!,
                         compact_project!, compact_block_qr!, pack!, unpack!, init_cork, compute_tail!, promote_tail!, extend!,
                         ritz_roots, reconstruct_cork_eigenvectors, adaptive_cork, _cork_solve_core, _cork_solve, _cork_kernel_name,
-                        _cork_warn_if_incomplete
+                        _cork_warn_if_incomplete, cork_krylov_dim, CORK_STEPS_PER_DEGREE
 
 # Roots, polynomial strength and orthogonal Q of the synthetic problem; the cache is the token returned by `_taylor_cache`.
 struct ck_Problem <: QuantumBilliards.SweepBIMSolver
@@ -380,6 +380,48 @@ end
     @test Zf + Gf * H1 ≈ Z0f atol = 1e-13                                    # Z0 = projected part + orthogonalized remainder
 end
 
+@testset "cork_krylov_dim: maximum compact Krylov dimension" begin
+    @test CORK_STEPS_PER_DEGREE == 4
+
+    @testset "large N: (N ÷ b) b" begin
+        for (N, p, b, mstep) in ((1000, 12, 10, 50), (500, 6, 5, 10), (1234, 3, 7, 14))
+            @test cork_krylov_dim(N, p, b, mstep) == (N ÷ b) * b
+        end
+    end
+
+    @testset "small N: extended to 4 p b + mstep" begin
+        for (N, p, b, mstep) in ((50, 12, 10, 50), (24, 3, 2, 2), (30, 6, 5, 10), (1, 1, 1, 1))
+            @test cork_krylov_dim(N, p, b, mstep) == CORK_STEPS_PER_DEGREE * p * b + mstep
+            @test cork_krylov_dim(N, p, b, mstep) > (N ÷ b) * b
+        end
+        @test cork_krylov_dim(24, 3, 2, 2) == 26
+        @test cork_krylov_dim(50, 12, 10, 50) == 530
+    end
+
+    @testset "the crossover is at (N ÷ b) b = 4 p b + mstep" begin
+        p, b, mstep = 3, 2, 2
+        Nc = CORK_STEPS_PER_DEGREE * p * b + mstep                            # 26
+        @test cork_krylov_dim(Nc, p, b, mstep) == Nc
+        @test cork_krylov_dim(Nc - 1, p, b, mstep) == Nc                      # (25 ÷ 2) 2 = 24 < 26
+        @test cork_krylov_dim(Nc + 2, p, b, mstep) == Nc + 2
+    end
+
+    @testset "divisible by the block size and monotone in N" begin
+        for (p, b, mstep) in ((3, 2, 2), (12, 10, 50), (4, 4, 8), (5, 3, 6))
+            dims = [cork_krylov_dim(N, p, b, mstep) for N in 1:600]
+            @test all(d -> d % b == 0, dims)
+            @test issorted(dims)
+            @test all(d -> d >= CORK_STEPS_PER_DEGREE * p * b + mstep, dims)
+            @test all(N -> dims[N] >= (N ÷ b) * b, 1:600)
+        end
+    end
+
+    @testset "integer result for any integer types" begin
+        @test cork_krylov_dim(Int32(100), Int16(3), UInt8(2), Int8(2)) === 100
+        @test cork_krylov_dim(24, 3, 2, 2) isa Int
+    end
+end
+
 @testset "init_cork: initial compact block-Arnoldi state" begin
     P = ck_polynomial(3)
 
@@ -415,6 +457,43 @@ end
     @testset "the start is deterministic" begin
         S1 = init_cork(P.B, 3, CK_N; block_size=2); S2 = init_cork(P.B, 3, CK_N; block_size=2)
         @test S1.U == S2.U && S1.G == S2.G
+    end
+end
+
+@testset "init_cork: explicit mdim" begin
+    P = ck_polynomial(3)
+
+    @testset "Hessenberg and basis sizes follow mdim" begin
+        for (b, mdim) in ((2, 40), (2, 26), (2, 12), (1, 30), (4, 28))
+            S = init_cork(P.B, 3, CK_N; block_size=b, mdim=mdim)
+            @test size(S.Hb) == (mdim + b, mdim)
+            @test size(S.G) == (CK_N, 3, mdim + b)
+            @test size(S.H1) == (mdim + b, b) && size(S.H2) == (mdim + b, b)
+            @test S.b == b && S.n == b && S.N == CK_N && S.rmax == CK_N
+        end
+    end
+
+    @testset "the default is (N ÷ b) b" begin
+        for b in (1, 2, 5)
+            S = init_cork(P.B, 3, CK_N; block_size=b)
+            @test size(S.Hb, 2) == (CK_N ÷ b) * b
+            @test size(init_cork(P.B, 3, CK_N; block_size=b, mdim=(CK_N ÷ b) * b).Hb) == size(S.Hb)
+        end
+    end
+
+    @testset "mdim must be divisible by the block size" begin
+        @test_throws "must be divisible by block size" init_cork(P.B, 3, CK_N; block_size=2, mdim=25)
+        @test_throws "mdim=7 must be divisible by block size b=2" init_cork(P.B, 3, CK_N; block_size=2, mdim=7)
+        @test_throws "must be divisible by block size" init_cork(P.B, 3, CK_N; block_size=4, mdim=26)
+    end
+
+    @testset "mdim above N: the state can be extended past N" begin
+        mdim = CK_N + 8
+        S = init_cork(P.B, 3, CK_N; block_size=2, mdim=mdim)
+        F = ck_factor(P)
+        extend!(S, P.B, F, CK_N)
+        @test S.n == CK_N
+        @test_throws "exceeds available dimension" extend!(S, P.B, F, mdim + 2)
     end
 end
 
@@ -626,6 +705,55 @@ end
         @test m > 8                                                          # not accepted as an empty spectrum at m = 6, 8
         @test [x[1] for x in ks] ≈ CK_INSIDE atol = 1e-6
         @test length(requested) == 4 && edge_good == (true, true)
+    end
+
+    @testset "mdim above the default caps the Krylov dimension and is accepted" begin
+        mdim = CK_N + 8                                                      # 32 > N: the compact space of dimension r p allows it
+        S, ks, _, _, _, _, _, m = adaptive_cork(P.B, F, 3, CK_N; kw..., mdim=mdim)
+        @test size(S.Hb) == (mdim + 2, mdim)
+        @test [x[1] for x in ks] ≈ CK_INSIDE atol = 1e-6
+        @test m <= CK_N                                                      # unchanged result: converged before reaching N
+        @test_throws "Reached full CORK Krylov dimension m=$(mdim) for matrix size N=$(CK_N)" adaptive_cork(P.B, F, 3, CK_N; kw..., mdim=mdim, res_tol=0.0)
+    end
+
+    @testset "mdim must be divisible by the block size" begin
+        @test_throws "must be divisible by block size" adaptive_cork(P.B, F, 3, CK_N; kw..., mdim=25)
+    end
+
+    @testset "a Krylov dimension counts as stable only after a converged previous evaluation" begin
+        # Window [0.8, 1.0] of the synthetic problem, block size 1, mstart = 6, mstep = 1, res_tol = 1e-6: the disk holds an
+        # unconverged Ritz value up to m = 11 (observed) and is converged from m = 12 on. With stable_checks = 1 the first accepted
+        # dimension needs a converged disk at m and at m - mstep, so it cannot be the first converged dimension m = 12.
+        k0, Δ = 0.9, 0.1
+        Δpoly = Δ * (1 + CK_GUARD)
+        Pw = ck_polynomial(3; k0, Δ=Δpoly); Fw = ck_factor(Pw)
+        kww = (k0=k0, Δ=Δ, Δpoly=Δpoly, block_size=1, mstart=6, mstep=1, stable_checks=1, res_tol=1e-6)
+        disk_max(m) = begin
+            S = init_cork(Pw.B, 3, CK_N; block_size=1)
+            extend!(S, Pw.B, Fw, m)
+            maximum(ritz_roots(S, k0, Δpoly, m)[3]; init=0.0)
+        end
+        @test disk_max(11) > kww.res_tol && disk_max(12) <= kww.res_tol      # the first converged evaluation is m = 12
+        _, ks, _, _, _, _, _, m = adaptive_cork(Pw.B, Fw, 3, CK_N; kww...)
+        @test m > kww.mstart
+        @test disk_max(m) <= kww.res_tol
+        @test disk_max(m - kww.mstep) <= kww.res_tol                         # previous evaluation was converged as well
+        @test m >= 13
+        @test all(x -> abs(x[1] - 1.0) < 1e-6 || abs(x[1] - 0.8) < 1e-6, ks) && !isempty(ks)
+    end
+
+    @testset "the accepted dimension always follows a converged evaluation (stable_checks = 1)" begin
+        for (bs, ms, mst) in ((2, 6, 2), (2, 8, 2), (1, 4, 1), (1, 8, 2))
+            kwb = (; kw..., block_size=bs, mstart=ms, mstep=mst)
+            _, ks, _, _, _, _, _, m = adaptive_cork(P.B, F, 3, CK_N; kwb...)
+            @test m > ms
+            for mm in (m, m - mst)
+                S = init_cork(P.B, 3, CK_N; block_size=bs)
+                extend!(S, P.B, F, mm)
+                @test maximum(ritz_roots(S, CK_K0, CK_DPOLY, mm)[3]; init=0.0) <= kwb.res_tol
+            end
+            bs == 2 && @test [x[1] for x in ks] ≈ CK_INSIDE atol = 1e-6     # block size 1 misses the second copy of the double root
+        end
     end
 end
 

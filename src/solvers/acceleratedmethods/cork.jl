@@ -756,7 +756,29 @@ function block_apply!(S::CORKState, B::Matrix{ComplexF64}, F, Gin)
 end
 
 """
-    init_cork(B::Matrix{ComplexF64}, p::Int, N::Int; block_size::Int=10) -> CORKState
+Number of block-Arnoldi steps per polynomial degree that a CORK solve must be able to take, whatever the matrix size.
+
+Measured on symmetry-reduced kernels (`p = 8, 12, 16, 24`, block sizes `1, 2, 5, 10`): the Ritz values of the bulk of the
+linearization leave the window disk after about `p + 2` steps, and a level close to the window edge (`|t| ≈ 0.9`) appears
+in the disk and converges after about `2.5p` to `3p` steps, independent of the block size.
+"""
+const CORK_STEPS_PER_DEGREE = 4
+
+"""
+    cork_krylov_dim(N::Integer, p::Integer, block_size::Integer, mstep::Integer) -> Int
+
+Maximum compact Krylov dimension used by [`CORKSolver`](@ref),
+
+    mdim = max(floor(N/block_size)block_size, CORK_STEPS_PER_DEGREE*p*block_size + mstep).
+
+For large `N` it is the largest block-compatible dimension. A symmetry-reduced matrix is too small for
+`CORK_STEPS_PER_DEGREE * p` block steps, so the dimension is extended to that many steps plus one increment
+`mstep`; the physical rank stays bounded by `N`.
+"""
+cork_krylov_dim(N::Integer, p::Integer, block_size::Integer, mstep::Integer)::Int = max((N ÷ block_size) * block_size, CORK_STEPS_PER_DEGREE * p * block_size + mstep)
+
+"""
+    init_cork(B::Matrix{ComplexF64}, p::Int, N::Int; block_size::Int=10, mdim::Int=floor(N/block_size)block_size) -> CORKState
 
 Initialize the compact block-CORK state.
 
@@ -769,22 +791,23 @@ are cached. A seeded random compact block is then generated in the initial
 physical basis, normalized by Householder QR, and stored as the first `b`
 compact Arnoldi vectors.
 
-The maximum block-compatible Krylov dimension is mdim = floor(N/block_size)block_size,
-and the physical rank is allowed to grow up to `N`.
+The maximum Krylov dimension is `mdim`, a multiple of `block_size` (default
+floor(N/block_size)block_size), and the physical rank is allowed to grow up to `N`.
 
 ## Arguments
 - `B::Matrix{ComplexF64}`: Vertically stacked Chebyshev coefficients `[B₀;...;Bₚ]`.
 - `p::Int`: Chebyshev polynomial degree.
 - `N::Int`: Physical Fredholm matrix dimension.
 - `block_size::Int`: Block-Arnoldi block size.
+- `mdim::Int`: Maximum compact Krylov dimension, divisible by `block_size`.
 
 ## Returns
 - `CORKState`: Initialized  block-CORK state with active Krylov dimension `block_size` and initial physical rank `p`.
 """
-function init_cork(B::Matrix{ComplexF64}, p::Int, N::Int; block_size::Int=10)::CORKState
+function init_cork(B::Matrix{ComplexF64}, p::Int, N::Int; block_size::Int=10, mdim::Int=(N ÷ block_size) * block_size)::CORKState
     b = block_size
     p <= N || error("Polynomial degree p=$p exceeds physical matrix dimension N=$N")
-    mdim = (N ÷ b) * b
+    mdim % b == 0 || error("mdim=$mdim must be divisible by block size b=$b")
     mdim >= b || error("Matrix dimension N=$N is smaller than block size b=$b")
     p * p >= b || error("Initial compact space has dimension p²=$(p * p), smaller than block size b=$b")
     rmax = N
@@ -998,7 +1021,7 @@ end
 ################################################################################
 
 """
-    adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ::Float64, Δpoly::Float64, block_size::Int=10, mstart::Int=200, mstep::Int=100, stable_checks::Int=2, imag_tol::Float64=1e-7, edge_tol::Float64=1e-8, res_tol::Float64=1e-8, stable_tol::Float64=1e-8, imag_search_tol::Float64=1e-4, eigenvectors::Bool=false)
+    adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ::Float64, Δpoly::Float64, block_size::Int=10, mdim::Int=floor(N/block_size)block_size, mstart::Int=200, mstep::Int=100, stable_checks::Int=2, imag_tol::Float64=1e-7, edge_tol::Float64=1e-8, res_tol::Float64=1e-8, stable_tol::Float64=1e-8, imag_search_tol::Float64=1e-4, eigenvectors::Bool=false)
 
 Grow one  block-CORK factorization until every Ritz value that can belong to
 the window has converged and the accepted spectrum in the requested interval
@@ -1013,11 +1036,15 @@ Let `D` be the set of Ritz values with `|t|≤1+edge_tol`, with no restriction o
 `Im(k)`. The Krylov dimension is accepted when every element of `D` has a
 projected CORK residual indicator `≤ res_tol` and the accepted spectrum has
 remained unchanged to within `stable_tol` for `stable_checks` consecutive
-Krylov dimensions. Accepted roots are the elements of `D` in the requested
+Krylov dimensions, each of which also had every element of `D` converged. The
+last condition matters because the count of unconverged Ritz values in `D` drops
+to zero transiently once the Ritz values of the bulk of the linearization have left
+the disk (about `p+2` block steps) and before a level near the window edge has
+entered it (about `3p` steps); a single such dimension must not be accepted. Accepted roots are the elements of `D` in the requested
 physical interval with `|Im(k)|≤imag_tol`. An empty accepted set is a valid
 result once `D` has converged, so no estimate of the number of levels is
 needed. The Krylov dimension grows in increments of `mstep`
-up to the largest block-compatible dimension
+up to `mdim`, by default the largest block-compatible dimension
 
     mdim = floor(N/block_size)block_size.
 
@@ -1030,6 +1057,7 @@ up to the largest block-compatible dimension
 - `Δ::Float64`: Half-width of the requested physical interval.
 - `Δpoly::Float64`: Guarded polynomial half-width.
 - `block_size::Int`: Block-Arnoldi block size.
+- `mdim::Int`: Maximum compact Krylov dimension, divisible by `block_size`.
 - `mstart::Int`: Initial compact Krylov dimension.
 - `mstep::Int`: Krylov-dimension increment between convergence tests.
 - `stable_checks::Int`: Number of consecutive stable spectra required.
@@ -1045,10 +1073,10 @@ up to the largest block-compatible dimension
   requested Ritz roots, all guarded Ritz roots, requested edge roots, edge
   convergence flags, and final compact Krylov dimension.
 """
-function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ::Float64, Δpoly::Float64, block_size::Int = 10, mstart::Int = 200, mstep::Int = 100, stable_checks::Int = 2, imag_tol::Float64 = 1e-7, edge_tol::Float64 = 1e-8, res_tol::Float64 = 1e-8, stable_tol::Float64 = 1e-8, imag_search_tol::Float64 = 1e-4, eigenvectors::Bool = false)
+function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ::Float64, Δpoly::Float64, block_size::Int = 10, mdim::Int = (N ÷ block_size) * block_size, mstart::Int = 200, mstep::Int = 100, stable_checks::Int = 2, imag_tol::Float64 = 1e-7, edge_tol::Float64 = 1e-8, res_tol::Float64 = 1e-8, stable_tol::Float64 = 1e-8, imag_search_tol::Float64 = 1e-4, eigenvectors::Bool = false)
     mstart % block_size == 0 || error("mstart must be divisible by block_size")
     mstep % block_size == 0 || error("mstep must be divisible by block_size")
-    S = init_cork(B, p, N; block_size); mdim = size(S.Hb, 2); m = min(mstart, mdim)
+    S = init_cork(B, p, N; block_size, mdim); mdim = size(S.Hb, 2); m = min(mstart, mdim)
     kmin = k0 - Δ; kmax = k0 + Δ; prev = Tuple{Float64,Float64,Float64}[]; have_prev = false; nstable = 0
     @debug "CORK adaptive iteration" maxlog=1 kmin kmax mstart mstep mdim
     while true
@@ -1088,7 +1116,7 @@ function adaptive_cork(B::Matrix{ComplexF64}, F, p::Int, N::Int; k0::Float64, Δ
             max_im = maximum(x -> abs(x[2]), requested; init = 0.0)
             error("Reached full CORK Krylov dimension m=$mdim for matrix size N=$N without a stable requested spectrum ($nunconverged of $(length(diskρ)) Ritz values inside the window disk have a residual above res_tol = $res_tol (largest $maxρ), $(length(requested)) Ritz roots in the window, $(length(phys)) accepted, max |Im k| = $max_im vs imag_tol = $imag_tol). The boundary discretization is too coarse for the window (increase `ppw`/`min_pts` of the kernel; roots shifted off the real axis by more than `imag_tol` are rejected) or the window holds too many levels (narrow it or lower `Rmax`/`nlevels`).")
         end
-        prev = copy(ks); have_prev = true; m = min(m + mstep, mdim)
+        prev = copy(ks); have_prev = disk_ok; m = min(m + mstep, mdim)
     end
 end
 
@@ -1129,8 +1157,12 @@ the guarded interval
 
 CORK applies a compact block-Arnoldi iteration to the inverse Chebyshev
 linearization at `t=0`, reusing a single LU factorization of `P(0)`. The
-Krylov dimension is increased adaptively until the accepted spectrum is
-stable and the requested interval edges contain converged Ritz roots.
+Krylov dimension is increased adaptively until every Ritz value inside the
+window disk has converged and the accepted spectrum is stable. A spectrum, an
+empty one included, needs two consecutive converged Krylov dimensions, because a
+level near the window edge appears among the Ritz values only after about `3p`
+steps. The dimension limit is the matrix size `N`, extended by
+[`cork_krylov_dim`](@ref) for the small matrices of symmetry-reduced kernels.
 
 For multi-window spectrum calculations, `nlevels` controls the target number
 of physical levels per Weyl window and `Rmax` limits the requested half-width
@@ -1212,7 +1244,7 @@ function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=t
                 F = lu(A0)
             end
         end
-        S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = adaptive_cork(P.B, F, p, P.N; k0=k0f, Δ=Δ, Δpoly=Δpoly, block_size=solver.block_size, mstart=solver.mstart, mstep=solver.mstep, stable_checks=solver.stable_checks, imag_tol=solver.imag_tol, edge_tol=solver.edge_tol, res_tol=solver.res_tol, stable_tol=solver.stable_tol, imag_search_tol=solver.imag_search_tol, eigenvectors)
+        S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = adaptive_cork(P.B, F, p, P.N; k0=k0f, Δ=Δ, Δpoly=Δpoly, block_size=solver.block_size, mdim=cork_krylov_dim(P.N, p, solver.block_size, solver.mstep), mstart=solver.mstart, mstep=solver.mstep, stable_checks=solver.stable_checks, imag_tol=solver.imag_tol, edge_tol=solver.edge_tol, res_tol=solver.res_tol, stable_tol=solver.stable_tol, imag_search_tol=solver.imag_search_tol, eigenvectors)
         @debug "CORK solve finished" maxlog=1 krylov_dim=mfinal rank=S.r napply=S.napply nroots=length(ks)
         (P, S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal)
     end

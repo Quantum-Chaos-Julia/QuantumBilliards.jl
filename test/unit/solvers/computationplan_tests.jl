@@ -759,7 +759,8 @@ using QuantumBilliards: estimate_memory, total_bytes, _working_bytes, _persisten
             w = _working_bytes(s, 100.0, 50.0)
             @test w isa Float64
             @test w > 0
-            @test _working_bytes(s, 200.0, 50.0) > w        # grows with Nf
+            # grows with Nf; compared at large Nf so that the Nf-independent CORK Krylov stage (the peak at small M) is not the maximum
+            @test _working_bytes(s, 2000.0, 50.0) > _working_bytes(s, 1000.0, 50.0)
             @test _working_bytes(s, 100.0, 100.0) > w       # grows with M
             @test _working_bytes(s, 100, 50) == w           # integer sizes accepted
         end
@@ -925,7 +926,7 @@ end
 end
 
 # Per-solver memory breakdown (src/solvers/memoryestimates.jl) and its use in the ComputationPlan memory section.
-using QuantumBilliards: _memory_stages, _memory_retained, _stage_peak, _format_bytes, _plan_memory_items
+using QuantumBilliards: _memory_stages, _memory_retained, _stage_peak, _format_bytes, _plan_memory_items, _CPLX_BYTES, cork_krylov_dim
 
 cp_stage_labels(stages) = first.(stages)
 cp_valid_items(items) = all(!isempty(first(x)) && isfinite(last(x)) && last(x) > 0 for x in items)
@@ -1041,6 +1042,24 @@ cp_valid_items(items) = all(!isempty(first(x)) && isfinite(last(x)) && last(x) >
         @test any(startswith("Krylov solve"), labels)
         @test isempty(_memory_retained(with_params(cork; eigenvectors=false), 3, ns, Nf, M))
         @test !isempty(_memory_retained(with_params(cork; eigenvectors=true), 3, ns, Nf, M))
+    end
+
+    @testset "CORK Krylov stage uses the extended Krylov dimension" begin
+        krylov(s, Nf, M) = last(only(filter(x -> startswith(first(x), "Krylov solve"), _memory_stages(s, Nf, M))))
+        for s in (cork, with_params(cork; p=4, block_size=4, mstep=8))
+            p = Float64(max(s.p, ceil(Int, sqrt(s.block_size))))
+            for M in (50.0, 80.0, 6000.0)
+                mdim = Float64(cork_krylov_dim(round(Int, M), s.p, s.block_size, s.mstep))
+                @test krylov(s, Nf, M) == _CPLX_BYTES * ((2p + 6) * M^2 + p * M * mdim)
+                @test krylov(s, 2Nf, M) == krylov(s, Nf, M)                 # independent of Nf
+            end
+            # small M: the dimension is extended beyond M; large M: it is (M ÷ b) b
+            @test cork_krylov_dim(50, s.p, s.block_size, s.mstep) > 50
+            @test cork_krylov_dim(6000, s.p, s.block_size, s.mstep) == (6000 ÷ s.block_size) * s.block_size
+        end
+        # at small M the Krylov stage is the peak for a moderate Nf, and the peak equals the working set
+        @test _stage_peak(_memory_stages(cork, 100.0, 50.0)) == krylov(cork, 100.0, 50.0)
+        @test _working_bytes(cork, 100.0, 50.0) == krylov(cork, 100.0, 50.0)
     end
 
     @testset "ExpandedBIMSolver" begin

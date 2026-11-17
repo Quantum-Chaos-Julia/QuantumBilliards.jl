@@ -103,9 +103,10 @@ end
 
 function _memory_stages(solver::CORKSolver, Nf::Real, M::Real; nw::Integer=1)
     p = Float64(max(solver.p, ceil(Int, sqrt(solver.block_size))))
+    mdim = Float64(cork_krylov_dim(round(Int, M), solver.p, solver.block_size, solver.mstep))
     return Pair{String,Float64}[
         "polynomial tuning (5 references, 2 candidates, geometry)" => _CPLX_BYTES * (2p + 8) * M^2 + _geometry_bytes(Nf),
-        "Krylov solve (B, W, G, Hessenberg, P(0) + LU, U)" => _CPLX_BYTES * (3p + 6) * M^2,
+        "Krylov solve (B, W, G, Hessenberg, P(0) + LU, U)" => _CPLX_BYTES * ((2p + 6) * M^2 + p * M * mdim),
     ]
 end
 
