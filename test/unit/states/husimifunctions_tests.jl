@@ -2,7 +2,11 @@
 #   src/states/husimifunctions.jl   (antisym_vec, _normalize_husimi!, _is_global_phase_real, _husimi_uniform_arclength_grid,
 #                                    _husimi_symmetric_window, the two quadratures _husimi_uniform_arclength and the general
 #                                    husimi_function(k, s, ds, u, L[, qs, ps]), the BoundaryPoints form, the eigenstate forms
-#                                    for basis states and BIM states, the batched forms and the SpectralData wrappers)
+#                                    for basis states and BIM states, the batched forms, the SpectralData wrappers, the
+#                                    outer-loop selection of husimi_function(boundary_function(...)) through bf.outer /
+#                                    _outer_range, and _collect_functions)
+# The state forms are husimi_function(boundary_function(state, ...); c, w, full_p). _foreign_kwargs and _apply_state (also
+# defined in this source file) are tested in wavefunctions_tests.jl next to _drop_kwargs.
 # The Poincare-Husimi amplitude is h(q, p) = sum_j u_j exp(-k (s_j - q)^2 / 2) exp(-i k p (s_j - q)) ds_j and the returned
 # density is H = |h|^2 / sum |h|^2. This file has no `fundamental_only` or `inside_only` keyword to test: the
 # state-based forms always use the boundary returned by boundary_function (unfolded when the basis has reflection symmetries).
@@ -23,7 +27,8 @@
 # not affect the Husimi density of a single-curve boundary, since H is normalised to sum 1.
 # Helper definitions use the prefix `hu_` / `HU_`.
 #
-# FINDINGS (no source change): the batched basis form drops states that throw, silently. This is current documented/observed
+# FINDINGS (no source change): the batched forms drop states that throw, silently (a @debug message only). This is current
+# documented/observed
 # behaviour and is pinned below. Single-state forms return a HusimiFunction (iterating as (H, qs, ps)), batched and
 # SpectralData forms return a Vector{HusimiFunction}; every object carries the k of its state (or the numeric k argument).
 # The BoundaryFunction forms husimi_function(bf[, qs, ps]) are checked against the numeric forms on the stored arrays and
@@ -35,7 +40,7 @@ using StaticArrays
 using LinearAlgebra: norm, dot
 using SpecialFunctions: besselj
 using QuantumBilliards: antisym_vec, _normalize_husimi!, _is_global_phase_real, _husimi_uniform_arclength_grid,
-                        _husimi_symmetric_window, _husimi_uniform_arclength, _basis_boundary_function_pts
+                        _husimi_symmetric_window, _husimi_uniform_arclength, _outer_range, _collect_functions
 
 const HU_J01 = 2.404825557695773       # first zero of J0
 const HU_J02 = 5.520078110286311       # second zero of J0
@@ -499,8 +504,8 @@ end
     end
 
     @testset "equals the Husimi function of its own boundary data" begin
-        u, pts, _ = _basis_boundary_function_pts(st, HU_CIRCLE)
-        H2, q2, p2 = husimi_function(k, pts, u)
+        bf = boundary_function(st, HU_CIRCLE)
+        H2, q2, p2 = husimi_function(k, bf.s, bf.ds, bf.u, sum(bf.ds))
         @test H ≈ H2 rtol = 1e-8
         @test q2 ≈ qs && p2 ≈ ps
     end
@@ -537,8 +542,8 @@ end
     H, qs, ps = husimi_function(st, lim)
     hu_check_density(H, qs, ps)
     @test H ≈ reverse(H; dims=2) atol = 1e-10 * maximum(H)            # real u: p -> -p symmetry
-    u, pts, _ = _basis_boundary_function_pts(st, lim)
-    H2, _, _ = husimi_function(st.k, pts, u; c=10.0)
+    bf = boundary_function(st, lim)
+    H2, _, _ = husimi_function(st.k, bf.s, bf.ds, bf.u, sum(bf.ds); c=10.0)
     @test size(H2) == size(H)
     @test qs[end] < sum(crv.length for crv in full_boundary(lim))     # grid covers one period of the full boundary
 end
@@ -667,36 +672,57 @@ function hu_annulus_composite_pts(k)
     return annulus, solver, evaluate_points(solver, annulus, k)
 end
 
-@testset "_husimi_boundary_data" begin
-    @testset "billiard without holes: the full boundary" begin
+# Outer-loop selection of husimi_function(boundary_function(state, billiard, ...)): the BoundaryFunction carries the outer
+# nodes (bf.outer, from _outer_range of the points) and the outer perimeter bf.L, and the Husimi function uses only those.
+@testset "husimi_function(boundary_function(...)) outer-loop selection" begin
+    @testset "_outer_range: every node without composite bookkeeping, the outer block with it" begin
+        s, ds, _ = hu_uniform_grid(Float64, 64)
+        @test _outer_range(hu_pts(s, ds)) == 1:64
+        _, _, pts = hu_annulus_composite_pts(3.0)
+        @test _outer_range(pts) == 1:32                                   # the 32 outer nodes, 24 hole nodes follow
+    end
+
+    @testset "billiard without holes: the full boundary, perimeter of the full billiard" begin
         s, ds, _ = hu_uniform_grid(Float64, 64)
         pts = hu_pts(s, ds)
         u = collect(1.0:64.0)
-        s2, ds2, u2, L = QuantumBilliards._husimi_boundary_data(pts, u, HU_CIRCLE)
-        @test s2 === pts.s && ds2 === pts.ds && u2 === u
-        @test L ≈ 2π
+        bf = boundary_function(hu_bim_state(HU_J02, u, pts), HU_CIRCLE)
+        @test bf.outer == 1:64 && bf.u === u && bf.s === pts.s && bf.ds === pts.ds
+        @test bf.L ≈ 2π
         # the perimeter is that of the full boundary, not of the fundamental domain
         rect = RectangleBilliard(1.0, 0.6)
         prect = hu_pts(collect(0.0:3.0), fill(1.0, 4))
-        @test QuantumBilliards._husimi_boundary_data(prect, ones(4), rect)[4] ≈ 2 * (2 * 1.0 + 2 * 0.6)
+        @test boundary_function(hu_bim_state(HU_J02, ones(4), prect), rect).L ≈ 2 * (2 * 1.0 + 2 * 0.6)
     end
 
     @testset "billiard with a hole: the outer block only" begin
-        annulus, _, pts = hu_annulus_composite_pts(3.0)
+        annulus, solver, pts = hu_annulus_composite_pts(3.0)
         u = collect(1.0:length(pts))
-        s, ds, uo, L = QuantumBilliards._husimi_boundary_data(pts, u, annulus)
-        @test length(s) == length(ds) == length(uo) == 32                 # the 32 outer nodes
-        @test s == pts.s[1:32] && ds == pts.ds[1:32] && uo == u[1:32]
-        @test L ≈ 2π                                                      # outer perimeter, not 2 pi (1 + 0.3)
-        @test sum(ds) ≈ L
-        @test all(<(L), s) && issorted(s)
-        @test all(x -> hypot(x[1], x[2]) ≈ 1.0, pts.xy[1:32])              # no hole node in the kept block
+        st = hu_bim_state(3.0, u, pts)
+        bf = boundary_function(st, annulus, solver)
+        @test length(bf.u) == length(pts)                                 # u and s cover every loop
+        @test bf.outer == 1:32
+        @test bf.L ≈ 2π                                                   # outer perimeter, not 2 pi (1 + 0.3)
+        @test sum(bf.ds[bf.outer]) ≈ bf.L
+        @test all(<(bf.L), bf.s[bf.outer]) && issorted(bf.s[bf.outer])
+        @test all(x -> hypot(x[1], x[2]) ≈ 1.0, pts.xy[bf.outer])         # no hole node in the outer block
+        # the Husimi function is that of the outer block alone
+        hf = husimi_function(bf)
+        ref = husimi_function(bf.k, bf.s[1:32], bf.ds[1:32], u[1:32], bf.L)
+        @test hf.H == ref.H && hf.qs == ref.qs && hf.ps == ref.ps
     end
 
-    @testset "billiard with a hole: boundary points without composite bookkeeping are refused" begin
+    @testset "billiard with a hole, points without composite bookkeeping: no error, every node is the outer loop" begin
+        # behaviour change of the streamlined state API: this configuration used to raise an ArgumentError naming
+        # CompositeBIMSolver; the BoundaryFunction now treats all nodes as the outer loop
         s, ds, _ = hu_uniform_grid(Float64, 64)
-        @test_throws ArgumentError QuantumBilliards._husimi_boundary_data(hu_pts(s, ds), ones(64), AnnularBilliard(0.3, 0.1))
-        @test_throws "CompositeBIMSolver" QuantumBilliards._husimi_boundary_data(hu_pts(s, ds), ones(64), AnnularBilliard(0.3, 0.1))
+        annulus = AnnularBilliard(0.3, 0.1)
+        st = hu_bim_state(3.0, ones(64), hu_pts(s, ds))
+        bf = boundary_function(st, annulus)
+        @test bf.outer == 1:64 && bf.L ≈ 2π
+        hf = @test_nowarn husimi_function(bf)
+        @test hf isa HusimiFunction{Float64}
+        @test sum(hf.H) ≈ 1 rtol = 1e-10
     end
 end
 
@@ -784,4 +810,46 @@ end
     bdata = SpectralData(HU_CIRCLE, hu_SweepStub(), [b1.k, b2.k], [1e-9, 1e-9], [false, false]; states=[b1, b2])
     @test husimi_function(bdata, 2).k === b2.k
     @test [h.k for h in husimi_function(bdata)] == [b1.k, b2.k]
+end
+
+struct hu_KState
+    k::Float64
+end
+
+@testset "_collect_functions" begin
+    f(st) = st.k > 0 ? 2 * st.k : throw(DomainError(st.k, "non-positive k"))
+    states = [hu_KState(1.0), hu_KState(-2.0), hu_KState(3.0), hu_KState(-4.0), hu_KState(5.0)]
+
+    @testset "all states succeed: Vector{F} in the order of the states" begin
+        ks = [hu_KState(float(i)) for i in 1:20]
+        out = _collect_functions(f, Float64, ks)
+        @test out isa Vector{Float64}
+        @test out == [2.0 * i for i in 1:20]
+    end
+
+    @testset "a throwing state is dropped, the order of the others is kept" begin
+        @test _collect_functions(f, Float64, states) == [2.0, 6.0, 10.0]
+        @test _collect_functions(f, Float64, states) isa Vector{Float64}
+    end
+
+    @testset "the failure is logged with @debug at the state's k, nothing at the default level" begin
+        @test_logs (:debug, "Float64 fail at k=-2.0") (:debug, "Float64 fail at k=-4.0") min_level=Logging.Debug _collect_functions(f, Float64, states)
+        @test_logs _collect_functions(f, Float64, states)
+    end
+
+    @testset "multithreaded = true and false give the same result" begin
+        ks = [hu_KState(isodd(i) ? float(i) : -float(i)) for i in 1:40]
+        serial = _collect_functions(f, Float64, ks; multithreaded=false)
+        threaded = _collect_functions(f, Float64, ks; multithreaded=true)
+        @test serial == threaded == [2.0 * i for i in 1:2:39]
+    end
+
+    @testset "every state fails: empty vector of the requested element type" begin
+        out = _collect_functions(f, Float64, [hu_KState(-1.0), hu_KState(-2.0)])
+        @test isempty(out) && out isa Vector{Float64}
+    end
+
+    @testset "the element type F is the container type" begin
+        @test _collect_functions(st -> Float32(st.k), Float32, [hu_KState(1.0)]) isa Vector{Float32}
+    end
 end

@@ -382,18 +382,6 @@ end
 # EIGENSTATE API
 ################################################################################
 
-# Boundary arclength data `(s, ds, u, L)` on which the Husimi function is built.
-# Billiards without holes use the complete boundary. For a billiard with holes
-# the outer boundary component is the first block of the composite
-# discretization (component index 1 in `pts.w_dm`), with the outer perimeter as `L`.
-function _husimi_boundary_data(pts::BoundaryPoints{T}, u::AbstractVector, billiard::AbsBilliard) where {T<:Real}
-    genus(billiard) == 0 && return pts.s, pts.ds, u, T(sum(crv.length for crv in full_boundary(billiard)))
-    length(pts.w_dm) == length(pts.xy) || throw(ArgumentError("Husimi function of a billiard with holes requires boundary points from a CompositeBIMSolver (missing component bookkeeping)"))
-    rng = 1:count(==(one(T)), pts.w_dm)
-    L = T(sum(crv.length for crv in first(full_boundary_components(billiard).curves)))
-    return pts.s[rng], pts.ds[rng], u[rng], L
-end
-
 """
     husimi_function(state::BIMEigenstate, billiard::AbsBilliard, solver::AbsBIMSolver; c::Real=10.0, w::Real=7.0, full_p::Bool=false)
 
@@ -421,23 +409,17 @@ the hole loops are excluded.
 ## Returns
 * [`HusimiFunction`](@ref) with `k = state.k`; it iterates as `(H, qs, ps)`.
 """
-function husimi_function(state::BIMEigenstate{K,T}, billiard::AbsBilliard, solver::AbsBIMSolver; c::Real=10.0, w::Real=7.0, full_p::Bool=false) where {K,T<:Real}
-    k=T(real(state.k))
-    u=state.u
-    if u===nothing
-        _,_,u,_=solve_state(_bim_kernel(solver),state.pts,k,billiard)
-    end
-    s,ds,uq,L=_husimi_boundary_data(state.pts,u,billiard)
-    return husimi_function(k,s,ds,uq,L;c=c,w=w,full_p=full_p)
+function husimi_function(state::BIMEigenstate, billiard::AbsBilliard, solver::AbsBIMSolver; c::Real=10.0, w::Real=7.0, full_p::Bool=false)
+    return husimi_function(boundary_function(state, billiard, solver); c, w, full_p)
 end
 
 """
-    husimi_function(state::S, billiard::AbsBilliard; ppw::Real=5.0, c::Real=10.0, w::Real=7.0, multithreaded::Bool=true, full_p::Bool=false) where {S<:AbsState}
+    husimi_function(state::BasisEigenstate, billiard::AbsBilliard; ppw::Real=5.0, c::Real=10.0, w::Real=7.0, multithreaded::Bool=true, full_p::Bool=false)
 
 Compute the Poincare-Husimi function of a basis eigenstate.
 
 ## Arguments
-* `state::S`: Eigenstate represented in a basis.
+* `state::BasisEigenstate`: Eigenstate represented in a basis.
 * `billiard::AbsBilliard`: Billiard the state was computed on.
 
 ## Keyword Arguments
@@ -450,12 +432,8 @@ Compute the Poincare-Husimi function of a basis eigenstate.
 ## Returns
 * [`HusimiFunction`](@ref) with `k = state.k`; it iterates as `(H, qs, ps)`.
 """
-function husimi_function(state::S, billiard::AbsBilliard; ppw::Real=5.0, c::Real=10.0, w::Real=7.0, multithreaded::Bool=true, full_p::Bool=false) where {S<:AbsState}
-    u,pts,_ = _basis_boundary_function_pts(state, billiard;ppw=ppw,multithreaded=multithreaded)
-    T = eltype(pts.ds)
-    k = T(real(state.k))
-    L = T(sum(crv.length for crv in full_boundary(billiard)))
-    return husimi_function(k,pts.s,pts.ds,u,L;c=c,w=w,full_p=full_p)
+function husimi_function(state::BasisEigenstate, billiard::AbsBilliard; ppw::Real=5.0, c::Real=10.0, w::Real=7.0, multithreaded::Bool=true, full_p::Bool=false)
+    return husimi_function(boundary_function(state, billiard; ppw, multithreaded); c, w, full_p)
 end
 
 ################################################################################
@@ -482,33 +460,19 @@ Each state uses its natural automatically generated phase-space grid.
 ## Returns
 * `Vector{HusimiFunction}`: One [`HusimiFunction`](@ref) per state; states whose computation fails are dropped (logged with `@debug`), so the result may be shorter than `states`.
 """
-function husimi_function(states::AbstractVector{<:BIMEigenstate{K,T}}, billiard::AbsBilliard, solver::AbsBIMSolver;c::Real=10.0,w::Real=7.0,full_p::Bool=false) where {K,T<:Real}
-    n = length(states)
-    hs = Vector{HusimiFunction{T}}(undef,n)
-    ok = Vector{Bool}(undef,n); fill!(ok,true)
-    pbar = Progress(n;desc="Constructing Poincare-Husimi matrices, N=$n")
-    progress_lock = ReentrantLock()
-    Threads.@threads for i in eachindex(states)
-        try
-            hs[i] = husimi_function(states[i],billiard,solver;c=c,w=w,full_p=full_p)
-        catch e
-            @debug "Poincare-Husimi fail at k=$(states[i].k)" exception=(e,catch_backtrace())
-            ok[i] = false
-        end
-        lock(progress_lock) do
-            next!(pbar)
-        end
+function husimi_function(states::AbstractVector{<:BIMEigenstate{K,T}}, billiard::AbsBilliard, solver::AbsBIMSolver; c::Real=10.0, w::Real=7.0, full_p::Bool=false) where {K,T<:Real}
+    return _collect_functions(HusimiFunction{T}, states; multithreaded=true) do state
+        husimi_function(state, billiard, solver; c, w, full_p)
     end
-    return hs[ok]
 end
 
 """
-    husimi_function(states::AbstractVector{S}, billiard::AbsBilliard; ppw::Real=5.0, c::Real=10.0, w::Real=7.0, multithreaded::Bool=true, full_p::Bool=false) where {S<:AbsState}
+    husimi_function(states::AbstractVector{<:BasisEigenstate}, billiard::AbsBilliard; ppw::Real=5.0, c::Real=10.0, w::Real=7.0, multithreaded::Bool=true, full_p::Bool=false)
 
 Compute Poincare-Husimi functions for several basis eigenstates.
 
 ## Arguments
-* `states::AbstractVector{S}`: Eigenstates represented in a basis.
+* `states::AbstractVector{<:BasisEigenstate}`: Eigenstates represented in a basis.
 * `billiard::AbsBilliard`: Billiard the states were computed on.
 
 ## Keyword Arguments
@@ -521,33 +485,16 @@ Compute Poincare-Husimi functions for several basis eigenstates.
 ## Returns
 * `Vector{HusimiFunction}`: One [`HusimiFunction`](@ref) per state; states whose computation fails are dropped (logged with `@debug`), so the result may be shorter than `states`.
 """
-function husimi_function(states::AbstractVector{S}, billiard::AbsBilliard; ppw::Real=5.0, c::Real=10.0, w::Real=7.0, multithreaded::Bool=true, full_p::Bool=false) where {S<:AbsState}
-    n = length(states)
+function husimi_function(states::AbstractVector{<:BasisEigenstate}, billiard::AbsBilliard; ppw::Real=5.0, c::Real=10.0, w::Real=7.0, multithreaded::Bool=true, full_p::Bool=false)
     T = typeof(real(first(states).k))
-    hs = Vector{HusimiFunction{T}}(undef,n)
-    ok = Vector{Bool}(undef,n); fill!(ok,true)
-    pbar = Progress(n;desc="Constructing Poincare-Husimi matrices, N=$n")
-    @inbounds for i in eachindex(states)
-        try
-            hs[i] = husimi_function(states[i],billiard;ppw=ppw,c=c,w=w,multithreaded=multithreaded,full_p=full_p)
-        catch e
-            @debug "Poincare-Husimi fail at k=$(states[i].k)" exception=(e,catch_backtrace())
-            ok[i] = false
-        end
-        next!(pbar)
+    return _collect_functions(HusimiFunction{T}, states) do state
+        husimi_function(state, billiard; ppw, c, w, multithreaded, full_p)
     end
-    return hs[ok]
 end
 
 ################################################################################
 # SpectralData API
 ################################################################################
-
-_husimi_function_data(states::AbstractVector{<:BIMEigenstate}, billiard::AbsBilliard, solver; kwargs...) = husimi_function(states, billiard, solver; _drop_kwargs(kwargs, _BASIS_ONLY_BOUNDARY_KWARGS)...)
-_husimi_function_data(states::AbstractVector{<:BasisEigenstate}, billiard::AbsBilliard, solver; kwargs...) = husimi_function(states, billiard; kwargs...)
-
-_husimi_function_state(state::BIMEigenstate, billiard::AbsBilliard, solver; kwargs...) = husimi_function(state, billiard, solver; _drop_kwargs(kwargs, _BASIS_ONLY_BOUNDARY_KWARGS)...)
-_husimi_function_state(state::BasisEigenstate, billiard::AbsBilliard, solver; kwargs...) = husimi_function(state, billiard; kwargs...)
 
 """
     husimi_function(data::SpectralData; kwargs...) → Vector{HusimiFunction}
@@ -555,8 +502,7 @@ _husimi_function_state(state::BasisEigenstate, billiard::AbsBilliard, solver; kw
 Compute the [`HusimiFunction`](@ref) of every eigenstate stored in `data`.
 """
 function husimi_function(data::SpectralData; kwargs...)
-    states = _require_states(data)
-    return _husimi_function_data(states, data.billiard, data.solver; kwargs...)
+    return _apply_state(husimi_function, _require_states(data), data.billiard, data.solver; kwargs...)
 end
 
 """
@@ -565,6 +511,65 @@ end
 Compute the [`HusimiFunction`](@ref) of the `i`-th eigenstate stored in `data`.
 """
 function husimi_function(data::SpectralData, i::Integer; kwargs...)
-    states = _require_states(data)
-    return _husimi_function_state(states[i], data.billiard, data.solver; kwargs...)
+    return _apply_state(husimi_function, _require_states(data)[i], data.billiard, data.solver; kwargs...)
+end
+
+################################################################################
+# SHARED STATE DISPATCH
+#
+# The `SpectralData` entry points of `wavefunction`, `boundary_function`,
+# `momentum_function` and `husimi_function` forward one keyword set to every
+# state kind. A keyword valid only for the other kind is dropped by
+# `_foreign_kwargs`; names outside both kinds still raise a `MethodError`.
+################################################################################
+
+_drop_kwargs(kwargs, ignored::Tuple{Vararg{Symbol}}) = (; (p for p in pairs(kwargs) if !(first(p) in ignored))...)
+
+_foreign_kwargs(f, ::Type{<:AbsState}) = ()
+_foreign_kwargs(::typeof(wavefunction), ::Type{<:BIMEigenstate}) = (:memory_limit, :multithreaded)
+_foreign_kwargs(::typeof(wavefunction), ::Type{<:BasisEigenstate}) = (:min_chunk, :use_chebyshev, :show_progress, :cheb_config)
+_foreign_kwargs(::typeof(boundary_function), ::Type{<:BIMEigenstate}) = (:ppw,)
+_foreign_kwargs(::typeof(momentum_function), ::Type{<:BIMEigenstate}) = (:ppw,)
+_foreign_kwargs(::typeof(husimi_function), ::Type{<:BIMEigenstate}) = (:ppw, :multithreaded)
+
+# Apply `f` to a state (or vector of states) of either kind: BIM states take `(billiard, solver)`, basis states
+# take `billiard` only.
+function _apply_state(f, state_or_states::Union{BIMEigenstate,AbstractVector{<:BIMEigenstate}}, billiard::AbsBilliard, solver; kwargs...)
+    kw = _drop_kwargs(kwargs, _foreign_kwargs(f, BIMEigenstate))
+    return f(state_or_states, billiard, solver; kw...)
+end
+
+function _apply_state(f, state_or_states::Union{BasisEigenstate,AbstractVector{<:BasisEigenstate}}, billiard::AbsBilliard, solver; kwargs...)
+    kw = _drop_kwargs(kwargs, _foreign_kwargs(f, BasisEigenstate))
+    return f(state_or_states, billiard; kw...)
+end
+
+# Collect `f(state)` over `states` as `Vector{F}`, dropping states for which `f` throws (logged with `@debug`).
+function _collect_functions(f, ::Type{F}, states::AbstractVector; multithreaded::Bool=false) where {F}
+    n = length(states)
+    out = Vector{F}(undef, n)
+    ok = fill(true, n)
+    pbar = Progress(n; desc="Constructing $(nameof(F)) objects, N=$n")
+    progress_lock = ReentrantLock()
+    function run!(i)
+        try
+            out[i] = f(states[i])
+        catch e
+            @debug "$(nameof(F)) fail at k=$(states[i].k)" exception=(e, catch_backtrace())
+            ok[i] = false
+        end
+        lock(progress_lock) do
+            next!(pbar)
+        end
+    end
+    if multithreaded
+        Threads.@threads for i in eachindex(states)
+            run!(i)
+        end
+    else
+        for i in eachindex(states)
+            run!(i)
+        end
+    end
+    return out[ok]
 end

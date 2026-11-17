@@ -33,6 +33,9 @@ end
 # Broglie wavelength `2π/k`, floored at a minimum of 512 points.
 _debroglie_grid_size(k::Real, d::Real, ppw::Real) = max(round(Int, k * d * ppw / (2 * pi)), 512)
 
+# Uniform grid of `n` points of type `T` spanning `lim = (lo, hi)`.
+_uniform_grid(::Type{T}, lim, n::Integer) where {T<:Real} = collect(range(T(lim[1]), T(lim[2]), length = n))
+
 """
     rectify_grid(grid::AbstractVector{<:Real}) → AbstractVector
 
@@ -121,7 +124,7 @@ function _wavefunction_grid(k::T, billiard::Bi, ppw::T; inside_only::Bool = true
     curves = fundamental_only ? _fundamental_extent_curves(billiard) : full_boundary(billiard)
     xlim, ylim = boundary_limits(curves); dx = T(2pi) / (ppw * k)
     nx = max(512, ceil(Int, (xlim[2] - xlim[1]) / dx) + 1); ny = max(512, ceil(Int, (ylim[2] - ylim[1]) / dx) + 1)
-    xgrid = collect(range(T(xlim[1]), T(xlim[2]), length = nx)); ygrid = collect(range(T(ylim[1]), T(ylim[2]), length = ny))
+    xgrid = _uniform_grid(T, xlim, nx); ygrid = _uniform_grid(T, ylim, ny)
     pts = vec([SVector{2,T}(x, y) for x in xgrid, y in ygrid])
     if inside_only
         mask = BitVector(undef, length(pts))
@@ -485,7 +488,7 @@ function wavefunction(state::S, billiard::AbsBilliard; ppw::Real = 5.0, inside_o
         xlim, ylim = boundary_limits(get_boundary_curves(billiard); grd = max(1000, round(Int, k * L * ppw / (2 * pi))))
         dx = xlim[2] - xlim[1]; dy = ylim[2] - ylim[1]
         nx = _debroglie_grid_size(k, dx, ppw); ny = _debroglie_grid_size(k, dy, ppw)
-        x_grid::Vector{type} = collect(type, range(xlim..., nx)); y_grid::Vector{type} = collect(type, range(ylim..., ny))
+        x_grid::Vector{type} = _uniform_grid(type, xlim, nx); y_grid::Vector{type} = _uniform_grid(type, ylim, ny)
         if ~isnothing(symmetries)
             has_x = any(s -> s isa BilliardGeometry.XAxisReflection, symmetries)
             has_y = any(s -> s isa BilliardGeometry.YAxisReflection, symmetries)
@@ -521,21 +524,14 @@ end
 # that state.
 ################################################################################
 
-# The `SpectralData` entry points forward one keyword set to every state type. A keyword that is valid only
-# for the other state type is dropped here; names outside both sets still raise a `MethodError`.
-_drop_kwargs(kwargs, ignored::Tuple{Vararg{Symbol}}) = (; (p for p in pairs(kwargs) if !(first(p) in ignored))...)
+"""
+    wavefunction(states::AbstractVector{<:BasisEigenstate}, billiard::AbsBilliard; kwargs...) → Vector{Wavefunction}
 
-const _BIM_ONLY_WAVEFUNCTION_KWARGS = (:min_chunk, :use_chebyshev, :show_progress, :cheb_config)
-const _BASIS_ONLY_WAVEFUNCTION_KWARGS = (:memory_limit, :multithreaded)
-
-_wavefunction_data(states::AbstractVector{<:BIMEigenstate}, billiard::AbsBilliard, solver; kwargs...) = wavefunction(states, billiard, solver; _drop_kwargs(kwargs, _BASIS_ONLY_WAVEFUNCTION_KWARGS)...)
-function _wavefunction_data(states::AbstractVector{<:BasisEigenstate}, billiard::AbsBilliard, solver; kwargs...)
-    kw = _drop_kwargs(kwargs, _BIM_ONLY_WAVEFUNCTION_KWARGS)
-    return [wavefunction(s, billiard; kw...) for s in states]
+Reconstruct every basis eigenstate in `states` with [`wavefunction(state, billiard)`](@ref), each on its own grid. `kwargs` are forwarded to the single-state method.
+"""
+function wavefunction(states::AbstractVector{<:BasisEigenstate}, billiard::AbsBilliard; kwargs...)
+    return [wavefunction(s, billiard; kwargs...) for s in states]
 end
-
-_wavefunction_state(state::BIMEigenstate, billiard::AbsBilliard, solver; kwargs...) = wavefunction(state, billiard, solver; _drop_kwargs(kwargs, _BASIS_ONLY_WAVEFUNCTION_KWARGS)...)
-_wavefunction_state(state::BasisEigenstate, billiard::AbsBilliard, solver; kwargs...) = wavefunction(state, billiard; _drop_kwargs(kwargs, _BIM_ONLY_WAVEFUNCTION_KWARGS)...)
 
 """
     wavefunction(data::SpectralData; kwargs...)
@@ -549,8 +545,7 @@ state is reconstructed on its own grid. `kwargs` are forwarded to the underlying
 single-/batched-state `wavefunction` method.
 """
 function wavefunction(data::SpectralData; kwargs...)
-    states = _require_states(data)
-    return _wavefunction_data(states, data.billiard, data.solver; kwargs...)
+    return _apply_state(wavefunction, _require_states(data), data.billiard, data.solver; kwargs...)
 end
 
 """
@@ -560,6 +555,5 @@ Reconstruct the `i`-th eigenstate stored in `data`, returning the same
 [`Wavefunction`](@ref) as calling `wavefunction` on the single state directly.
 """
 function wavefunction(data::SpectralData, i::Integer; kwargs...)
-    states = _require_states(data)
-    return _wavefunction_state(states[i], data.billiard, data.solver; kwargs...)
+    return _apply_state(wavefunction, _require_states(data)[i], data.billiard, data.solver; kwargs...)
 end

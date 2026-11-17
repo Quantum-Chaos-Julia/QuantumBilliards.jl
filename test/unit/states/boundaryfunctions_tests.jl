@@ -29,6 +29,12 @@
 # BIM and annulus states, and momentum_function(::BoundaryFunction) against momentum_function(u, s, ds) of the stored arrays.
 # Helper definitions use the prefix `bf_` / `BF_`.
 #
+# The basis boundary_function holds the former pts body and returns a BoundaryFunction (u, s, ds, k, norm, L, outer); the
+# boundary points (positions, normals) are not stored in it, so bf_basis_pts rebuilds them from the billiard and basis for
+# the identities u = grad(psi) . n and the Rellich relation. momentum_function(state, billiard) is the composition
+# momentum_function(boundary_function(state, billiard)) (uniform-arclength detection; the unfolded grids carry zero-weight
+# duplicate nodes and take the quadrature path).
+#
 # SOURCE FINDINGS:
 #  (fixed) boundary_coords normalises the normals per element, and regularize! uses periodic neighbours and the nearest
 #  finite neighbours on both sides; the corresponding assertions are plain @test below. The FourierNodes weights of
@@ -37,7 +43,8 @@
 using StaticArrays
 using LinearAlgebra: norm, dot
 using SpecialFunctions: besselj
-using QuantumBilliards: regularize!, _rellich, _basis_boundary_function_pts, gradient_matrices
+using QuantumBilliards: regularize!, _rellich, gradient_matrices, get_boundary_curves_with_ignored, FourierNodes,
+                        boundary_coords, apply_symmetries_to_boundary_points, _debroglie_grid_size
 
 const BF_J01 = 2.404825557695773       # first zero of J0
 const BF_J02 = 5.520078110286311       # second zero of J0
@@ -119,9 +126,24 @@ bf_bim_state(k, u, pts) = BIMEigenstate{Float64,Float64}(k, 0.0, nothing, 1e-9, 
 # The legacy tuple of a BoundaryFunction, read from the fields (u, s, norm).
 bf_tuple(bf) = (bf.u, bf.s, bf.norm)
 
-# The common checks of the unfolded boundary data of a state with the analytic gradient `grad`.
+# Boundary points (positions, normals, s, ds) of a basis state, rebuilt from the billiard and basis in the way the basis
+# boundary_function samples them: FourierNodes, N = _debroglie_grid_size, unfolded by the basis symmetries. A BoundaryFunction
+# stores only u, s and ds, so the positions and normals needed by the identities below come from here.
+function bf_basis_pts(st, billiard; ppw=5.0)
+    boundary = get_boundary_curves_with_ignored(billiard)
+    lengths = [crv.length for crv in boundary]
+    N = _debroglie_grid_size(st.k, CompositeCurve(boundary).length, ppw)
+    pts = boundary_coords(billiard, FourierNodes([2, 3, 5], lengths), N)
+    return isnothing(st.basis.symmetries) ? pts : apply_symmetries_to_boundary_points(pts, st.basis.symmetries, billiard)
+end
+
+# The common checks of the unfolded boundary data of a state with the analytic gradient `grad`. Returns (u, pts, norm) with
+# u and norm read from the BoundaryFunction and pts rebuilt by bf_basis_pts (its s and ds equal bf.s and bf.ds).
 function bf_check_unfolded(st, billiard, grad; ncopies, perimeter, rtol_perimeter=1e-9)
-    u, pts, nrm = _basis_boundary_function_pts(st, billiard)
+    bf = boundary_function(st, billiard)
+    pts = bf_basis_pts(st, billiard)
+    u, nrm = bf.u, bf.norm
+    @test bf.s == pts.s && bf.ds == pts.ds
     @test length(u) == length(pts.xy) == length(pts.normal) == length(pts.ds) == length(pts.s)
     @test !any(isnan, u)
     @test all(isfinite, pts.s) && all(>=(-1e-12), diff(pts.s))       # non-decreasing up to rounding (zero weights at curve ends)
@@ -246,8 +268,8 @@ end
     end
 
     @testset "agrees with the unfolded boundary data and with u = grad(psi) . n" begin
-        u2, pts, nrm2 = _basis_boundary_function_pts(st, BF_CIRCLE)
-        @test u == u2 && s == pts.s && nrm == nrm2
+        pts = bf_basis_pts(st, BF_CIRCLE)                             # rebuilt points; u = grad . n below checks u at them
+        @test s == pts.s && boundary_function(st, BF_CIRCLE).ds == pts.ds
         @test u ≈ [dot(bf_grad_j0(p[1], p[2], st.k), n) for (p, n) in zip(pts.xy, pts.normal)] atol = 1e-12
         @test _rellich(pts, u, st.k) ≈ 4 * nrm rtol = 1e-9            # four copies of the fundamental boundary
     end
@@ -268,7 +290,7 @@ end
     end
 
     @testset "normals of the boundary points are unit vectors" begin
-        _, pts, _ = _basis_boundary_function_pts(st, BF_CIRCLE)
+        pts = bf_basis_pts(st, BF_CIRCLE)
         @test all(n -> isapprox(norm(n), 1; atol=1e-8), pts.normal)
         @test isapprox(u[1], -st.k * besselj(1, st.k); rtol=1e-8)       # d_n J0(k r) at r = 1
         # For psi = J0(k r) / (sqrt(pi) |J1(k)|) (unit norm on the disc) the quarter-arc Rellich value is 1/4.
@@ -295,14 +317,15 @@ end
 @testset "boundary_function(::BasisEigenstate) returns a BoundaryFunction" begin
     st = bf_j0_state()
     bf = boundary_function(st, BF_CIRCLE)
-    _, pts, nrm = _basis_boundary_function_pts(st, BF_CIRCLE)
+    pts = bf_basis_pts(st, BF_CIRCLE)
 
     @testset "type, k and field contents" begin
         @test bf isa BoundaryFunction{Float64,Float64}
         @test bf.k === st.k
         @test bf.u isa Vector{Float64} && bf.s isa Vector{Float64} && bf.ds isa Vector{Float64}
         @test length(bf.u) == length(bf.s) == length(bf.ds) == length(pts.xy)
-        @test bf.s == pts.s && bf.ds == pts.ds && bf.norm == nrm
+        @test bf.s == pts.s && bf.ds == pts.ds
+        @test _rellich(pts, bf.u, st.k) ≈ 4 * bf.norm rtol = 1e-9      # norm is the Rellich value of the fundamental boundary
         @test sum(bf.ds) ≈ 2pi rtol = 1e-9                              # weights of the unfolded boundary sum to the perimeter
     end
 
@@ -414,16 +437,18 @@ end
         bf_check_unfolded(st, BF_RECT, grad; ncopies=4, perimeter=perimeter, rtol_perimeter=1e-2)
     end
 
-    @testset "the three-element result of boundary_function matches the internal data" begin
-        st, _ = bf_rect_mode(1, 1)
-        u, s, nrm = boundary_function(st, BF_RECT)
-        u2, pts, nrm2 = _basis_boundary_function_pts(st, BF_RECT)
-        @test u == u2 && s == pts.s && nrm == nrm2
+    @testset "the BoundaryFunction fields match the rebuilt unfolded boundary data" begin
+        st, grad = bf_rect_mode(1, 1)
+        bf = boundary_function(st, BF_RECT)
+        pts = bf_basis_pts(st, BF_RECT)
+        @test bf.s == pts.s && bf.ds == pts.ds
+        @test bf.u ≈ [dot(grad(p[1], p[2]), n) for (p, n) in zip(pts.xy, pts.normal)] atol = 1e-10
+        @test _rellich(pts, bf.u, st.k) ≈ 4 * bf.norm rtol = 1e-9
     end
 
     @testset "multi-curve boundary: unit normals, quadrature weights sum to the boundary length" begin
         st, _ = bf_rect_mode(1, 1)
-        _, pts, _ = _basis_boundary_function_pts(st, BF_RECT)
+        pts = bf_basis_pts(st, BF_RECT)
         @test all(n -> isapprox(norm(n), 1; atol=1e-8), pts.normal)
         @test isapprox(sum(pts.ds), 4 * (BF_A + BF_B); rtol=1e-9)
     end
@@ -436,7 +461,10 @@ end
     basis = RealPlaneWaves(3; sym_y=1)
     @test length(basis.symmetries) == 1 && basis.symmetries[1] isa BilliardGeometry.XAxisReflection
     st = BasisEigenstate(10.0, ones(basis.dim), 0.1, basis)
-    u, pts, nrm = _basis_boundary_function_pts(st, lim)
+    bf = boundary_function(st, lim)
+    pts = bf_basis_pts(st, lim)
+    u, nrm = bf.u, bf.norm
+    @test bf.s == pts.s && bf.ds == pts.ds
 
     @test length(pts.xy) % 2 == 0
     half = length(pts.xy) ÷ 2
@@ -712,14 +740,18 @@ end
 @testset "momentum_function(::BasisEigenstate)" begin
     @testset "circle J0 mode: constant u has only the DC component" begin
         st = bf_j0_state()
-        u, s, _ = boundary_function(st, BF_CIRCLE)
+        bf = boundary_function(st, BF_CIRCLE)
+        u = bf.u
         power, ks = momentum_function(st, BF_CIRCLE)
         @test power[1] > 0
         @test maximum(power[2:end]) <= 1e-18 * power[1]
         # Parseval holds only to O(1/N): the unfolded nodes contain a zero-weight duplicate at every quarter junction, so
         # N * ds_mean = L (N + 1) / N differs from s[end] = L by one spacing and the two normalisations in the function differ.
         @test sum(power) * (ks[2] - ks[1]) ≈ sum(abs2, u) / length(u) rtol = 1e-2
-        @test momentum_function(u, s) == (power, ks)                  # it is the composition of the two functions
+        # it is the composition of the two functions; the zero-weight duplicate nodes make the grid non-uniform, so the
+        # quadrature path momentum_function(u, s, ds) is taken (not the FFT path momentum_function(u, s))
+        @test momentum_function(st, BF_CIRCLE) == momentum_function(bf)
+        @test (power, ks) == momentum_function(bf.u, bf.s, bf.ds)
     end
 
     @testset "circle J1 cos(theta) mode: concentrated at the angular momentum 1" begin

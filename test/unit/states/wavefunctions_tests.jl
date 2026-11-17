@@ -4,7 +4,11 @@
 #                                  the layer potentials phi_slp / phi_dlp / phi_cfie;
 #                                  compute_psi and wavefunction for BasisEigenstate (including the one-hot states of
 #                                  the BasisState(basis, k, i) constructor function) and BIMEigenstate;
-#                                  the SpectralData wrappers wavefunction(data) and wavefunction(data, i))
+#                                  the SpectralData wrappers wavefunction(data) and wavefunction(data, i);
+#                                  _uniform_grid and wavefunction(::AbstractVector{<:BasisEigenstate}, billiard))
+# src/states/husimifunctions.jl defines the shared state dispatch used by the SpectralData wrappers; its _drop_kwargs,
+# _foreign_kwargs (keyword table per function and state kind) and _apply_state are tested at the end of this file with
+# real wavefunction/boundary/momentum/Husimi calls on hand-built states and a test-local recorder function.
 # wavefunction returns a Wavefunction (iterating as (psi, x, y)) carrying k = state.k, a Vector{Wavefunction} for a BIM state
 # vector (shared coordinate vectors) and for SpectralData; the object types themselves are tested in sampledfunctions_tests.jl.
 # regularize! (boundaryfunctions.jl) and antisym_vec (husimifunctions.jl) are not defined in this file and are covered
@@ -852,7 +856,64 @@ end
     end
 end
 
-using QuantumBilliards: _drop_kwargs, _BIM_ONLY_WAVEFUNCTION_KWARGS, _BASIS_ONLY_WAVEFUNCTION_KWARGS, _BASIS_ONLY_BOUNDARY_KWARGS
+using QuantumBilliards: _drop_kwargs, _foreign_kwargs, _apply_state, _uniform_grid
+
+# BIM state of the J0 mode on a circle discretization that carries arc length s (needed by boundary/momentum/Husimi functions).
+function wf_bim_arclength_state(k, N = 64)
+    th = collect(range(0, 2pi, N + 1)[1:N])
+    xy = [SVector(cos(t), sin(t)) for t in th]
+    pts = BoundaryPoints(xy; normal=copy(xy), tangent=[SVector(-sin(t), cos(t)) for t in th], s=th, ds=fill(2pi / N, N))
+    return BIMEigenstate{Float64,Float64}(k, 0.0, nothing, 1e-9, pts, fill(-k * besselj(1, k), N), nothing)
+end
+
+# Recorder with no entry in the _foreign_kwargs table: returns the positional arguments and the keywords it received.
+wf_rec(args...; kw...) = (args, NamedTuple(kw))
+
+@testset "_uniform_grid" begin
+    g = _uniform_grid(Float64, (-1.0, 2.0), 7)
+    @test g isa Vector{Float64} && length(g) == 7
+    @test g[1] == -1.0 && g[end] == 2.0                                  # endpoints are nodes
+    @test all(diff(g) .≈ 0.5)
+    @test g == collect(range(-1.0, 2.0, 7))
+    g32 = _uniform_grid(Float32, (0.0, 1.0), 5)
+    @test g32 isa Vector{Float32} && g32 == Float32[0, 0.25, 0.5, 0.75, 1]
+    @test _uniform_grid(Float32, (0.0, 1.0), 5) isa Vector{Float32}
+    @test _uniform_grid(Float64, (Float32(0.5), Float32(1.5)), 3) == [0.5, 1.0, 1.5]  # limits are converted to T
+    @test @inferred(_uniform_grid(Float64, (0.0, 1.0), 4)) isa Vector{Float64}
+end
+
+@testset "wavefunction(::AbstractVector{<:BasisEigenstate}, billiard)" begin
+    st1, f1 = wf_rect_mode(1, 1); st2, f2 = wf_rect_mode(2, 2)
+    wfs = wavefunction([st1, st2], WF_RECT)
+    @test wfs isa Vector{Wavefunction{Float64,Float64}} && length(wfs) == 2
+
+    @testset "each entry equals the single-state result on its own grid" begin
+        for (w, st) in zip(wfs, (st1, st2))
+            single = wavefunction(st, WF_RECT)
+            @test w.psi == single.psi && w.x == single.x && w.y == single.y
+            @test w.k === st.k
+        end
+    end
+
+    @testset "entries are the analytic modes" begin
+        for (w, f) in zip(wfs, (f1, f2))
+            inside = wf_rect_interior(w.x, w.y)
+            @test w.psi[inside] ≈ wf_analytic(f, w.x, w.y)[inside] atol = 1e-12
+        end
+    end
+
+    @testset "keywords are forwarded to every state, order is kept" begin
+        wfu = wavefunction([st2, st1], WF_RECT; fundamental_only=false)
+        @test [w.k for w in wfu] == [st2.k, st1.k]
+        @test all(w -> size(w.psi) == (length(w.x), length(w.y)) && minimum(w.x) < 0, wfu)
+        @test wfu[2].psi == wavefunction(st1, WF_RECT; fundamental_only=false).psi
+    end
+
+    @testset "edge cases: one state, no states" begin
+        @test length(wavefunction([st1], WF_RECT)) == 1
+        @test wavefunction(typeof(st1)[], WF_RECT) == Wavefunction{Float64,Float64}[]
+    end
+end
 
 @testset "SpectralData keyword filtering (_drop_kwargs)" begin
     @testset "removes only the listed keywords and keeps order and values" begin
@@ -866,8 +927,8 @@ using QuantumBilliards: _drop_kwargs, _BIM_ONLY_WAVEFUNCTION_KWARGS, _BASIS_ONLY
 
     @testset "unknown keywords are kept, so typos still raise" begin
         kw = (; ppw=3.0, ppww=1.0)
-        @test haskey(_drop_kwargs(kw, _BASIS_ONLY_WAVEFUNCTION_KWARGS), :ppww)
-        @test haskey(_drop_kwargs(kw, _BIM_ONLY_WAVEFUNCTION_KWARGS), :ppww)
+        @test haskey(_drop_kwargs(kw, _foreign_kwargs(wavefunction, BasisEigenstate)), :ppww)
+        @test haskey(_drop_kwargs(kw, _foreign_kwargs(wavefunction, BIMEigenstate)), :ppww)
     end
 
     @testset "works on pairs-iterable keyword collections" begin
@@ -876,20 +937,114 @@ using QuantumBilliards: _drop_kwargs, _BIM_ONLY_WAVEFUNCTION_KWARGS, _BASIS_ONLY
         @test f() === NamedTuple()
     end
 
-    @testset "per-type keyword sets" begin
-        @test Set(_BIM_ONLY_WAVEFUNCTION_KWARGS) == Set((:min_chunk, :use_chebyshev, :show_progress, :cheb_config))
-        @test Set(_BASIS_ONLY_WAVEFUNCTION_KWARGS) == Set((:memory_limit, :multithreaded))
-        @test Set(_BASIS_ONLY_BOUNDARY_KWARGS) == Set((:ppw, :multithreaded))
-        @test isempty(intersect(_BIM_ONLY_WAVEFUNCTION_KWARGS, _BASIS_ONLY_WAVEFUNCTION_KWARGS))
-        shared = (; ppw=4.0, inside_only=false, fundamental_only=false)               # valid for both state types
-        @test _drop_kwargs(shared, _BIM_ONLY_WAVEFUNCTION_KWARGS) === shared
-        @test _drop_kwargs(shared, _BASIS_ONLY_WAVEFUNCTION_KWARGS) === shared
-    end
-
     @testset "old wavefunction keywords raise MethodError" begin
         basis = FourierBessel(5)
         st = BasisState(basis, 3.0, 1)
         @test_throws MethodError wavefunction(st, WF_CIRCLE; b=10.0)                   # now ppw
         @test_throws MethodError wavefunction(st, WF_CIRCLE; xlim=(-1.0, 1.0), ylim=(-1.0, 1.0), b=10.0)
+    end
+end
+
+@testset "_foreign_kwargs" begin
+    @testset "exact tuples per function and state kind" begin
+        @test _foreign_kwargs(wavefunction, BIMEigenstate) == (:memory_limit, :multithreaded)
+        @test _foreign_kwargs(wavefunction, BasisEigenstate) == (:min_chunk, :use_chebyshev, :show_progress, :cheb_config)
+        @test _foreign_kwargs(boundary_function, BIMEigenstate) == (:ppw,)
+        @test _foreign_kwargs(momentum_function, BIMEigenstate) == (:ppw,)
+        @test _foreign_kwargs(husimi_function, BIMEigenstate) == (:ppw, :multithreaded)
+    end
+
+    @testset "basis states drop nothing for boundary, momentum and Husimi functions (fallback)" begin
+        for f in (boundary_function, momentum_function, husimi_function)
+            @test _foreign_kwargs(f, BasisEigenstate) == ()
+        end
+        @test _foreign_kwargs(wf_rec, BIMEigenstate) == () && _foreign_kwargs(wf_rec, BasisEigenstate) == ()
+        @test _foreign_kwargs(wavefunction, QuantumBilliards.AbsState) == ()
+    end
+
+    @testset "wavefunction: the BIM and basis sets are disjoint" begin
+        @test isempty(intersect(_foreign_kwargs(wavefunction, BIMEigenstate), _foreign_kwargs(wavefunction, BasisEigenstate)))
+    end
+
+    @testset "concrete state types resolve to the kind tables" begin
+        @test _foreign_kwargs(wavefunction, typeof(wf_bim_u_state(WF_J01))) == _foreign_kwargs(wavefunction, BIMEigenstate)
+        @test _foreign_kwargs(wavefunction, typeof(wf_rect_mode(1, 1)[1])) == _foreign_kwargs(wavefunction, BasisEigenstate)
+    end
+
+    @testset "keywords valid for both kinds are never listed" begin
+        shared = (; ppw=4.0, inside_only=false, fundamental_only=false)
+        for kind in (BIMEigenstate, BasisEigenstate)
+            @test _drop_kwargs(shared, _foreign_kwargs(wavefunction, kind)) === shared
+        end
+    end
+end
+
+@testset "_apply_state" begin
+    solver = wf_SweepStub()
+    bim = wf_bim_arclength_state(WF_J01)
+    bst, _ = wf_rect_mode(1, 1)
+
+    @testset "BIM state: f(state, billiard, solver; kw...), a vector is passed whole" begin
+        args, kw = _apply_state(wf_rec, bim, WF_CIRCLE, solver; a=1, b=2.0)
+        @test args == (bim, WF_CIRCLE, solver) && kw === (; a=1, b=2.0)
+        args, _ = _apply_state(wf_rec, [bim, bim], WF_CIRCLE, solver)
+        @test length(args) == 3 && args[1] isa Vector && length(args[1]) == 2 && args[3] === solver
+    end
+
+    @testset "basis state: f(state, billiard; kw...), the solver is not passed" begin
+        args, kw = _apply_state(wf_rec, bst, WF_RECT, solver; a=1, b=2.0)
+        @test args == (bst, WF_RECT) && kw === (; a=1, b=2.0)
+        args, _ = _apply_state(wf_rec, [bst, bst], WF_RECT, solver)
+        @test length(args) == 2 && args[1] isa Vector && length(args[1]) == 2
+        args, _ = _apply_state(wf_rec, [bst, bst], WF_RECT, nothing)       # no solver at all
+        @test length(args) == 2
+    end
+
+    @testset "wavefunction: foreign keywords are dropped and the result is unchanged" begin
+        ref = wavefunction(bim, WF_CIRCLE, solver; use_chebyshev=false)
+        w = _apply_state(wavefunction, bim, WF_CIRCLE, solver; use_chebyshev=false, memory_limit=1e9, multithreaded=false)
+        @test w.psi == ref.psi
+        refb = wavefunction(bst, WF_RECT)
+        wb = _apply_state(wavefunction, bst, WF_RECT, solver; min_chunk=1, use_chebyshev=false, show_progress=false,
+                          cheb_config=QuantumBilliards.ChebyshevConfig(Float64))
+        @test wb.psi == refb.psi
+        wv = _apply_state(wavefunction, [bim, bim], WF_CIRCLE, solver; use_chebyshev=false, show_progress=false, memory_limit=1e9)
+        @test length(wv) == 2 && wv[1].psi == ref.psi
+        wbv = _apply_state(wavefunction, [bst, bst], WF_RECT, solver; show_progress=false, min_chunk=1)
+        @test length(wbv) == 2 && wbv[2].psi == refb.psi
+    end
+
+    @testset "boundary_function and momentum_function: ppw is dropped for BIM states, kept for basis states" begin
+        refbf = boundary_function(bim, WF_CIRCLE, solver)
+        bf = _apply_state(boundary_function, bim, WF_CIRCLE, solver; ppw=3.0, multithreaded=false)
+        @test bf.u == refbf.u && bf.s == refbf.s
+        @test _apply_state(momentum_function, bim, WF_CIRCLE, solver; ppw=3.0) == momentum_function(bim, WF_CIRCLE, solver)
+        jst = BasisEigenstate(WF_J01, [1.0], 1e-12, FourierBessel(1; sym_x=1, sym_y=1))
+        n5 = length(boundary_function(jst, WF_CIRCLE).u)
+        @test length(_apply_state(boundary_function, jst, WF_CIRCLE, solver; ppw=3000.0).u) > n5   # ppw reaches the basis method (floor of 512 nodes per curve at small ppw)
+        @test _apply_state(momentum_function, jst, WF_CIRCLE, solver) == momentum_function(jst, WF_CIRCLE)
+    end
+
+    @testset "husimi_function: ppw and multithreaded are dropped for BIM states, kept for basis states" begin
+        ref = husimi_function(bim, WF_CIRCLE, solver; c=2.0)
+        h = _apply_state(husimi_function, bim, WF_CIRCLE, solver; c=2.0, ppw=3.0, multithreaded=false)
+        @test h.H == ref.H && h.qs == ref.qs && h.ps == ref.ps
+        jst = BasisEigenstate(WF_J01, [1.0], 1e-12, FourierBessel(1; sym_x=1, sym_y=1))
+        hb = _apply_state(husimi_function, jst, WF_CIRCLE, solver; c=2.0, ppw=5.0, multithreaded=false)
+        @test hb.H ≈ husimi_function(jst, WF_CIRCLE; c=2.0).H
+    end
+
+    @testset "names outside both kinds still raise a MethodError" begin
+        @test_throws MethodError _apply_state(wavefunction, bim, WF_CIRCLE, solver; use_chebyshev=false, ppww=1.0)
+        @test_throws MethodError _apply_state(wavefunction, bst, WF_RECT, solver; b=10.0)
+        @test_throws MethodError _apply_state(boundary_function, bim, WF_CIRCLE, solver; typo=1)
+        @test_throws MethodError _apply_state(husimi_function, bim, WF_CIRCLE, solver; typo=1)
+    end
+
+    @testset "a keyword foreign to the other kind is kept for its own kind" begin
+        # :memory_limit is foreign to BIM states (dropped there) and valid for basis states (kept)
+        wb = _apply_state(wavefunction, bst, WF_RECT, solver; memory_limit=8e4, multithreaded=false)
+        @test wb.psi == wavefunction(bst, WF_RECT).psi                 # forwarded (chunked evaluation gives the same values)
+        @test_throws MethodError _apply_state(wavefunction, bst, WF_RECT, solver; use_chebyshev=false, memory_limit=8e4, ppww=1)
     end
 end

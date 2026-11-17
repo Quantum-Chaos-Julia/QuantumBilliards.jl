@@ -80,7 +80,7 @@ function _rellich(pts::BoundaryPoints{T},u::AbstractVector{N},k::T) where {N<:Nu
 end
 
 """
-    boundary_function(state::S, billiard::AbsBilliard; ppw::Real = 5.0, multithreaded::Bool = true) where {S<:AbsState} → BoundaryFunction
+    boundary_function(state::BasisEigenstate, billiard::AbsBilliard; ppw::Real = 5.0, multithreaded::Bool = true) → BoundaryFunction
 
 Computes the normal-derivative boundary function \$u(s) = \\partial_n\\psi(s)\$ of
 a basis eigenstate along the boundary of `billiard`, together with the arc-length
@@ -123,37 +123,28 @@ boundary via `apply_symmetries_to_boundary_points` and
    before any symmetry unfolding, which should be close to `1` for a correctly
    normalized eigenstate. It iterates as `(u, s, norm)`.
 """
-function boundary_function(state::S, billiard::AbsBilliard; ppw::Real=5.0, multithreaded::Bool=true) where {S<:AbsState}
-    u, pts, norm = _basis_boundary_function_pts(state, billiard; ppw, multithreaded)
-    T = eltype(pts.s)
-    return BoundaryFunction(u, pts.s, pts.ds, T(state.k), T(norm), _outer_perimeter(billiard, T), 1:length(u))
-end
-
-function _basis_boundary_function_pts(state::S, billiard::AbsBilliard; ppw::Real=5.0, multithreaded::Bool=true) where {S<:AbsState}
-    let vec = state.vec, k = state.k, k_basis = state.k_basis, new_basis = state.basis
-        type = eltype(vec)
-        boundary = get_boundary_curves_with_ignored(billiard)
-        crv_lengths = [crv.length for crv in boundary]
-        sampler = FourierNodes([2,3,5],crv_lengths) 
-        L = CompositeCurve(boundary).length
-        N = _debroglie_grid_size(k, L, ppw)
-        pts = boundary_coords(billiard, sampler, N)
-        dX, dY = gradient_matrices(new_basis, k_basis, pts.xy; multithreaded)
-        nx = getindex.(pts.normal,1)
-        ny = getindex.(pts.normal,2)
-        dX = nx .* dX 
-        dY = ny .* dY
-        U::Array{type,2} = dX .+ dY
-        u::Vector{type} = U * vec
-        regularize!(u)
-        #compute the boundary norm
-        norm = _rellich(pts, u, k)
-        if isnothing(new_basis.symmetries) == false
-            pts = apply_symmetries_to_boundary_points(pts, new_basis.symmetries, billiard)
-            u = apply_symmetries_to_boundary_function(u, new_basis.symmetries, new_basis.sym_characters)
-        end
-        return u, pts, norm
+function boundary_function(state::BasisEigenstate, billiard::AbsBilliard; ppw::Real=5.0, multithreaded::Bool=true)
+    vec = state.vec; k = state.k; basis = state.basis
+    type = eltype(vec)
+    boundary = get_boundary_curves_with_ignored(billiard)
+    crv_lengths = [crv.length for crv in boundary]
+    sampler = FourierNodes([2,3,5],crv_lengths)
+    L = CompositeCurve(boundary).length
+    N = _debroglie_grid_size(k, L, ppw)
+    pts = boundary_coords(billiard, sampler, N)
+    dX, dY = gradient_matrices(basis, state.k_basis, pts.xy; multithreaded)
+    nx = getindex.(pts.normal,1)
+    ny = getindex.(pts.normal,2)
+    U::Array{type,2} = nx .* dX .+ ny .* dY
+    u::Vector{type} = U * vec
+    regularize!(u)
+    norm = _rellich(pts, u, k)
+    if !isnothing(basis.symmetries)
+        pts = apply_symmetries_to_boundary_points(pts, basis.symmetries, billiard)
+        u = apply_symmetries_to_boundary_function(u, basis.symmetries, basis.sym_characters)
     end
+    T = eltype(pts.s)
+    return BoundaryFunction(u, pts.s, pts.ds, T(k), T(norm), _outer_perimeter(billiard, T), 1:length(u))
 end
 
 """
@@ -219,11 +210,8 @@ function _stored_boundary_u(state::BIMEigenstate)
     return state.u
 end
 
-# Disambiguates `boundary_function(bim_state, billiard)` from the generic
-# `S<:AbsState` method above, which would otherwise silently match and fail
-# on fields (`k_basis`, `basis`) BIMEigenstate doesn't have. No `solver` is
-# available here to recompute a missing `state.u`, so this reads the precomputed
-# fields (and throws when `u` is missing); the perimeter `L` comes from `billiard`.
+# Solver-free boundary function of a stored-`u` state; the perimeter `L` comes from `billiard`. No `solver` is
+# available here to recompute a missing `state.u`, so a missing `u` throws.
 function boundary_function(state::BIMEigenstate{K,T}, billiard::AbsBilliard) where {K,T<:Real}
     return _bim_boundary_function(state, _stored_boundary_u(state), state.bnd_norm, _outer_perimeter(billiard, T))
 end
@@ -294,11 +282,12 @@ function momentum_function(u,s)
 end
 
 """
-    momentum_function(state::S, billiard::AbsBilliard; ppw::Real = 5.0, multithreaded::Bool = true) where {S<:AbsState} → (power::Vector, ks::Vector)
+    momentum_function(state::BasisEigenstate, billiard::AbsBilliard; ppw::Real = 5.0, multithreaded::Bool = true) → (power::Vector, ks::Vector)
 
 Computes the momentum-space representation of a basis eigenstate's boundary
-function directly from `state`, by combining [`boundary_function`](@ref) and
-[`momentum_function(u, s)`](@ref momentum_function).
+function directly from `state`, by composing [`boundary_function`](@ref) with
+[`momentum_function(bf)`](@ref momentum_function), which selects the FFT path on
+a uniform arclength grid and the quadrature path otherwise.
 
 ## Arguments
 * `state`: The basis eigenstate for which the boundary momentum function is
@@ -315,9 +304,8 @@ function directly from `state`, by combining [`boundary_function`](@ref) and
 *  `power` : The normalized power spectrum of the boundary function.
 *  `ks` : The angular wavenumbers corresponding to `power`.
 """
-function momentum_function(state::S, billiard::AbsBilliard; ppw::Real=5.0, multithreaded::Bool=true) where {S<:AbsState}
-    u, s, norm = boundary_function(state, billiard; ppw, multithreaded)
-    return momentum_function(u,s)
+function momentum_function(state::BasisEigenstate, billiard::AbsBilliard; ppw::Real=5.0, multithreaded::Bool=true)
+    return momentum_function(boundary_function(state, billiard; ppw, multithreaded))
 end
 
 """
@@ -413,11 +401,8 @@ function momentum_function(state::BIMEigenstate)
     return momentum_function(_stored_boundary_u(state), state.pts.s, state.pts.ds)
 end
 
-# Disambiguates `momentum_function(bim_state, billiard)` from the generic
-# `S<:AbsState` method below (which would call the uniform-arclength-only
-# `momentum_function(u,s)` FFT path, incorrect for BIM's generally
-# non-uniform arc-length grid). No `solver` is available here to recompute a
-# missing `state.u`, so this forwards to the 1-arg non-uniform-arclength-aware form.
+# Solver-free form: no `solver` is available to recompute a missing `state.u`, so this forwards to the 1-arg
+# non-uniform-arclength-aware form.
 momentum_function(state::BIMEigenstate, billiard::AbsBilliard) = momentum_function(state)
 
 """
@@ -437,21 +422,13 @@ end
 # SpectralData API
 ################################################################################
 
-const _BASIS_ONLY_BOUNDARY_KWARGS = (:ppw, :multithreaded)
-
-_boundary_function_state(state::BIMEigenstate, billiard::AbsBilliard, solver; kwargs...) = boundary_function(state, billiard, solver; _drop_kwargs(kwargs, (:ppw,))...)
-_boundary_function_state(state::BasisEigenstate, billiard::AbsBilliard, solver; kwargs...) = boundary_function(state, billiard; kwargs...)
-_momentum_function_state(state::BIMEigenstate, billiard::AbsBilliard, solver; kwargs...) = momentum_function(state, billiard, solver; _drop_kwargs(kwargs, (:ppw,))...)
-_momentum_function_state(state::BasisEigenstate, billiard::AbsBilliard, solver; kwargs...) = momentum_function(state, billiard; kwargs...)
-
 """
     boundary_function(data::SpectralData, i::Integer; kwargs...) → BoundaryFunction
 
 Compute the [`BoundaryFunction`](@ref) of the `i`-th eigenstate stored in `data`.
 """
 function boundary_function(data::SpectralData, i::Integer; kwargs...)
-    states = _require_states(data)
-    return _boundary_function_state(states[i], data.billiard, data.solver; kwargs...)
+    return _apply_state(boundary_function, _require_states(data)[i], data.billiard, data.solver; kwargs...)
 end
 
 """
@@ -472,8 +449,7 @@ end
 Compute the momentum-space representation of the `i`-th eigenstate stored in `data`.
 """
 function momentum_function(data::SpectralData, i::Integer; kwargs...)
-    states = _require_states(data)
-    return _momentum_function_state(states[i], data.billiard, data.solver; kwargs...)
+    return _apply_state(momentum_function, _require_states(data)[i], data.billiard, data.solver; kwargs...)
 end
 
 """
