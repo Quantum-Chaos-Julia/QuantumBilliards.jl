@@ -15,6 +15,7 @@ using StaticArrays
 using LinearAlgebra: dot, norm, qr, Diagonal, I
 using Random: MersenneTwister
 using QuantumBilliards: _level_clusters, _pts_groups, _complex_state, _adjoint_inverse_iteration, _left_residuals, _left_null_vectors
+using QuantumBilliards: _boundary_state, _boundary_states
 using QuantumBilliards: boundary_states, _rellich, get_boundary_curves_with_ignored, FourierNodes, boundary_coords,
                         _debroglie_grid_size, gradient_matrices
 
@@ -310,4 +311,85 @@ end
         @test norm(Y2 - N * (N' * Y2)) < 1e-7
         @test norm(Y2' * Y2 - I(2)) < 1e-8
     end
+end
+
+# _boundary_state / _boundary_states: u-state from a hand-built left vector y (no solve). Kernel: DLP on the unit circle without symmetry,
+# so u_raw = y ./ ds. Expected: u = e^{i phi} y ./ ds / sqrt(bnd_norm) with phi making the largest entry real positive, bnd_norm the Rellich
+# value of the unrotated y ./ ds (the Rellich integrand is phase invariant), and the Rellich norm of the stored u equal to 1.
+bs_left_vector(n, seed) = randn(MersenneTwister(seed), ComplexF64, n)
+
+@testset "_boundary_state - u-state from a hand-built left vector" begin
+    kernel = DoubleLayerPotentialSolver(10.0, BS_CIRCLE)
+    k = 3.0
+    pts = evaluate_points(kernel, BS_CIRCLE, k)
+    n = length(pts.xy)
+    y = bs_left_vector(n, 1)
+    u_raw = y ./ pts.ds
+    st = _boundary_state(kernel, BS_CIRCLE, pts, k, 1e-12, y)
+
+    @testset "type and fields" begin
+        @test st isa BIMEigenstate{ComplexF64,Float64}
+        @test st.vec === nothing
+        @test st.u isa Vector{ComplexF64} && length(st.u) == n
+        @test st.pts === pts
+        @test st.k == k && st.k_im == 0.0 && st.ten == 1e-12
+        @test st.bnd_norm isa Float64
+    end
+
+    @testset "largest entry real and positive" begin
+        p = argmax(abs.(st.u))
+        @test p == argmax(abs.(u_raw))
+        @test imag(st.u[p]) == 0 || abs(imag(st.u[p])) <= 1e-14 * abs(st.u[p])
+        @test real(st.u[p]) > 0
+    end
+
+    @testset "global phase and normalization" begin
+        @test st.bnd_norm ≈ _rellich(pts, u_raw, k) rtol = 1e-12
+        @test _rellich(pts, st.u, k) ≈ 1 rtol = 1e-12
+        c = dot(u_raw, st.u) / dot(u_raw, u_raw)                         # st.u is a scalar multiple of u_raw ...
+        @test st.u ≈ c .* u_raw rtol = 1e-12
+        @test abs(c) ≈ 1 / sqrt(st.bnd_norm) rtol = 1e-12               # ... of modulus 1 / sqrt(bnd_norm)
+    end
+
+    @testset "global phase of y does not change the state" begin
+        st_rot = _boundary_state(kernel, BS_CIRCLE, pts, k, 1e-12, cis(0.7) .* y)
+        @test st_rot.u ≈ st.u rtol = 1e-12
+        @test st_rot.bnd_norm ≈ st.bnd_norm rtol = 1e-12
+    end
+
+    @testset "complex k is split into k and k_im" begin
+        sc = _boundary_state(kernel, BS_CIRCLE, pts, 3.0 + 0.02im, 1e-12, y)
+        @test sc.k == 3.0 && sc.k_im == 0.02
+        @test sc.u ≈ st.u rtol = 1e-12                                   # Rellich uses the real part of k
+    end
+
+    @testset "a view of a column is accepted" begin
+        Y = hcat(y, bs_left_vector(n, 2))
+        @test _boundary_state(kernel, BS_CIRCLE, pts, k, 1e-12, view(Y, :, 1)).u ≈ st.u rtol = 1e-12
+    end
+
+    @testset "type inferred" begin
+        @test @inferred(_boundary_state(kernel, BS_CIRCLE, pts, k, 1e-12, y)) isa BIMEigenstate{ComplexF64,Float64}
+    end
+end
+
+@testset "_boundary_states - one state per column of the left vectors" begin
+    kernel = DoubleLayerPotentialSolver(10.0, BS_CIRCLE)
+    pts = evaluate_points(kernel, BS_CIRCLE, 3.0)
+    n = length(pts.xy)
+    Y = hcat(bs_left_vector(n, 3), bs_left_vector(n, 4), bs_left_vector(n, 5))
+    ks = [2.9, 3.0 + 0.01im, 3.1]
+    ts = [1e-10, 2e-10, 3e-10]
+    states = _boundary_states(kernel, BS_CIRCLE, ks, ts, Y, pts)
+    @test states isa Vector{BIMEigenstate{ComplexF64,Float64}}
+    @test length(states) == 3
+    @test all(s -> s.pts === pts && s.vec === nothing, states)
+    @test [s.k for s in states] == real.(ks) && [s.k_im for s in states] == imag.(ks) && [s.ten for s in states] == ts
+    for j in 1:3
+        ref = _boundary_state(kernel, BS_CIRCLE, pts, ks[j], ts[j], Y[:, j])
+        @test states[j].u == ref.u && states[j].bnd_norm == ref.bnd_norm      # column j gives level j
+        @test _rellich(pts, states[j].u, real(ks[j])) ≈ 1 rtol = 1e-12
+    end
+    @test !(states[1].u ≈ states[2].u)
+    @test isempty(_boundary_states(kernel, BS_CIRCLE, Float64[], Float64[], zeros(ComplexF64, n, 0), pts))
 end

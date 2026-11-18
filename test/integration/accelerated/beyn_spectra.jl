@@ -233,3 +233,85 @@ end
     ratio = (sum(uo) / length(uo)) / (sum(ui) / length(ui))
     @test abs(ratio / (abs(dpsi(1.0)) / abs(dpsi(0.3))) - 1) < BOUNDARY_U_TOL_BIM
 end
+
+# Boundary functions stored in the spectrum (`states = :boundary`, Step 9 of scratchpad/boundary-function-spectrum-plan.md): compute_spectrum runs the
+# left contour solve per window and stores the Rellich-normalized u = y ./ ds (no layer density). References: solve_state u at the same level on the
+# stored boundary points (same left singular vector up to a complex scale; compared after the least-squares scaling, tolerance BOUNDARY_U_TOL_BIM)
+# and the levels of the same solver with states = :none. Window [5, 7] of the rectangle (levels 5.2194, 5.4783, 6.5076, 6.6719, 6.9128; nearest
+# outside levels 4.755 and 7.43, so the edges are far from the levels).
+const BEYN_BOUNDARY_CACHE = Dict{Symbol,Any}()
+
+function beyn_boundary_rectangle(kind::Symbol; kwargs...)
+    return get!(BEYN_BOUNDARY_CACHE, Symbol(kind, kwargs)) do
+        billiard = RectangleBilliard(1.0, 0.7)
+        kernel = kind === :cfie ? CombinedFieldIntegralEquationSolver(10.0, billiard; grading=GlobalCornerGrading()) :
+                 DoubleLayerPotentialSolver(10.0, billiard; grading=GlobalCornerGrading())
+        solver = BeynSolver(kernel; use_chebyshev=false, kwargs...)
+        data = compute_spectrum(solver, billiard, 5.0, 7.0; multithreaded=false, show_progress=false)
+        (; billiard, kernel, data)
+    end
+end
+
+# solver: Beyn contour integral, states = :boundary
+# kernel/basis: CFIE, GlobalCornerGrading, ppw=10
+# billiard: Rectangle (RectangleBilliard(1.0, 0.7), the full 2.0 x 1.4 rectangle)
+# symmetry: None
+# reference: solve_state u on the stored pts; levels of the states = :none run and the analytic levels (5 levels in [5, 7])
+# functions to test: compute_spectrum (BeynSolver, states = :boundary), _boundary_states
+@testset "Beyn (CFIE) - Rectangle - states = :boundary stores u equal to solve_state, window [5, 7]" begin
+    r = beyn_boundary_rectangle(:cfie; states=:boundary)
+    ref = beyn_boundary_rectangle(:cfie; states=:none)
+    data = r.data
+    ks = sort(real.(data.k))
+    @test length(data) == 5
+    @test all(isapprox.(ks, rectangle_spectrum(2.0, 1.4, 5.0, 7.0); atol=SPECTRUM_ATOL_BIM))
+    @test ks == sort(real.(ref.data.k)) || all(isapprox.(ks, sort(real.(ref.data.k)); atol=SPECTRUM_ATOL_BIM))
+    @test ref.data.states === nothing
+    @test all(data.ten .< TENSION_TOL_ACCEL)
+    @test all(abs.(data.k_im) .< IMAG_TOL)
+    @test boundary_states_wellformed(data)
+    res, idx = stored_u_residuals(data, r.kernel, r.billiard)
+    @test length(idx) == 5
+    @test all(res .< BOUNDARY_U_TOL_BIM)
+end
+
+# solver: Beyn contour integral, states = :boundary
+# kernel/basis: DLP, GlobalCornerGrading, ppw=10
+# billiard: Rectangle (RectangleBilliard(1.0, 0.7))
+# symmetry: None
+# reference: solve_state u on the stored pts; levels of the states = :none run
+# functions to test: compute_spectrum (BeynSolver, states = :boundary), _boundary_states
+@testset "Beyn (DLP) - Rectangle - states = :boundary stores u equal to solve_state, window [5, 7]" begin
+    r = beyn_boundary_rectangle(:dlp; states=:boundary)
+    ref = beyn_boundary_rectangle(:dlp; states=:none)
+    data = r.data
+    ks = sort(real.(data.k))
+    @test length(data) == length(ref.data) == 5
+    @test all(isapprox.(ks, sort(real.(ref.data.k)); atol=SPECTRUM_ATOL_BIM))
+    @test all(data.ten .< TENSION_TOL_ACCEL)
+    @test all(abs.(data.k_im) .< IMAG_TOL)
+    @test boundary_states_wellformed(data)
+    res, idx = stored_u_residuals(data, r.kernel, r.billiard)
+    @test length(idx) == 5
+    @test all(res .< BOUNDARY_U_TOL_BIM)
+end
+
+# solver: Beyn contour integral, states = :boundary with imag_k_check = true (left projected solve and left imaginary-k check)
+# kernel/basis: CFIE, GlobalCornerGrading, ppw=10
+# billiard: Rectangle (RectangleBilliard(1.0, 0.7))
+# symmetry: None
+# reference: solve_state u on the stored pts; levels of the states = :none run without the check
+# functions to test: compute_spectrum (imag_k_check, side = :left), _beyn_projected_solve, _beyn_imag_k_check
+@testset "Beyn (CFIE) - Rectangle - states = :boundary with imag_k_check, window [5, 7]" begin
+    r = beyn_boundary_rectangle(:cfie; states=:boundary, imag_k_check=true)
+    ref = beyn_boundary_rectangle(:cfie; states=:none)
+    data = r.data
+    @test length(data) == length(ref.data) == 5
+    @test all(isapprox.(sort(real.(data.k)), sort(real.(ref.data.k)); atol=SPECTRUM_ATOL_BIM))
+    @test all(data.ten .< TENSION_TOL_ACCEL)
+    @test all(abs.(data.k_im) .< IMAG_TOL)
+    @test boundary_states_wellformed(data)
+    res, idx = stored_u_residuals(data, r.kernel, r.billiard)
+    @test length(idx) == 5
+    @test all(res .< BOUNDARY_U_TOL_BIM)
+end

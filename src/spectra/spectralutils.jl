@@ -519,6 +519,14 @@ solve. The density is expanded with `symmetrize_layer_density` before
 storage, so both `state.vec` and `state.pts` refer to the complete physical
 boundary.
 
+When `states = :boundary`, the contour solve uses the adjoint moments
+([`solve_left_vectors`](@ref)), which reuse the factorizations of the right
+moments at no extra cost, and each retained eigenvalue stores a
+[`BIMEigenstate`](@ref) with the Rellich-normalized boundary normal derivative
+`u = ∂ₙψ` on the complete physical boundary (`vec = nothing`, element type
+`Complex{T}`, global phase fixed so that the largest entry of `u` is real).
+Layer densities are not retained.
+
 When `solver.imag_k_check=true`, projected roots and layer densities are
 retained temporarily and subjected to the global imaginary-wavenumber
 residual check before the final spectrum is constructed.
@@ -574,6 +582,18 @@ function compute_spectrum(solver::BeynSolver, billiard::Bi, k1, k2; accept_tol::
                 keep = (T(k1).<=real.(ks)).&(real.(ks).<=T(k2))
                 return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], fill(false, count(keep)); states=isempty(states) ? nothing : states[keep], accept_tol)
             end
+            if solver.states === :boundary
+                states_win = Vector{Vector{BIMEigenstate{Complex{T},T}}}(undef, nw)
+                @timeit_debug "solution" begin
+                    @maybe_showprogress show_progress for i in 1:nw
+                        ks_win[i], ts_win[i], Y = solve_left_vectors(solver, pts[i], k0[i], 2R[i]; multithreaded, cheb_config)
+                        states_win[i] = _boundary_states(solver.kernel, billiard, ks_win[i], ts_win[i], Y, pts[i])
+                    end
+                end
+                ks = reduce(vcat, ks_win); ts = reduce(vcat, ts_win); states = reduce(vcat, states_win)
+                keep = (T(k1).<=real.(ks)).&(real.(ks).<=T(k2))
+                return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], fill(false, count(keep)); states=isempty(states) ? nothing : states[keep], accept_tol)
+            end
             @timeit_debug "solution" begin
                 @maybe_showprogress show_progress for i in 1:nw
                     ks_win[i], ts_win[i] = solve(solver, pts[i], k0[i], 2R[i]; multithreaded, cheb_config)
@@ -582,22 +602,25 @@ function compute_spectrum(solver::BeynSolver, billiard::Bi, k1, k2; accept_tol::
             ks = reduce(vcat, ks_win); ts = reduce(vcat, ts_win); keep = (T(k1).<=real.(ks)).&(real.(ks).<=T(k2))
             return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], fill(false, count(keep)); accept_tol)
         end
+        side = solver.states === :boundary ? :left : :right
         ks_win = Vector{Vector{Complex{T}}}(undef, nw); X_win = Vector{Matrix{Complex{T}}}(undef, nw)
         @timeit_debug "solution" begin
             @maybe_showprogress show_progress for i in 1:nw
-                ks_win[i], X_win[i] = _beyn_projected_solve(solver, pts[i], k0[i], 2R[i]; multithreaded, cheb_config)
+                ks_win[i], X_win[i] = _beyn_projected_solve(solver, pts[i], k0[i], 2R[i]; multithreaded, cheb_config, side)
             end
         end
-        idx_keep, residuals = @timeit_debug "postprocessing" _beyn_imag_k_check(solver, ks_win, X_win, pts; multithreaded, cheb_config, krange=(T(k1), T(k2)))
+        idx_keep, residuals = @timeit_debug "postprocessing" _beyn_imag_k_check(solver, ks_win, X_win, pts; multithreaded, cheb_config, krange=(T(k1), T(k2)), side)
         n = sum(length, idx_keep); ks = Vector{Complex{T}}(undef, n); ts = Vector{T}(undef, n); control = Vector{Bool}(undef, n)
-        if solver.states === :vectors
+        if solver.states !== :none
             entries = Tuple{Int,Int}[]; p = 0
             for i in 1:nw, q in eachindex(idx_keep[i])
                 j = idx_keep[i][q]; p += 1
                 ks[p] = ks_win[i][j]; control[p] = isnan(residuals[i][q]); ts[p] = control[p] ? abs(imag(ks[p])) : residuals[i][q]
                 push!(entries, (i,j))
             end
-            states = @timeit_debug "postprocessing" [BIMEigenstate(ks[q], symmetrize_layer_density(solver.kernel, X_win[i][:,j], pts[i], billiard), ts[q], pts[i]) for (q,(i,j)) in enumerate(entries)]
+            states = @timeit_debug "postprocessing" (solver.states === :vectors ?
+                [BIMEigenstate(ks[q], symmetrize_layer_density(solver.kernel, X_win[i][:,j], pts[i], billiard), ts[q], pts[i]) for (q,(i,j)) in enumerate(entries)] :
+                [_boundary_state(solver.kernel, billiard, pts[i], ks[q], ts[q], view(X_win[i], :, j)) for (q,(i,j)) in enumerate(entries)])
             keep = (T(k1).<=real.(ks)).&(real.(ks).<=T(k2))
             return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], control[keep]; states=isempty(states) ? nothing : states[keep], accept_tol)
         end

@@ -158,6 +158,25 @@ function _left_null_vectors(A::AbstractMatrix{C}, m::Int, k::Real, res_tol::Real
     return Y
 end
 
+# `u`-state of one level from a left null vector `y` of the (possibly symmetry-reduced) kernel matrix: `u = y ./ ds` expanded with the orbit phases, rotated so that its largest entry is real and positive, and Rellich-normalized.
+function _boundary_state(kernel::AbsBIMSolver, billiard::AbsBilliard, pts::BoundaryPoints{T}, k::Number, ten::Real, y::AbstractVector) where {T<:Real}
+    u = Vector{Complex{T}}(_bim_normal_derivative(kernel, pts, y, billiard))
+    p = findmax(abs, u)[2]
+    u .*= conj(u[p]) / abs(u[p])
+    bnd_norm = T(_rellich(pts, u, T(real(k))))
+    u ./= sqrt(bnd_norm)
+    return BIMEigenstate{Complex{T},T}(T(real(k)), T(imag(k)), nothing, T(ten), pts, u, bnd_norm)
+end
+
+# `u`-states of the levels `ks` of one window from the columns of the left vectors `Y`; the vectors are not retained.
+function _boundary_states(kernel::AbsBIMSolver, billiard::AbsBilliard, ks::AbstractVector{<:Number}, ts::AbstractVector{<:Real}, Y::AbstractMatrix, pts::BoundaryPoints{T}) where {T<:Real}
+    states = Vector{BIMEigenstate{Complex{T},T}}(undef, length(ks))
+    for j in eachindex(ks)
+        states[j] = _boundary_state(kernel, billiard, pts, ks[j], ts[j], view(Y, :, j))
+    end
+    return states
+end
+
 """
     compute_boundary_functions(data::SpectralData; multithreaded::Bool=true, show_progress::Bool=false, cluster_tol::Real=1e-5, res_tol::Real=1e-6, rng::AbstractRNG=MersenneTwister(0)) → SpectralData
 
@@ -239,13 +258,9 @@ function compute_boundary_functions(data::SpectralData{T,Bi,So}; multithreaded::
             BLAS.set_num_threads(old_blas)
         end
         for (j, i) in enumerate(members)
-            u = Vector{Complex{T}}(_bim_normal_derivative(kernel, pts, view(Y, :, j), billiard))
-            p = findmax(abs, u)[2]
-            u .*= conj(u[p]) / abs(u[p])
-            bnd_norm = T(_rellich(pts, u, data.k[i]))
-            u ./= sqrt(bnd_norm)
+            s = _boundary_state(kernel, billiard, pts, complex(data.k[i], data.k_im[i]), data.ten[i], view(Y, :, j))
             vec = states === nothing || states[i].vec === nothing ? nothing : Vector{Complex{T}}(states[i].vec)
-            out[i] = BIMEigenstate{Complex{T},T}(data.k[i], data.k_im[i], vec, data.ten[i], pts, u, bnd_norm)
+            out[i] = BIMEigenstate{Complex{T},T}(s.k, s.k_im, vec, s.ten, pts, s.u, s.bnd_norm)
         end
     end
     return SpectralData{T,Bi,So,typeof(out)}(billiard, data.solver, data.k, data.k_im, data.ten, data.control, out)

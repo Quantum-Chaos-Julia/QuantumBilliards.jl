@@ -69,3 +69,27 @@ end
     @test all(diff(s1) .> SPECTRUM_ATOL_BIM)
     @test all(diff(s0) .> SPECTRUM_ATOL_BIM)
 end
+
+# solver: Beyn contour integral, states = :boundary
+# kernel/basis: CFIE, SmoothPeriodicGrading, ppw=8, cheap Beyn settings of _rot_c3_spectrum
+# billiard: C3 (C3Billiard(0.2))
+# symmetry: C3 rotation sector s = 1 (complex irrep: the stored u is complex and carries the orbit phases exp(2*pi*i*s/3))
+# reference: solve_state u on the stored pts (same kernel and sector); levels of the states = :none sector spectrum (_rot_c3_spectrum((1,)))
+# functions to test: compute_spectrum (states = :boundary, complex rotation sector), _bim_normal_derivative
+@testset "Beyn (CFIE) - C3 - rotation sector 1 states = :boundary stores u equal to solve_state" begin
+    billiard = C3Billiard(0.2)
+    kernel = CombinedFieldIntegralEquationSolver(8.0, billiard; grading=SmoothPeriodicGrading(), sym_characters=(1,))
+    solver = BeynSolver(kernel; nlevels=6, nq=16, r=16, Rmax=0.5, svd_tol=1e-10, res_tol=2e-5,
+        taylor_degree=6, use_chebyshev=false, imag_k_check=false, states=:boundary)
+    data = compute_spectrum(solver, billiard, 3.0, 12.0; accept_tol=nothing, multithreaded=false, show_progress=false)
+    ref = _rot_c3_spectrum((1,))
+    @test length(data) == length(ref.k) > 0
+    @test all(isapprox.(sort(real.(data.k)), sort(real.(ref.k)); atol=SPECTRUM_ATOL_BIM))
+    @test all(data.ten .< TENSION_TOL_BIM)
+    @test all(abs.(data.k_im) .< IMAG_TOL)
+    @test boundary_states_wellformed(data)
+    @test any(st -> maximum(abs.(imag.(st.u))) > 1e-3 * maximum(abs.(st.u)), data.states)       # genuinely complex u
+    res, idx = stored_u_residuals(data, kernel, billiard)
+    @test length(idx) == length(data)
+    @test all(res .< BOUNDARY_U_TOL_BIM)
+end

@@ -98,6 +98,7 @@ function _memory_retained(solver::BeynSolver, nw::Integer, ns::Real, Nf::Real, M
     retained = Pair{String,Float64}["boundary points ($nw windows)" => _PTS_BYTES_PER_POINT * nw * Nf]
     (solver.imag_k_check || solver.states === :vectors) && push!(retained, "layer densities, reduced (states x M)" => _CPLX_BYTES * ns * M)
     solver.states === :vectors && push!(retained, "eigenstates, full boundary (states x Nf)" => _CPLX_BYTES * ns * Nf)
+    solver.states === :boundary && push!(retained, "boundary functions u, full boundary (states x Nf)" => _CPLX_BYTES * ns * Nf)
     return retained
 end
 

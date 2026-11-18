@@ -26,6 +26,47 @@ const BOUNDARY_U_TOL_BIM = 1e-3       # relative L2 error of u from solve_state 
 const BOUNDARY_U_TOL_VS = 1e-12       # VS (worst observed 2.3e-16)
 const RELLICH_TOL_BIM = 1e-6          # deviation of the Rellich norm of u from the analytic value or from 1 (worst observed 2.5e-8 graded rectangle)
 
+using LinearAlgebra: norm, dot
+
+"""
+    stored_u_residuals(data, kernel, billiard; gap=1e-4)
+
+For every level of `data` (a `states = :boundary` Beyn spectrum) whose nearest neighbour is farther than `gap`, relative arclength-weighted
+L2 distance between the stored `u` and the `u` of `solve_state` at the same level on the same stored boundary points, after the best complex
+scaling (the stored `u` carries an arbitrary global phase). Returns `(residuals, indices)`; degenerate levels are skipped because
+`solve_state` returns one arbitrary vector of the eigenspace.
+"""
+function stored_u_residuals(data, kernel, billiard; gap::Real=1e-4)
+    res = Float64[]
+    idx = Int[]
+    ks = real.(data.k)
+    for (i, st) in enumerate(data.states)
+        any(j -> j != i && abs(ks[j] - ks[i]) <= gap, eachindex(ks)) && continue
+        _, _, u_ref, _ = QuantumBilliards.solve_state(kernel, st.pts, ks[i], billiard; multithreaded=false)
+        w = sqrt.(st.pts.ds)
+        c = dot(w .* u_ref, w .* st.u) / dot(w .* u_ref, w .* u_ref)
+        push!(res, norm(w .* (st.u .- c .* u_ref)) / norm(w .* st.u))
+        push!(idx, i)
+    end
+    return res, idx
+end
+
+# Structural checks of the u-states of a `states = :boundary` spectrum: one state per level, no layer density, u stored with the global
+# phase fixed on a largest-modulus entry (real positive; orbit copies in symmetry sectors share the modulus) and Rellich-normalized.
+function boundary_states_wellformed(data)
+    st = data.states
+    st isa Vector || return false
+    length(st) == length(data.k) || return false
+    return all(eachindex(st)) do i
+        s = st[i]
+        (s.vec === nothing && s.u !== nothing && length(s.u) == length(s.pts) && s.bnd_norm !== nothing) || return false
+        m = maximum(abs, s.u)
+        any(v -> abs(v) >= (1 - 1e-10) * m && abs(imag(v)) <= 1e-12 * m && real(v) > 0, s.u) &&
+            abs(QuantumBilliards._rellich(s.pts, s.u, s.k) - 1) < RELLICH_TOL_BIM &&
+            s.k == real(data.k[i])
+    end
+end
+
 # High-wavenumber tier.
 const HIGH_K = 100.0
 const HIGH_K_LEVELS = 5

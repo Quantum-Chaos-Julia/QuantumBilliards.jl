@@ -947,6 +947,10 @@ using QuantumBilliards: _check_states_supported
         @test _check_states_supported(SpectraVectorStub(roots, :vectors)) === nothing
         @test_throws ArgumentError _check_states_supported(SpectraVectorStub(roots, :boundary))
         @test _check_states_supported(VerginiSaracenoSolver(2.0, 5.0; states=:boundary)) === nothing
+        beyn_kernel = DoubleLayerPotentialSolver(4.0, RectangleBilliard(1.0, 0.7))
+        @test _check_states_supported(BeynSolver(beyn_kernel; states=:boundary)) === nothing      # real Beyn accepts :boundary
+        @test _check_states_supported(BeynSolver(beyn_kernel; states=:vectors)) === nothing
+        @test _check_states_supported(BeynSolver(beyn_kernel; states=:none)) === nothing
     end
 
     @testset "_vs_solve_window: :none stores no states, :vectors stores them" begin
@@ -965,10 +969,10 @@ using QuantumBilliards: _check_states_supported
         @test [st.k for st in s_bnd] == ki
     end
 
-    @testset "compute_spectrum rejects states = :boundary for Beyn, EBIM and CORK before any solve" begin
+    @testset "compute_spectrum rejects states = :boundary for EBIM and CORK before any solve" begin
         circle = CircleBilliard(1.0)
         kernel = DoubleLayerPotentialSolver(10.0, circle)
-        @test_throws ArgumentError compute_spectrum(BeynSolver(kernel; states=:boundary), circle, 5.0, 6.0)
+        # Beyn accepts :boundary since Step 9 (covered by _check_states_supported above and the Beyn integration tests)
         @test_throws ArgumentError compute_spectrum(ExpandedBIMSolver(kernel; states=:boundary), circle, 5.0, 6.0)
         @test_throws ArgumentError compute_spectrum(CORKSolver(kernel; states=:boundary), circle, 5.0, 6.0)
     end

@@ -1035,6 +1035,19 @@ cp_valid_items(items) = all(!isempty(first(x)) && isfinite(last(x)) && last(x) >
         @test sum(last, _memory_retained(base, 6, ns, Nf, M)) > sum(last, r0)    # boundary points scale with the window count
     end
 
+    @testset "Beyn retained, states = :boundary" begin
+        base = with_params(beyn; imag_k_check=false, states=:none)
+        r0 = _memory_retained(base, 3, ns, Nf, M)
+        r_bnd = _memory_retained(with_params(base; states=:boundary), 3, ns, Nf, M)
+        @test length(r_bnd) == length(r0) + 1                                    # one extra item, no layer densities
+        @test r_bnd[1:length(r0)] == r0
+        @test occursin("boundary functions", first(last(r_bnd)))
+        @test last(last(r_bnd)) == _CPLX_BYTES * ns * Nf                         # one complex u per state on the full boundary
+        r_bnd_imag = _memory_retained(with_params(base; states=:boundary, imag_k_check=true), 3, ns, Nf, M)
+        @test length(r_bnd_imag) == 3                                            # points, imag-k densities, u
+        @test _persistent_bytes(with_params(base; states=:boundary), 3, ns, Nf, M) == sum(last, r_bnd)
+    end
+
     @testset "CORK" begin
         labels = cp_stage_labels(_memory_stages(cork, Nf, M))
         @test length(labels) == 2

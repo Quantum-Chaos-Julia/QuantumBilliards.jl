@@ -55,3 +55,32 @@ end
     @test length(full) == length(ref)
     @test length(full) == length(ref) && all(isapprox.(full, ref; atol=SPECTRUM_ATOL_SECTOR))
 end
+
+# solver: Beyn contour integral, states = :boundary
+# kernel/basis: composite CFIE (outer square graded, hole copies share one solver), ppw=10, min_pts=96, symmetry-reduced to the D2 sector (+1, +1)
+# billiard: D2 quarter square with SymmetrizedHoles(DomainHole(disc), D2_symmetry())
+# symmetry: D2 sector (chi_Y, chi_X) = (1, 1); u is expanded with the orbit phases over the four hole copies and the outer loop
+# reference: solve_state u on the stored pts (same kernel and sector; compared for levels below k = 7.5), levels of the states = :none run of the same sector (sh_spectrum cache)
+# functions to test: compute_spectrum (states = :boundary, composite reduced kernel with hole copies), _bim_normal_derivative
+@testset "Beyn (CFIE composite) - SymmetrizedHoles - D2 sector (1, 1) states = :boundary stores u equal to solve_state" begin
+    b = sh_billiard(:symmetrized_discs) do
+        hf_symmetrized_disc_billiard()
+    end
+    k1, k2 = 4.0, 9.0
+    choices = (YAxisReflection => 1, XAxisReflection => 1)
+    ref = sh_spectrum(:symmetrized_discs, b, k1, k2, choices...)
+    sector = symmetry_sector(b, choices...)
+    kernel = sh_composite_kernel(sector)
+    solver = BeynSolver(kernel; use_chebyshev=false, states=:boundary)
+    data = compute_spectrum(solver, b, k1, k2; multithreaded=false, show_progress=false)
+    @test !isempty(data.k)
+    @test length(data) == length(ref.k)
+    @test all(isapprox.(sh_levels(data), sh_levels(ref); atol=SPECTRUM_ATOL_SECTOR))
+    @test sh_quality_ok(data)
+    @test boundary_states_wellformed(data)
+    res, idx = stored_u_residuals(data, kernel, b)
+    @test !isempty(idx)
+    low = real.(data.k)[idx] .< 7.5                                           # u agreement degrades with k at ppw=10 (2e-3 at k = 8.9)
+    @test count(low) >= 3
+    @test all(res[low] .< BOUNDARY_U_TOL_BIM)
+end
