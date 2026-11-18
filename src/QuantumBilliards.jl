@@ -83,7 +83,7 @@ export DoubleLayerPotentialSolver, CombinedFieldIntegralEquationSolver, Composit
 export ExpandedBIMSolver, BeynSolver, CORKSolver
 export ChebyshevConfig
 export evaluate_points, construct_matrices
-export solve, solve_vect, solve_vectors, solve_state
+export solve, solve_vect, solve_vectors, solve_left_vectors, solve_state
 export solve_wavenumber, solve_spectrum
 export k_sweep
 export boundary_matrix_size

@@ -380,10 +380,18 @@ function _tune_beyn_taylor_degree(solver::BeynSolver, pts, k0, R; multithreaded:
     return p
 end
 
-function _accumulate_beyn_moments!(A0, A1, X, V, Fs, zj, wj)
+_check_beyn_side(side::Symbol) = side === :right || side === :left || throw(ArgumentError("side must be :right or :left, got :$side"))
+
+# Contour nodes and weights of the moments of one side: the left moments use A(z)⁻ᴴ with conj(w) and conj(w z).
+@inline _beyn_side_weights(side::Symbol, z, w) = side === :left ? (conj(z), conj(w)) : (z, w)
+
+@inline _beyn_side_solve!(X, F, V, side::Symbol) = side === :left ? ldiv!(X, adjoint(F), V) : ldiv!(X, F, V)
+
+function _accumulate_beyn_moments!(A0, A1, X, V, Fs, zj, wj; side::Symbol=:right)
     xv = reshape(X, :); a0v = reshape(A0, :); a1v = reshape(A1, :)
     @blas_multi_then_1 MAX_BLAS_THREADS @inbounds for j in eachindex(zj)
-        ldiv!(X, Fs[j], V); BLAS.axpy!(wj[j], xv, a0v); BLAS.axpy!(wj[j]*zj[j], xv, a1v)
+        z, w = _beyn_side_weights(side, zj[j], wj[j])
+        _beyn_side_solve!(X, Fs[j], V, side); BLAS.axpy!(w, xv, a0v); BLAS.axpy!(w*z, xv, a1v)
     end
     return nothing
 end
@@ -392,7 +400,7 @@ end
 # probes and discarded, so only O(1) matrices are alive instead of nq. The matrices
 # are identical to the stored path; a rank-saturated moment (rare) repeats the sweep
 # with a larger probe rank.
-function _beyn_moments_streaming(solver::BeynSolver, pts, zj, wj, N::Int, rng; multithreaded::Bool=true)
+function _beyn_moments_streaming(solver::BeynSolver, pts, zj, wj, N::Int, rng; multithreaded::Bool=true, side::Symbol=:right)
     T = _bim_numeric_type(solver); r = min(solver.r, N)
     geom = _bim_geometry(solver.kernel, pts)
     while true
@@ -405,8 +413,9 @@ function _beyn_moments_streaming(solver::BeynSolver, pts, zj, wj, N::Int, rng; m
                 @blas_multi_then_1 MAX_BLAS_THREADS F = lu!(Tj; check=false)
             end
             @timeit_debug "moment_accumulation" begin
-                @blas_multi_then_1 MAX_BLAS_THREADS ldiv!(X, F, V)
-                BLAS.axpy!(wj[j], xv, a0v); BLAS.axpy!(wj[j]*zj[j], xv, a1v)
+                z, w = _beyn_side_weights(side, zj[j], wj[j])
+                @blas_multi_then_1 MAX_BLAS_THREADS _beyn_side_solve!(X, F, V, side)
+                BLAS.axpy!(w, xv, a0v); BLAS.axpy!(w*z, xv, a1v)
             end
         end
         @timeit_debug "moment_svdvals" begin
@@ -447,12 +456,13 @@ Matrix construction uses the analytic Taylor-Horner backend when
 * `A0::Matrix{Complex{T}}`: Zeroth contour moment.
 * `A1::Matrix{Complex{T}}`: First contour moment.
 """
-function construct_matrices(solver::BeynSolver, pts::BoundaryPoints, k0, R; multithreaded::Bool=true, rng=MersenneTwister(0), cheb_config::ChebyshevConfig=solver.cheb_config, taylor_degree::Int=solver.taylor_degree)
+function construct_matrices(solver::BeynSolver, pts::BoundaryPoints, k0, R; multithreaded::Bool=true, rng=MersenneTwister(0), cheb_config::ChebyshevConfig=solver.cheb_config, taylor_degree::Int=solver.taylor_degree, side::Symbol=:right)
+    _check_beyn_side(side)
     @timeit_debug "beyn_construct_matrices" begin
         T = _bim_numeric_type(solver); N = boundary_matrix_size(solver.kernel, pts); k0c = Complex{T}(k0); Rc = T(R); nq = solver.nq
         θ = range(zero(T), 2T(pi); length=nq+1)[1:end-1]; ej = cis.(θ); zj = k0c .+ Rc.*ej; wj = (Rc/nq).*ej
         backend = solver.use_taylor ? :taylor : solver.use_chebyshev ? :chebyshev : :direct
-        backend === :direct && return _beyn_moments_streaming(solver, pts, zj, wj, N, rng; multithreaded)
+        backend === :direct && return _beyn_moments_streaming(solver, pts, zj, wj, N, rng; multithreaded, side)
         @timeit_debug "multi_k_matrices" begin
             if solver.use_taylor
                 Tbufs = _construct_matrices_multi_k_taylor(solver.kernel, pts, Float64(real(k0c)), Float64(Rc), nq, taylor_degree; multithreaded)
@@ -471,7 +481,7 @@ function construct_matrices(solver::BeynSolver, pts::BoundaryPoints, k0, R; mult
         r = min(solver.r, N)
         while true
             V, X, A0, A1 = beyn_buffer_matrices(T, N, r, rng)
-            @timeit_debug "moment_accumulation" _accumulate_beyn_moments!(A0, A1, X, V, Fs, zj, wj)
+            @timeit_debug "moment_accumulation" _accumulate_beyn_moments!(A0, A1, X, V, Fs, zj, wj; side)
             @timeit_debug "moment_svdvals" begin
                 @blas_multi_then_1 MAX_BLAS_THREADS Σ = svdvals(A0)
             end
@@ -506,10 +516,11 @@ outside the contour are discarded.
 * `ks::Vector{Complex{T}}`: Complex roots inside the contour.
 * `X::Matrix{Complex{T}}`: Corresponding layer density vectors as columns.
 """
-function _beyn_projected_solve(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, rng=MersenneTwister(0), cheb_config::ChebyshevConfig=solver.cheb_config)
+function _beyn_projected_solve(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, rng=MersenneTwister(0), cheb_config::ChebyshevConfig=solver.cheb_config, side::Symbol=:right)
+    _check_beyn_side(side)
     @timeit_debug "beyn_projected_solve" begin
         T = _bim_numeric_type(solver); k0c = Complex{T}(k0); Rc = T(dk)/2
-        @blas_1 A0, A1 = construct_matrices(solver, pts, k0c, Rc; multithreaded, rng, cheb_config)
+        @blas_1 A0, A1 = construct_matrices(solver, pts, k0c, Rc; multithreaded, rng, cheb_config, side)
         N = size(A0, 1)
         @timeit_debug "svd" begin
             @blas_multi_then_1 MAX_BLAS_THREADS U, Σ, W = svd!(A0; full=false)
@@ -528,7 +539,7 @@ function _beyn_projected_solve(solver::BeynSolver, pts::BoundaryPoints, k0, dk; 
         @timeit_debug "reduced_eigen" begin
             @blas_multi_then_1 MAX_BLAS_THREADS ev = eigen!(B)
         end
-        ks = ev.values; X = Uk*ev.vectors; idx = findall(j -> abs(ks[j]-k0c)<=Rc, eachindex(ks))
+        ks = side === :left ? conj.(ev.values) : ev.values; X = Uk*ev.vectors; idx = findall(j -> abs(ks[j]-k0c)<=Rc, eachindex(ks))
         @debug "Beyn roots inside contour" maxlog=1 nroots=rk ninside=length(idx)
         isempty(idx) && return Complex{T}[], Matrix{Complex{T}}(undef, N, 0)
         return ks[idx], X[:,idx]
@@ -536,14 +547,14 @@ function _beyn_projected_solve(solver::BeynSolver, pts::BoundaryPoints, k0, dk; 
 end
 
 # Compute the residual of a candidate root and its corresponding layer density vector.
-@inline function _beyn_residual(solver::BeynSolver, pts, k, x, y; multithreaded::Bool=true)
-    return _beyn_residual(solver, pts, k, x, y, nothing; multithreaded)
+@inline function _beyn_residual(solver::BeynSolver, pts, k, x, y; multithreaded::Bool=true, side::Symbol=:right)
+    return _beyn_residual(solver, pts, k, x, y, nothing; multithreaded, side)
 end
 
-@inline function _beyn_residual(solver::BeynSolver, pts, k, x, y, geom; multithreaded::Bool=true)
+@inline function _beyn_residual(solver::BeynSolver, pts, k, x, y, geom; multithreaded::Bool=true, side::Symbol=:right)
     @timeit_debug "beyn_residual" begin
         @blas_1 A = construct_matrices(solver.kernel, pts, k, geom; multithreaded)
-        @blas_multi_then_1 MAX_BLAS_THREADS mul!(y, A, x)
+        @blas_multi_then_1 MAX_BLAS_THREADS (side === :left ? mul!(y, adjoint(A), x) : mul!(y, A, x))
         norm(y)
     end
 end
@@ -571,14 +582,14 @@ explicitly residual-checked. This is the reference path used by `solve` and
 * `residuals::Vector{T}`: Corresponding nonlinear residuals.
 * `X::Matrix{Complex{T}}`: Corresponding layer density vectors.
 """
-function _beyn_solve_core(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, rng=MersenneTwister(0), cheb_config::ChebyshevConfig=solver.cheb_config)
-    T = _bim_numeric_type(solver); ks, X = _beyn_projected_solve(solver, pts, k0, dk; multithreaded, rng, cheb_config); N = size(X, 1)
+function _beyn_solve_core(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, rng=MersenneTwister(0), cheb_config::ChebyshevConfig=solver.cheb_config, side::Symbol=:right)
+    T = _bim_numeric_type(solver); ks, X = _beyn_projected_solve(solver, pts, k0, dk; multithreaded, rng, cheb_config, side); N = size(X, 1)
     isempty(ks) && return Complex{T}[], T[], Matrix{Complex{T}}(undef, N, 0)
     !solver.auto_discard_spurious && return ks, fill(T(NaN), length(ks)), X
     residuals = Vector{T}(undef, length(ks)); keep = falses(length(ks)); y = Vector{Complex{T}}(undef, N)
     geom = _bim_geometry(solver.kernel, pts)
     @inbounds for j in eachindex(ks)
-        rj = _beyn_residual(solver, pts, ks[j], @view(X[:,j]), y, geom; multithreaded); residuals[j] = rj; keep[j] = rj<solver.res_tol
+        rj = _beyn_residual(solver, pts, ks[j], @view(X[:,j]), y, geom; multithreaded, side); residuals[j] = rj; keep[j] = rj<solver.res_tol
     end
     idx = findall(keep)
     @debug "Beyn residual check" maxlog=1 ncandidates=length(ks) nkept=length(idx)
@@ -620,7 +631,8 @@ backend used for the contour moments. Other kernels use direct construction.
 * `residuals::Vector{Vector{T}}`: Residuals aligned with retained roots. Roots
   accepted after early termination contain `NaN`.
 """
-function _beyn_imag_k_check(solver::BeynSolver, ks_all, X_all, all_pts; pad::Int=solver.imag_k_pad, group_size::Int=solver.imag_k_group_size, multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config, krange=nothing)
+function _beyn_imag_k_check(solver::BeynSolver, ks_all, X_all, all_pts; pad::Int=solver.imag_k_pad, group_size::Int=solver.imag_k_group_size, multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config, krange=nothing, side::Symbol=:right)
+    _check_beyn_side(side)
     T = _bim_numeric_type(solver); nw = length(ks_all)
     keep = [trues(length(ks_all[i])) for i in 1:nw]; residuals = [fill(T(NaN), length(ks_all[i])) for i in 1:nw]; candidates = Tuple{Int,Int,T}[]
     @inbounds for i in 1:nw
@@ -651,12 +663,12 @@ function _beyn_imag_k_check(solver::BeynSolver, ks_all, X_all, all_pts; pad::Int
                 Abufs = _construct_matrices_multi_k_cheb(solver.kernel, pts, zg, cheb_config, geoms[i]; multithreaded)
                 for q in 1:nk
                     j = js[q]
-                    @blas_multi_then_1 MAX_BLAS_THREADS mul!(y, Abufs[q], @view(X_all[i][:, j]))
+                    @blas_multi_then_1 MAX_BLAS_THREADS (side === :left ? mul!(y, adjoint(Abufs[q]), @view(X_all[i][:, j])) : mul!(y, Abufs[q], @view(X_all[i][:, j])))
                     residuals[i][j] = norm(y)
                 end
             else
                 for j in js
-                    residuals[i][j] = _beyn_residual(solver, pts, ks_all[i][j], @view(X_all[i][:, j]), y, geoms[i]; multithreaded)
+                    residuals[i][j] = _beyn_residual(solver, pts, ks_all[i][j], @view(X_all[i][:, j]), y, geoms[i]; multithreaded, side)
                 end
             end
         end
@@ -730,6 +742,34 @@ the corresponding layer density vectors.
 """
 function solve_vectors(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config)
     return _beyn_solve_core(solver, pts, k0, dk; multithreaded, cheb_config)
+end
+
+"""
+    solve_left_vectors(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config)
+
+Solve one circular Beyn contour from the adjoint contour moments and return the
+left null vectors `y` of `A(k)` (`yᴴA(k) = 0`) with residual validation. The
+adjoint moments reuse the factorizations of the right moments through
+`A(z)⁻ᴴ`, the roots are the conjugates of the reduced eigenvalues, and
+`u = y ./ ds` is the boundary normal derivative.
+
+## Arguments
+* `solver::BeynSolver`: Beyn solver.
+* `pts::BoundaryPoints`: Boundary discretization.
+* `k0`: Contour center.
+* `dk`: Full contour diameter.
+
+## Keyword Arguments
+* `multithreaded::Bool=true`: Enable multithreaded matrix construction.
+* `cheb_config::ChebyshevConfig=solver.cheb_config`: Chebyshev configuration.
+
+## Returns
+* `ks::Vector{Complex{T}}`: Accepted complex eigenvalues.
+* `residuals::Vector{T}`: Residuals `‖A(k)ᴴy‖`.
+* `Y::Matrix{Complex{T}}`: Left vectors as columns.
+"""
+function solve_left_vectors(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, cheb_config::ChebyshevConfig=solver.cheb_config)
+    return _beyn_solve_core(solver, pts, k0, dk; multithreaded, cheb_config, side=:left)
 end
 
 """

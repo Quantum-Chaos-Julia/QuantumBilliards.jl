@@ -2,6 +2,7 @@
 #   src/solvers/acceleratedmethods/beyn.jl   (construct_matrices(::BeynSolver, ...) contour moments, _beyn_projected_solve,
 #                                             _beyn_solve_core via solve / solve_vectors, _beyn_imag_k_check,
 #                                             validate_beyn_taylor, _tune_beyn_taylor_degree, solve_wavenumber, solve_spectrum)
+# Left-side (adjoint) moments and solve_left_vectors are covered at the end of this file.
 # Weyl window planning (plan_weyl_windows, beyn_disks_from_windows, beyn_buffer_matrices) is covered in
 # spectra/spectralutils_tests.jl and not repeated here; constructor validation is covered in solvers/solverconstructors_tests.jl.
 #
@@ -590,4 +591,261 @@ end
             @test isapprox(res_g[i], res[i]; rtol=1e-6)
         end
     end
+end
+
+# ----------------------------------------------------------------------------------------------------------------------------
+# Left (adjoint) contour moments, `side = :left` (Step 7 of scratchpad/boundary-function-spectrum-plan.md):
+#   _accumulate_beyn_moments!, _beyn_moments_streaming and construct_matrices(::BeynSolver; side), _beyn_projected_solve,
+#   _beyn_residual (through _beyn_solve_core), _beyn_imag_k_check, solve_left_vectors and the side validation.
+#
+# Non-normal synthetic problem (left and right eigenvectors differ, roots complex so a missing conjugation is visible):
+#
+#       A(k) = P diag(d_m(k)) P^-1,   d_m(k) = (k - kappa_m)(1 + c k^2),
+#
+# with a fixed complex, non-unitary P. Right null vectors are the columns P[:, m]; left null vectors y (y' A(kappa_m) = 0) are the
+# conjugated rows of P^-1, y_m = (P^-1)[m, :]'. Since A(z)^-H = P^-H conj(D(z)^-1) P^H, the residue theorem gives the left moments
+#       A0_left = P^-H diag(conj(inside_m / (1 + c kappa_m^2)))           P^H V,
+#       A1_left = P^-H diag(conj(inside_m kappa_m / (1 + c kappa_m^2)))   P^H V,
+# whereas the right moments use P and P^-1 without the conjugate on the diagonal. The residual of a left vector is ||A(k)' y||.
+# Helper definitions use the prefix `bs_`; no eigen-solve of a billiard, no kernel assembly.
+# ----------------------------------------------------------------------------------------------------------------------------
+using LinearAlgebra: lu, I
+
+struct bs_Problem <: QuantumBilliards.SweepBIMSolver
+    kappa::Vector{ComplexF64}
+    c::Float64
+    P::Matrix{ComplexF64}
+    Pinv::Matrix{ComplexF64}
+    symmetry::Nothing
+end
+const BS_KAPPA = ComplexF64[1.5, 2.2, 2.7 + 0.1im, 3.0, 3.0, 3.3 - 0.15im, 3.8, 4.6, 6.0]
+function bs_problem()
+    P = Matrix{ComplexF64}(I, BN_N, BN_N) + 0.4 .* randn(MersenneTwister(11), ComplexF64, BN_N, BN_N)
+    return bs_Problem(BS_KAPPA, BN_C, P, inv(P), nothing)
+end
+
+bs_d(s::bs_Problem, m::Int, k) = (k - s.kappa[m]) * (1 + s.c * k^2)
+bs_matrix(s::bs_Problem, k) = ComplexF64.(s.P * Diagonal([bs_d(s, m, k) for m in eachindex(s.kappa)]) * s.Pinv)
+bs_left(s::bs_Problem, m::Int) = conj.(s.Pinv[m, :])                    # y_m, y_m' A(kappa_m) = 0
+QuantumBilliards._bim_numeric_type(::bs_Problem) = Float64
+QuantumBilliards.boundary_matrix_size(s::bs_Problem, ::BoundaryPoints) = length(s.kappa)
+QuantumBilliards.construct_matrices(s::bs_Problem, ::BoundaryPoints, k; multithreaded::Bool=true) = bs_matrix(s, k)
+QuantumBilliards.evaluate_points(::bs_Problem, ::AbsBilliard, k) = BN_PTS
+
+function QuantumBilliards._construct_matrices_multi_k_taylor(s::bs_Problem, ::BoundaryPoints{Float64}, k0::Float64, R::Float64,
+                                                           nq::Int, p::Int; multithreaded::Bool=true)
+    c = s.c
+    a = [[c * k0^3 - c * κ * k0^2 + k0 - κ for κ in s.kappa], [3c * k0^2 - 2c * κ * k0 + 1 for κ in s.kappa],
+         [3c * k0 - c * κ for κ in s.kappa], fill(complex(c), length(s.kappa))]
+    zs = ComplexF64.(k0 .+ R .* cis.(2π .* (0:nq-1) ./ nq))
+    return [ComplexF64.(s.P * Diagonal([sum(a[l+1][m] * (z - k0)^l for l in 0:min(p, 3)) for m in eachindex(s.kappa)]) * s.Pinv) for z in zs]
+end
+
+bs_solver(; kwargs...) = BeynSolver(bs_problem(); r=6, nq=64, kwargs...)
+
+# Residue prediction of the right and left moments for the probing matrix V (centre k0, radius R).
+function bs_moments(s::bs_Problem, k0, R, V; side::Symbol)
+    inside = abs.(s.kappa .- k0) .< R
+    w0 = inside ./ (1 .+ s.c .* s.kappa .^ 2)
+    w1 = w0 .* s.kappa
+    side === :right && return s.P * Diagonal(w0) * s.Pinv * V, s.P * Diagonal(w1) * s.Pinv * V
+    return s.Pinv' * Diagonal(conj.(w0)) * s.P' * V, s.Pinv' * Diagonal(conj.(w1)) * s.P' * V
+end
+
+# Number of the root (1..9) a root estimate belongs to, by nearest kappa.
+bs_index(s::bs_Problem, k) = argmin(abs.(s.kappa .- k))
+
+@testset "left problem: non-normal synthetic matrix" begin
+    s = bs_problem()
+    @test all(m -> norm(bs_left(s, m)' * bs_matrix(s, s.kappa[m])) < 1e-12, 1:BN_N)       # y' A(kappa) = 0
+    @test all(m -> norm(bs_matrix(s, s.kappa[m]) * s.P[:, m]) < 1e-12, 1:BN_N)            # A(kappa) x = 0
+    @test norm(bs_matrix(s, s.kappa[3])' * s.P[:, 3]) > 1e-3                              # the right vector is not a left vector
+    @test norm(bs_matrix(s, s.kappa[3]) * bs_left(s, 3)) > 1e-3
+end
+
+@testset "_accumulate_beyn_moments!: stored factorizations, side = :left and :right" begin
+    s = bs_problem()
+    R, nq, r = 0.5, 64, 6
+    θ = range(0, 2π; length=nq + 1)[1:end-1]
+    zj = ComplexF64.(BN_K0 .+ R .* cis.(θ)); wj = ComplexF64.((R / nq) .* cis.(θ))
+    Fs = [lu(bs_matrix(s, z)) for z in zj]
+    V = randn(MersenneTwister(3), ComplexF64, BN_N, r)
+
+    @testset "side = :left reproduces the adjoint residue moments" begin
+        X = zeros(ComplexF64, BN_N, r); A0 = zeros(ComplexF64, BN_N, r); A1 = zeros(ComplexF64, BN_N, r)
+        @test QuantumBilliards._accumulate_beyn_moments!(A0, A1, X, V, Fs, zj, wj; side=:left) === nothing
+        A0e, A1e = bs_moments(s, BN_K0, R, V; side=:left)
+        @test A0 ≈ A0e atol = 1e-9
+        @test A1 ≈ A1e atol = 1e-9
+    end
+
+    @testset "side = :right (and the default) reproduces the right residue moments" begin
+        A0e, A1e = bs_moments(s, BN_K0, R, V; side=:right)
+        for kw in ((; side=:right), NamedTuple())
+            X = zeros(ComplexF64, BN_N, r); A0 = zeros(ComplexF64, BN_N, r); A1 = zeros(ComplexF64, BN_N, r)
+            QuantumBilliards._accumulate_beyn_moments!(A0, A1, X, V, Fs, zj, wj; kw...)
+            @test A0 ≈ A0e atol = 1e-9
+            @test A1 ≈ A1e atol = 1e-9
+        end
+    end
+
+    @testset "left and right moments differ for a non-normal matrix" begin
+        A0l, _ = bs_moments(s, BN_K0, R, V; side=:left)
+        A0r, _ = bs_moments(s, BN_K0, R, V; side=:right)
+        @test norm(A0l - A0r) > 1e-3
+    end
+end
+
+@testset "construct_matrices(::BeynSolver): side = :left moments" begin
+    s = bs_problem()
+    V = randn(MersenneTwister(0), ComplexF64, BN_N, 6)
+
+    @testset "Taylor (stored LU) and direct (streaming) backends reproduce the adjoint residue moments" begin
+        A0e, A1e = bs_moments(s, BN_K0, 0.5, V; side=:left)
+        for solver in (bs_solver(use_taylor=true, taylor_degree=3), bs_solver(use_taylor=false))
+            A0, A1 = construct_matrices(solver, BN_PTS, BN_K0, 0.5; multithreaded=false, side=:left)
+            @test size(A0) == size(A1) == (BN_N, 6)
+            @test A0 ≈ A0e atol = 1e-8
+            @test A1 ≈ A1e atol = 1e-8
+        end
+    end
+
+    @testset "stored and streaming paths agree for side = :left" begin
+        A0t, A1t = construct_matrices(bs_solver(use_taylor=true, taylor_degree=3), BN_PTS, BN_K0, 0.5; multithreaded=false, side=:left)
+        A0d, A1d = construct_matrices(bs_solver(use_taylor=false), BN_PTS, BN_K0, 0.5; multithreaded=false, side=:left)
+        @test A0t ≈ A0d atol = 1e-10
+        @test A1t ≈ A1d atol = 1e-10
+    end
+
+    @testset "side = :right is the default" begin
+        solver = bs_solver(use_taylor=false)
+        A0, A1 = construct_matrices(solver, BN_PTS, BN_K0, 0.5; multithreaded=false)
+        A0r, A1r = construct_matrices(solver, BN_PTS, BN_K0, 0.5; multithreaded=false, side=:right)
+        @test A0 == A0r && A1 == A1r
+        A0e, A1e = bs_moments(s, BN_K0, 0.5, V; side=:right)
+        @test A0 ≈ A0e atol = 1e-8
+    end
+
+    @testset "rank-saturated left probe grows the probing rank" begin
+        solver = BeynSolver(bs_problem(); r=3, nq=64, use_taylor=false)                # rank 4 > r = 3
+        A0, A1 = construct_matrices(solver, BN_PTS, BN_K0, 0.5; multithreaded=false, side=:left)
+        @test size(A0, 2) == size(A1, 2) == 6
+        @test count(>=(solver.svd_tol), svdvals(A0)) == 4
+    end
+
+    @testset "invalid side throws ArgumentError" begin
+        for backend in (true, false)
+            solver = bs_solver(use_taylor=backend, taylor_degree=3)
+            @test_throws ArgumentError construct_matrices(solver, BN_PTS, BN_K0, 0.5; multithreaded=false, side=:up)
+        end
+    end
+end
+
+@testset "_beyn_projected_solve: side = :left" begin
+    s = bs_problem()
+    inside = findall(k -> abs(k - BN_K0) < 0.5, BS_KAPPA)                              # kappa = 2.7+0.1i, 3.0, 3.0, 3.3-0.15i
+    for use_taylor in (true, false)
+        solver = bs_solver(use_taylor=use_taylor, taylor_degree=3)
+        ksl, Yl = _beyn_projected_solve(solver, BN_PTS, BN_K0, BN_DK; multithreaded=false, side=:left)
+        ksr, _ = _beyn_projected_solve(solver, BN_PTS, BN_K0, BN_DK; multithreaded=false, side=:right)
+        @testset "use_taylor = $use_taylor" begin
+            @test ksl isa Vector{ComplexF64}
+            @test length(ksl) == length(ksr) == length(inside) == 4
+            @test sort(ksl; by=k -> (real(k), imag(k))) ≈ sort(BS_KAPPA[inside]; by=k -> (real(k), imag(k))) atol = 1e-7   # complex roots: needs the conjugation
+            @test sort(ksl; by=k -> (real(k), imag(k))) ≈ sort(ksr; by=k -> (real(k), imag(k))) atol = 1e-7
+            @test size(Yl) == (BN_N, 4)
+            @test all(j -> norm(Yl[:, j]' * bs_matrix(s, ksl[j])) / norm(Yl[:, j]) < 1e-7, 1:4)   # y' A(k) = 0
+        end
+    end
+
+    @testset "a contour without roots returns empty outputs" begin
+        ks, Y = _beyn_projected_solve(bs_solver(use_taylor=false), BN_PTS, 5.2, 0.4; multithreaded=false, side=:left)
+        @test isempty(ks)
+        @test size(Y) == (BN_N, 0)
+    end
+
+    @testset "invalid side throws ArgumentError" begin
+        @test_throws ArgumentError _beyn_projected_solve(bs_solver(use_taylor=false), BN_PTS, BN_K0, BN_DK; multithreaded=false, side=:up)
+        @test_throws ArgumentError _beyn_solve_core(bs_solver(use_taylor=false), BN_PTS, BN_K0, BN_DK; multithreaded=false, side=:up)
+    end
+end
+
+@testset "solve_left_vectors: validated roots and left null vectors" begin
+    s = bs_problem()
+    solver = bs_solver(use_taylor=true, taylor_degree=3)
+    ks, res, Y = solve_left_vectors(solver, BN_PTS, BN_K0, BN_DK; multithreaded=false)
+    order = sortperm(real.(ks)); ks, res, Y = ks[order], res[order], Y[:, order]
+    kr, resr, X = solve_vectors(solver, BN_PTS, BN_K0, BN_DK; multithreaded=false)
+    orderr = sortperm(real.(kr)); kr, resr, X = kr[orderr], resr[orderr], X[:, orderr]
+
+    @testset "roots, shapes and element types" begin
+        @test ks isa Vector{ComplexF64} && res isa Vector{Float64} && Y isa Matrix{ComplexF64}
+        @test length(ks) == length(res) == 4
+        @test size(Y) == (BN_N, 4)
+        @test ks ≈ kr atol = 1e-7                                                  # left roots equal right roots
+        @test all(<(solver.res_tol), res)
+    end
+
+    @testset "residual is ||A(k)' y||, not ||A(k) y||" begin
+        for j in 1:4
+            @test res[j] ≈ norm(bs_matrix(s, ks[j])' * Y[:, j]) atol = 1e-12
+            @test norm(bs_matrix(s, ks[j]) * Y[:, j]) > 100 * res[j]               # a left vector is not a right null vector
+        end
+    end
+
+    @testset "simple roots recover the known left vectors" begin
+        for j in (1, 4)
+            m = bs_index(s, ks[j]); y = bs_left(s, m)
+            @test abs(y' * Y[:, j]) / (norm(y) * norm(Y[:, j])) ≈ 1 atol = 1e-6
+        end
+    end
+
+    @testset "double root: the left vectors span the left eigenspace" begin
+        idx = findall(k -> abs(k - 3.0) < 1e-6, ks)
+        @test length(idx) == 2
+        Yd = Y[:, idx] ./ norm.(eachcol(Y[:, idx]))'
+        @test svdvals(Yd)[2] > 1e-3
+        L = Matrix(qr(hcat(bs_left(s, 4), bs_left(s, 5))).Q)                        # orthonormal basis of span(y_4, y_5)
+        @test norm(Yd - L * (L' * Yd)) < 1e-6
+    end
+
+    @testset "empty window" begin
+        ks0, res0, Y0 = solve_left_vectors(solver, BN_PTS, 5.2, 0.4; multithreaded=false)
+        @test isempty(ks0) && isempty(res0)
+        @test size(Y0) == (BN_N, 0)
+    end
+
+    @testset "res_tol = 0 rejects every candidate; auto_discard_spurious = false skips the check" begin
+        ksz, resz, Yz = solve_left_vectors(bs_solver(use_taylor=false, res_tol=0.0), BN_PTS, BN_K0, BN_DK; multithreaded=false)
+        @test isempty(ksz) && isempty(resz) && size(Yz) == (BN_N, 0)
+        ksn, resn, Yn = solve_left_vectors(bs_solver(use_taylor=false, res_tol=0.0, auto_discard_spurious=false), BN_PTS, BN_K0, BN_DK; multithreaded=false)
+        @test length(ksn) == 4 && all(isnan, resn) && size(Yn) == (BN_N, 4)
+    end
+
+    @testset "left residual rejects right vectors" begin
+        # a right null vector x has A(k) x = 0 but A(k)' x != 0, so the left check discards it when passed as a candidate
+        ksx, Xx = [kr[1]], reshape(X[:, 1], :, 1)
+        idx, res_l = _beyn_imag_k_check(bs_solver(use_taylor=false, res_tol=1e-6), [ksx], [Xx], [BN_PTS]; pad=10, group_size=1, multithreaded=false, side=:left)
+        @test idx == [Int[]]
+        idx, res_r = _beyn_imag_k_check(bs_solver(use_taylor=false, res_tol=1e-6), [ksx], [Xx], [BN_PTS]; pad=10, group_size=1, multithreaded=false, side=:right)
+        @test idx == [[1]]
+        @test res_r[1][1] < 1e-6
+    end
+end
+
+@testset "_beyn_imag_k_check: side = :left" begin
+    s = bs_problem()
+    # candidates (k, m) with the left vector y_m: ||A(k)' y_m|| = |d_m(k)| ||P^-1[m, :]||
+    cand(k, m) = (ComplexF64(k), ComplexF64.(bs_left(s, m)))
+    cs1 = [cand(s.kappa[3] + 1e-5im, 3), cand(3.0 + 2e-5im, 4), cand(s.kappa[3] + 0.3im, 3)]
+    cs2 = [cand(s.kappa[6] + 3e-5im, 6), cand(3.8 + 1e-7im, 6)]
+    pack(cs) = (first.(cs), hcat(last.(cs)...))
+    ks1, Y1 = pack(cs1); ks2, Y2 = pack(cs2)
+    solver = bs_solver(use_taylor=false, res_tol=1e-2)
+    idx, res = _beyn_imag_k_check(solver, [ks1, ks2], [Y1, Y2], [BN_PTS, BN_PTS]; pad=10, group_size=1, multithreaded=false, side=:left)
+    @test idx == [[1, 2], [1]]                                                    # fake and wrong roots dropped
+    @test all(<(1e-2), vcat(res...))
+    @test res[1][1] ≈ abs(bs_d(s, 3, ks1[1])) * norm(s.Pinv[3, :]) atol = 1e-12
+    @test res[2][1] ≈ abs(bs_d(s, 6, ks2[1])) * norm(s.Pinv[6, :]) atol = 1e-12
+    @test_throws ArgumentError _beyn_imag_k_check(solver, [ks1], [Y1], [BN_PTS]; pad=10, group_size=1, multithreaded=false, side=:up)
 end

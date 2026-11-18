@@ -116,3 +116,120 @@ end
         @test count(k -> abs(k - kd) < SPECTRUM_ATOL_BIM, ks) == mult
     end
 end
+
+# Left (adjoint) contour solve of BeynSolver, `solve_left_vectors` (Step 7 of scratchpad/boundary-function-spectrum-plan.md).
+# One window per billiard is solved with the right moments (`solve_vectors`) and the left moments (`solve_left_vectors`) on the same
+# boundary points and cached, so that both testsets (and later steps) reuse the contour solves. The left null vectors y of A(k)
+# (y' A(k) = 0) give the boundary normal derivative u = y ./ ds up to a complex scale (no conjugation, as in `solve_state`), which is
+# compared with the analytic u after the least-squares scaling. Windows: rectangle k0 = 6, dk = 2 (levels 5.2194, 5.4783, 6.5076,
+# 6.6719, 6.9128; the nearest outside levels are 4.755 and 7.43); annulus k0 = 5, dk = 1.6 (levels 4.4124, 4.7058 x2, 5.4702 x2; the
+# nearest outside levels are 3.9 and 6.49 for the pairs).
+using LinearAlgebra: norm, dot, svdvals
+using SpecialFunctions: besselj, bessely
+
+const BEYN_LEFT_CACHE = Dict{Symbol,Any}()
+
+function beyn_left_window(key::Symbol, billiard, kernel, k_pts, k0, dk)
+    return get!(BEYN_LEFT_CACHE, key) do
+        # res_tol = 1e-6: the residual is of the unnormalised vector and the right solve of the level 6.9128 sits at 1e-8
+        solver = BeynSolver(kernel; use_chebyshev=false, res_tol=1e-6)
+        pts = evaluate_points(kernel, billiard, k_pts)
+        kr, resr, X = solve_vectors(solver, pts, k0, dk; multithreaded=false)
+        kl, resl, Y = solve_left_vectors(solver, pts, k0, dk; multithreaded=false)
+        (; pts, kr, resr, X, kl, resl, Y)
+    end
+end
+
+function beyn_left_rectangle()
+    billiard = RectangleBilliard(1.0, 0.7)
+    kernel = CombinedFieldIntegralEquationSolver(10.0, billiard; grading=GlobalCornerGrading())
+    return beyn_left_window(:rectangle, billiard, kernel, 7.0, 6.0, 2.0)
+end
+
+function beyn_left_annulus()
+    billiard = AnnularBilliard(0.3, 0.0; center=[0.2, 0.1])
+    component() = CombinedFieldIntegralEquationSolver(10.0, billiard; grading=SmoothPeriodicGrading(), min_pts=64)
+    return beyn_left_window(:annulus, billiard, CompositeBIMSolver(component(), component()), 5.8, 5.0, 1.6)
+end
+
+# Normal derivative of psi_{mn} of RectangleBilliard(a, b) at the boundary points.
+function beyn_left_rectangle_u(pts, a, b, m, n)
+    W, H = 2a, 2b
+    return [begin
+                x, y = pts.xy[i]; nx, ny = pts.normal[i]
+                nx * (m * pi / W) * cos(m * pi * (x + a) / W) * sin(n * pi * (y + b) / H) +
+                ny * (n * pi / H) * sin(m * pi * (x + a) / W) * cos(n * pi * (y + b) / H)
+            end for i in eachindex(pts.xy)]
+end
+
+# Arclength-weighted relative residual of `u` after the best complex scaling onto `ref`.
+function beyn_left_scaled_residual(u, ref, ds)
+    w = sqrt.(ds)
+    c = dot(w .* ref, w .* u) / dot(w .* ref, w .* ref)
+    return norm(w .* (u .- c .* ref)) / norm(w .* u)
+end
+
+# solver: Beyn contour integral, left solve (solve_left_vectors)
+# kernel/basis: CFIE, GlobalCornerGrading, ppw=10
+# billiard: Rectangle (RectangleBilliard(1.0, 0.7), the full 2.0 x 1.4 rectangle)
+# symmetry: None
+# reference: analytic, roots pi*sqrt(m^2/4 + n^2/1.96) in [5, 7] (5 levels), u = d_n psi_{mn}; cross-check against the right roots of the same contour
+# functions to test: solve_left_vectors, _beyn_solve_core (side = :left), left residual ||A(k)' y||
+@testset "Beyn (CFIE) - Rectangle - left roots, residuals and u = y ./ ds, window [5, 7]" begin
+    w = beyn_left_rectangle()
+    ks_ref = rectangle_spectrum(2.0, 1.4, 5.0, 7.0)
+    kl, kr = sort(real.(w.kl)), sort(real.(w.kr))
+    @test length(kl) == length(kr) == length(ks_ref) == 5
+    @test all(isapprox.(kl, ks_ref; atol=SPECTRUM_ATOL_BIM))              # left roots against the analytic levels
+    @test all(isapprox.(kl, kr; atol=SPECTRUM_ATOL_BIM))                  # left roots against the right roots
+    @test all(abs.(imag.(w.kl)) .< IMAG_TOL)
+    @test all(w.resl .< 1e-6)                                             # res_tol of the cached solver
+    @test size(w.Y) == (length(w.pts), 5)
+    # u = y ./ ds against the analytic normal derivative of the mode with the matching k
+    modes = [(pi * sqrt(m^2 / 4 + n^2 / 1.96), m, n) for m in 1:12, n in 1:12 if 5.0 <= pi * sqrt(m^2 / 4 + n^2 / 1.96) <= 7.0]
+    @test length(modes) == 5
+    for j in eachindex(w.kl)
+        _, m, n = modes[argmin([abs(k - real(w.kl[j])) for (k, _, _) in modes])]
+        u = w.Y[:, j] ./ w.pts.ds
+        @test beyn_left_scaled_residual(u, beyn_left_rectangle_u(w.pts, 1.0, 0.7, m, n), w.pts.ds) < BOUNDARY_U_TOL_BIM
+    end
+end
+
+# solver: Beyn contour integral, left solve (solve_left_vectors)
+# kernel/basis: composite CFIE (outer circle and hole circle), SmoothPeriodicGrading, min_pts=64, ppw=10
+# billiard: Annular (AnnularBilliard(0.3, 0.0; center=[0.2, 0.1])), inner radius 0.3, outer radius 1
+# symmetry: None
+# reference: analytic annulus levels (4.4124 simple, 4.7058 x2, 5.4702 x2 in [4.2, 5.8]); radial mode psi = J0(kr) Y0(0.3k) - Y0(kr) J0(0.3k) at
+#   k = 4.41239469277677 has |u| constant on each circle with |u_out| / |u_in| = |psi'(1)| / |psi'(0.3)| = 0.536596972483469
+# functions to test: solve_left_vectors, _beyn_moments_streaming (side = :left), _beyn_residual for composite kernels, u = y ./ ds
+@testset "Beyn (CFIE composite) - Annular - left roots with multiplicity and radial u, window [4.2, 5.8]" begin
+    w = beyn_left_annulus()
+    ks_ref = annulus_spectrum(0.3, 1.0, 4.2, 5.8)
+    kl, kr = sort(real.(w.kl)), sort(real.(w.kr))
+    @test length(kl) == length(kr) == length(ks_ref) == 5
+    @test all(isapprox.(kl, ks_ref; atol=SPECTRUM_ATOL_BIM))
+    @test all(isapprox.(kl, kr; atol=SPECTRUM_ATOL_BIM))
+    @test all(abs.(imag.(w.kl)) .< IMAG_TOL_HOLES)
+    @test all(w.resl .< 1e-6)
+    for kd in unique(round.(ks_ref; digits=8))                            # degenerate pairs keep their multiplicity
+        @test count(k -> abs(k - kd) < SPECTRUM_ATOL_BIM, kl) == count(k -> abs(k - kd) < 1e-8, ks_ref)
+    end
+    # the degenerate left vectors are linearly independent
+    pair = findall(k -> abs(real(k) - 4.705775538709766) < SPECTRUM_ATOL_BIM, w.kl)
+    Yp = w.Y[:, pair] ./ norm.(eachcol(w.Y[:, pair]))'
+    @test length(pair) == 2
+    @test svdvals(Yp)[2] > 1e-3
+    # radial mode
+    k = 4.41239469277677
+    j = argmin(abs.(w.kl .- k))
+    @test abs(w.kl[j] - k) < SPECTRUM_ATOL_BIM
+    u = w.Y[:, j] ./ w.pts.ds
+    loop = Int.(w.pts.w_dm)                                               # 1 = outer circle, 2 = hole circle
+    uo, ui = abs.(u[loop .== 1]), abs.(u[loop .== 2])
+    @test !isempty(uo) && !isempty(ui)
+    @test (maximum(uo) - minimum(uo)) / maximum(uo) < BOUNDARY_U_TOL_BIM
+    @test (maximum(ui) - minimum(ui)) / maximum(ui) < BOUNDARY_U_TOL_BIM
+    dpsi(r) = k * (-besselj(1, k * r) * bessely(0, k * 0.3) + bessely(1, k * r) * besselj(0, k * 0.3))
+    ratio = (sum(uo) / length(uo)) / (sum(ui) / length(ui))
+    @test abs(ratio / (abs(dpsi(1.0)) / abs(dpsi(0.3))) - 1) < BOUNDARY_U_TOL_BIM
+end
