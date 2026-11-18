@@ -946,6 +946,7 @@ using QuantumBilliards: _check_states_supported
         @test _check_states_supported(SpectraVectorStub(roots, :none)) === nothing
         @test _check_states_supported(SpectraVectorStub(roots, :vectors)) === nothing
         @test_throws ArgumentError _check_states_supported(SpectraVectorStub(roots, :boundary))
+        @test _check_states_supported(VerginiSaracenoSolver(2.0, 5.0; states=:boundary)) === nothing
     end
 
     @testset "_vs_solve_window: :none stores no states, :vectors stores them" begin
@@ -955,12 +956,18 @@ using QuantumBilliards: _check_states_supported
         @test s_vec isa AbstractVector && length(s_vec) == 3
     end
 
-    @testset "compute_spectrum rejects states = :boundary before any solve" begin
+    @testset "_vs_solve_window: :boundary returns the coefficient states like :vectors" begin
+        ki, ti, s_bnd = _vs_solve_window(SpectraVectorStub(roots, :boundary), (basis, :pts), k0, Δk; multithreaded=false, merge_tol)
+        _, _, s_vec = _vs_solve_window(SpectraVectorStub(roots, :vectors), (basis, :pts), k0, Δk; multithreaded=false, merge_tol)
+        @test ki == [0.5, 1.0, 1.2]
+        @test isconcretetype(eltype(s_bnd)) && eltype(s_bnd) <: BasisEigenstate
+        @test [st.vec for st in s_bnd] == [st.vec for st in s_vec]
+        @test [st.k for st in s_bnd] == ki
+    end
+
+    @testset "compute_spectrum rejects states = :boundary for Beyn, EBIM and CORK before any solve" begin
         circle = CircleBilliard(1.0)
         kernel = DoubleLayerPotentialSolver(10.0, circle)
-        vs = VerginiSaracenoSolver(2.0, 5.0; states=:boundary)
-        @test_throws ArgumentError compute_spectrum(vs, basis, circle, 5.0, 6.0, 0.1)
-        @test_throws ArgumentError compute_spectrum(vs, basis, circle, 1, 3)
         @test_throws ArgumentError compute_spectrum(BeynSolver(kernel; states=:boundary), circle, 5.0, 6.0)
         @test_throws ArgumentError compute_spectrum(ExpandedBIMSolver(kernel; states=:boundary), circle, 5.0, 6.0)
         @test_throws ArgumentError compute_spectrum(CORKSolver(kernel; states=:boundary), circle, 5.0, 6.0)

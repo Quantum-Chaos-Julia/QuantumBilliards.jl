@@ -652,19 +652,12 @@ end
         @test length(hc[1].ps) == 2 * ceil(Int, 5 * sqrt(s0.k)) + 1
     end
 
-    @testset "a state that throws is dropped from the result (current behaviour)" begin
+    @testset "a state with a coefficient vector of the wrong length throws (batch path, no per-state dropping)" begin
+        # The vector method builds the boundary functions in one batch (boundary_states), so a malformed state
+        # makes the whole batch throw instead of being dropped as before.
         bad = BasisEigenstate(s0.k, [1.0, 2.0], 1e-12, s0.basis)       # coefficient vector of the wrong length
-        hs = @test_logs husimi_function([s0, bad, s1], HU_CIRCLE)
-        @test hs isa Vector{HusimiFunction{Float64}}
-        @test length(hs) == 2
-        @test hu_same(hs[1], husimi_function(s0, HU_CIRCLE)) && hu_same(hs[2], husimi_function(s1, HU_CIRCLE))
-        @test hs[1].k === s0.k && hs[2].k === s1.k                    # the surviving objects keep the k of their own states
-    end
-
-    @testset "every state fails: empty vector" begin
-        bad = BasisEigenstate(s0.k, [1.0, 2.0], 1e-12, s0.basis)
-        hs = husimi_function([bad, bad], HU_CIRCLE)
-        @test isempty(hs) && hs isa Vector{<:HusimiFunction}
+        @test_throws DimensionMismatch husimi_function([s0, bad, s1], HU_CIRCLE)
+        @test_throws DimensionMismatch husimi_function([bad, bad], HU_CIRCLE)
     end
 end
 

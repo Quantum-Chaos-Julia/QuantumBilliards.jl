@@ -304,7 +304,7 @@ end
 # Solve one Vergini-Saraceno window; `args` is `(basis, pts)` or `(basis, pts, cache)`.
 function _vs_solve_window(solver, args::Tuple, k0, Δk; multithreaded::Bool, merge_tol::Real)
     @timeit_debug "vs_window_solve" begin
-        if solver.states === :vectors
+        if solver.states !== :none
             ki, ti, X = solve_vectors(solver, args..., k0, Δk + merge_tol; multithreaded)
             si = BasisEigenstate{eltype(ki),eltype(ti),typeof(args[1])}[BasisEigenstate(ki[j], k0, X[:, j], ti[j], args[1]) for j in eachindex(ki)]
             @debug "VS window solved" maxlog=1 k0 Δk nlevels=length(ki)
@@ -462,7 +462,11 @@ function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billi
             end
         end
         keep = (k1T .<= real.(ks)) .& (real.(ks) .<= k2T)
-        return @timeit_debug "postprocessing" _finalize_spectrum(billiard, solver, ks[keep], ts[keep], control[keep]; states = solver.states === :vectors ? states[keep] : nothing, accept_tol)
+        kept = solver.states === :none ? nothing : states[keep]
+        if solver.states === :boundary
+            kept = @timeit_debug "boundary_states" boundary_states(kept, billiard; ppw = solver.boundary_ppw, multithreaded)
+        end
+        return @timeit_debug "postprocessing" _finalize_spectrum(billiard, solver, ks[keep], ts[keep], control[keep]; states = kept, accept_tol)
     end
 end
 

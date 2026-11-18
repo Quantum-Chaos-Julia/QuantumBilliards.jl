@@ -12,6 +12,8 @@ function _resolve_states(S::Type, states, eigenvectors, default::Symbol)
     return _check_states(S, states === nothing ? default : states)
 end
 
+_check_states_supported(::VerginiSaracenoSolver) = nothing
+
 function _check_states_supported(solver)
     solver.states === :boundary && throw(ArgumentError("$(nameof(typeof(solver))): `states = :boundary` is not implemented yet"))
     return nothing

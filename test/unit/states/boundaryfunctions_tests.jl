@@ -868,6 +868,27 @@ end
         @test momentum_function(data) == ([p1], [k1])
     end
 
+    @testset "batch boundary_function of a state vector (basis) and of BIM states with a solver" begin
+        s0 = bf_j0_state(); s1 = bf_j1_state()
+        bfs = boundary_function([s0, s1], BF_CIRCLE)
+        @test bfs isa Vector{<:BoundaryFunction} && length(bfs) == 2
+        for (bf, s) in zip(bfs, (s0, s1))
+            ref = boundary_function(s, BF_CIRCLE)
+            @test bf.u ≈ ref.u rtol = 1e-10
+            @test bf.k === s.k
+            @test bf.norm ≈ ref.norm rtol = 1e-10
+            @test bf.ds == ref.ds && bf.L == ref.L && bf.outer == ref.outer
+        end
+        @test isempty(boundary_function(typeof(s0)[], BF_CIRCLE))
+
+        pts = bf_circle_pts(Float64, 32)
+        u = collect(range(-1.0, -2.0, 32))
+        bim = [bf_bim_state(BF_J01, u, pts), BIMEigenstate{Float64,Float64}(BF_J02, 0.0, nothing, 1e-9, pts, nothing, nothing)]
+        out = boundary_function(bim, BF_CIRCLE, bf_SweepStub())
+        @test out isa Vector{<:BoundaryFunction} && length(out) == 2
+        @test out[1].u === u && out[2].u == fill(BF_STUB_U, 32) && out[2].norm == BF_STUB_NORM
+    end
+
     @testset "data without stored states" begin
         data = SpectralData(BF_CIRCLE, nothing, [3.0], [1e-12], [false])
         @test_throws ArgumentError boundary_function(data)

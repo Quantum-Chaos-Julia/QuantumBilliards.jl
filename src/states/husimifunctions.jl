@@ -480,6 +480,17 @@ function husimi_function(states::AbstractVector{<:BIMEigenstate{K,T}}, billiard:
 end
 
 """
+    husimi_function(states::AbstractVector{<:BIMEigenstate}, billiard::AbsBilliard; c::Real=10.0, w::Real=7.0, full_p::Bool=false) → Vector{HusimiFunction}
+
+Solver-free Husimi functions of several states that store `u`; see the single-state method.
+"""
+function husimi_function(states::AbstractVector{<:BIMEigenstate{K,T}}, billiard::AbsBilliard; c::Real=10.0, w::Real=7.0, full_p::Bool=false) where {K,T<:Real}
+    return _collect_functions(HusimiFunction{T}, states; multithreaded=true) do state
+        husimi_function(state, billiard; c, w, full_p)
+    end
+end
+
+"""
     husimi_function(states::AbstractVector{<:BasisEigenstate}, billiard::AbsBilliard; ppw::Real=5.0, c::Real=10.0, w::Real=7.0, multithreaded::Bool=true, full_p::Bool=false)
 
 Compute Poincare-Husimi functions for several basis eigenstates.
@@ -500,8 +511,9 @@ Compute Poincare-Husimi functions for several basis eigenstates.
 """
 function husimi_function(states::AbstractVector{<:BasisEigenstate}, billiard::AbsBilliard; ppw::Real=5.0, c::Real=10.0, w::Real=7.0, multithreaded::Bool=true, full_p::Bool=false)
     T = typeof(real(first(states).k))
-    return _collect_functions(HusimiFunction{T}, states) do state
-        husimi_function(state, billiard; ppw, c, w, multithreaded, full_p)
+    bfs = boundary_function(states, billiard; ppw, multithreaded)
+    return _collect_functions(HusimiFunction{T}, bfs) do bf
+        husimi_function(bf; c, w, full_p)
     end
 end
 
@@ -547,9 +559,15 @@ _foreign_kwargs(::typeof(husimi_function), ::Type{<:BIMEigenstate}) = (:ppw, :mu
 
 # Apply `f` to a state (or vector of states) of either kind: BIM states take `(billiard, solver)`, basis states
 # take `billiard` only.
-function _apply_state(f, state_or_states::Union{BIMEigenstate,AbstractVector{<:BIMEigenstate}}, billiard::AbsBilliard, solver; kwargs...)
+function _apply_state(f, state_or_states::Union{BIMEigenstate,AbstractVector{<:BIMEigenstate}}, billiard::AbsBilliard, solver::AbsBIMSolver; kwargs...)
     kw = _drop_kwargs(kwargs, _foreign_kwargs(f, BIMEigenstate))
     return f(state_or_states, billiard, solver; kw...)
+end
+
+# `u`-states of a solver without a boundary kernel (basis solvers with `states = :boundary`) are read solver-free.
+function _apply_state(f, state_or_states::Union{BIMEigenstate,AbstractVector{<:BIMEigenstate}}, billiard::AbsBilliard, solver; kwargs...)
+    kw = _drop_kwargs(kwargs, (_foreign_kwargs(f, BIMEigenstate)..., :multithreaded))
+    return f(state_or_states, billiard; kw...)
 end
 
 function _apply_state(f, state_or_states::Union{BasisEigenstate,AbstractVector{<:BasisEigenstate}}, billiard::AbsBilliard, solver; kwargs...)

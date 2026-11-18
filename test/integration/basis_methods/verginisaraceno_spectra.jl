@@ -5,6 +5,8 @@
 # Low-spectrum references: Beyn CFIE spectra (Veech triangle: full boundary; Stadium: odd-odd sector)
 # computed once and cached in the file-local dictionary below.
 
+using LinearAlgebra: norm, dot
+
 const _VS_BEYN_CACHE = Dict{Tuple,Any}()
 
 # Full-boundary Beyn CFIE reference for the Veech right triangle: levels in [k0 - dk, k0 + dk].
@@ -119,4 +121,68 @@ end
     @test minimum(abs.(ks_ref .- k)) < SPECTRUM_ATOL_VS
     @test t < TENSION_TOL_VS
     @test all(tens .< TENSION_TOL_VS)
+end
+
+# Spectrum of `solver` with `states = :boundary` against the `states = :vectors` run of the same window.
+# Both use boundary_ppw = 5; at these low k the boundary grid is the 512-point floor, so the grids coincide and
+# u is compared node by node after sign alignment.
+function _vs_boundary_vs_vectors(billiard, basis, k1, k2, dk)
+    kw = (; multithreaded=true, show_progress=false)
+    db = compute_spectrum(VerginiSaracenoSolver(5.0, 10.0; states=:boundary, boundary_ppw=5.0), basis, billiard, k1, k2, dk; kw...)
+    dv = compute_spectrum(VerginiSaracenoSolver(5.0, 10.0; states=:vectors), basis, billiard, k1, k2, dk; kw...)
+    return db, dv
+end
+
+function _vs_boundary_checks(db, dv, billiard, ks_ref)
+    @test length(db.k) == length(ks_ref) == length(dv.k)
+    @test all(isapprox.(sort(db.k), ks_ref; atol=SPECTRUM_ATOL_VS))
+    worst = 0.0
+    for i in eachindex(db.k)
+        state = db.states[i]
+        @test state isa BIMEigenstate
+        @test state.vec === nothing
+        @test eltype(state.u) <: Real
+        @test all(isfinite, state.u)
+        j = argmin(abs.(dv.k .- db.k[i]))
+        bu = boundary_function(state, billiard)
+        bv = boundary_function(dv, j)
+        @test length(bu.u) == length(bv.u)
+        @test bu.s ≈ bv.s
+        s = sign(dot(bu.u, bv.u))
+        err = norm(bu.u .- s .* bv.u) / norm(bv.u)
+        worst = max(worst, err)
+        @test err < BOUNDARY_U_TOL_VS
+        @test isapprox(bu.norm, bv.norm; rtol=BOUNDARY_U_TOL_VS)
+    end
+    return worst
+end
+
+# solver: Vergini-Saraceno (states = :boundary)
+# basis: Real Plane Waves
+# billiard: Rectangle (RectangleBilliard(1.0, 0.7), full rectangle 2.0 x 1.4)
+# symmetry: even-even
+# reference: analytic sector levels; u compared with the states = :vectors boundary_function of the same window
+# functions to test: compute_spectrum (states = :boundary), boundary_states
+@testset "VS (RealPlaneWaves) - Rectangle, even-even sector - boundary states" begin
+    billiard = RectangleBilliard(1.0, 0.7)
+    basis = RealPlaneWaves(12; sym_x=1, sym_y=1)
+    k1, k2 = 4.0, 8.0
+    ks_ref = rectangle_spectrum(2.0, 1.4, k1, k2; parity_x=1, parity_y=1)
+    db, dv = _vs_boundary_vs_vectors(billiard, basis, k1, k2, 0.1)
+    _vs_boundary_checks(db, dv, billiard, ks_ref)
+end
+
+# solver: Vergini-Saraceno (states = :boundary)
+# basis: Real Plane Waves
+# billiard: Rectangle (RectangleBilliard(1.0, 0.7), full rectangle 2.0 x 1.4)
+# symmetry: odd-even (real reflection irrep, sym_x = -1, sym_y = 1)
+# reference: analytic sector levels; u compared with the states = :vectors boundary_function of the same window
+# functions to test: compute_spectrum (states = :boundary), boundary_states
+@testset "VS (RealPlaneWaves) - Rectangle, odd-even sector - boundary states" begin
+    billiard = RectangleBilliard(1.0, 0.7)
+    basis = RealPlaneWaves(12; sym_x=-1, sym_y=1)
+    k1, k2 = 4.0, 8.0
+    ks_ref = rectangle_spectrum(2.0, 1.4, k1, k2; parity_x=-1, parity_y=1)
+    db, dv = _vs_boundary_vs_vectors(billiard, basis, k1, k2, 0.1)
+    _vs_boundary_checks(db, dv, billiard, ks_ref)
 end

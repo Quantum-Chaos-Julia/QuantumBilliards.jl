@@ -70,7 +70,7 @@ function _memory_stages(solver::VerginiSaracenoSolver, basis::AbsBasis, dim::Rea
 end
 
 function _memory_retained(solver::VerginiSaracenoSolver, ::AbsBasis, ns::Real, dim::Real)
-    solver.states === :vectors || return Pair{String,Float64}[]
+    solver.states === :none && return Pair{String,Float64}[]
     return Pair{String,Float64}["eigenstates (states x basis dim)" => _REAL_BYTES * ns * dim]
 end
 

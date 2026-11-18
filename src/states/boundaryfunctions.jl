@@ -419,6 +419,28 @@ function momentum_function(state::BIMEigenstate, billiard::AbsBilliard, solver::
     return momentum_function(u, s, state.pts.ds)
 end
 
+"""
+    boundary_function(states::AbstractVector{<:BasisEigenstate}, billiard::AbsBilliard; ppw::Real = 5.0, multithreaded::Bool = true) → Vector{BoundaryFunction}
+
+Boundary functions of several basis eigenstates computed in one batch through
+[`boundary_states`](@ref): states sharing a basis evaluation share the boundary
+grid and the gradient matrices. The grid of a group uses its largest wavenumber.
+"""
+function boundary_function(states::AbstractVector{<:BasisEigenstate}, billiard::AbsBilliard; ppw::Real=5.0, multithreaded::Bool=true)
+    return [boundary_function(s, billiard) for s in boundary_states(states, billiard; ppw, multithreaded)]
+end
+
+"""
+    boundary_function(states::AbstractVector{<:BIMEigenstate}, billiard::AbsBilliard, solver::AbsBIMSolver; multithreaded::Bool = true) → Vector{BoundaryFunction}
+
+Boundary function of every BIM state, see the single-state method.
+"""
+function boundary_function(states::AbstractVector{<:BIMEigenstate}, billiard::AbsBilliard, solver::AbsBIMSolver; multithreaded::Bool=true)
+    return [boundary_function(s, billiard, solver; multithreaded) for s in states]
+end
+
+boundary_function(states::AbstractVector{<:BIMEigenstate}, billiard::AbsBilliard) = [boundary_function(s, billiard) for s in states]
+
 ################################################################################
 # SpectralData API
 ################################################################################
@@ -440,8 +462,7 @@ with one entry per state, the same layout as `wavefunction(data)` and
 `husimi_function(data)`. Use `boundary_function(data, i)` for a single state.
 """
 function boundary_function(data::SpectralData; kwargs...)
-    states = _require_states(data)
-    return [boundary_function(data, i; kwargs...) for i in eachindex(states)]
+    return _apply_state(boundary_function, _require_states(data), data.billiard, data.solver; kwargs...)
 end
 
 """
