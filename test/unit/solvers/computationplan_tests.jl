@@ -1057,6 +1057,18 @@ cp_valid_items(items) = all(!isempty(first(x)) && isfinite(last(x)) && last(x) >
         @test !isempty(_memory_retained(with_params(cork; states=:vectors), 3, ns, Nf, M))
     end
 
+    @testset "CORK retained: :none, :vectors, :boundary" begin
+        r_vec = _memory_retained(with_params(cork; states=:vectors), 3, ns, Nf, M)
+        r_bnd = _memory_retained(with_params(cork; states=:boundary), 3, ns, Nf, M)
+        @test isempty(_memory_retained(with_params(cork; states=:none), 3, ns, Nf, M))
+        @test length(r_vec) == length(r_bnd) == 2                                  # boundary points + states
+        @test first(r_bnd[1]) == first(r_vec[1]) && last(r_bnd[1]) == last(r_vec[1])
+        @test occursin("eigenstates", first(r_vec[2]))
+        @test occursin("boundary functions", first(r_bnd[2]))
+        @test last(r_vec[2]) == last(r_bnd[2]) == _CPLX_BYTES * ns * Nf            # one complex vector per state on the full boundary
+        @test _persistent_bytes(with_params(cork; states=:boundary), 3, ns, Nf, M) == sum(last, r_bnd)
+    end
+
     @testset "CORK Krylov stage uses the extended Krylov dimension" begin
         krylov(s, Nf, M) = last(only(filter(x -> startswith(first(x), "Krylov solve"), _memory_stages(s, Nf, M))))
         for s in (cork, with_params(cork; p=4, block_size=4, mstep=8))

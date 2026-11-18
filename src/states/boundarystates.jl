@@ -158,6 +158,21 @@ function _left_null_vectors(A::AbstractMatrix{C}, m::Int, k::Real, res_tol::Real
     return Y
 end
 
+# Left null vectors (columns, reduced size of the kernel matrix) of the levels `ks` on the boundary points `pts`, by adjoint inverse
+# iteration on `A(k)`; levels closer than `cluster_tol` share one matrix and one block iteration.
+function _posthoc_left_vectors(kernel::AbsBIMSolver, pts::BoundaryPoints{T}, ks::AbstractVector{<:Real}; multithreaded::Bool=true, cluster_tol::Real=1e-5, res_tol::Real=1e-6, rng::AbstractRNG=MersenneTwister(0)) where {T<:Real}
+    geom = _bim_geometry(kernel, pts)
+    Y = nothing
+    for cluster in _level_clusters(ks, cluster_tol)
+        kc = sum(ks[cluster]) / length(cluster)
+        A = construct_matrices(kernel, pts, T(kc), geom; multithreaded)
+        Yc = _left_null_vectors(A, length(cluster), kc, res_tol, rng)
+        Y === nothing && (Y = zeros(ComplexF64, size(Yc, 1), length(ks)))
+        Y[:, cluster] .= Yc
+    end
+    return Y === nothing ? zeros(ComplexF64, 0, 0) : Y
+end
+
 # `u`-state of one level from a left null vector `y` of the (possibly symmetry-reduced) kernel matrix: `u = y ./ ds` expanded with the orbit phases, rotated so that its largest entry is real and positive, and Rellich-normalized.
 function _boundary_state(kernel::AbsBIMSolver, billiard::AbsBilliard, pts::BoundaryPoints{T}, k::Number, ten::Real, y::AbstractVector) where {T<:Real}
     u = Vector{Complex{T}}(_bim_normal_derivative(kernel, pts, y, billiard))

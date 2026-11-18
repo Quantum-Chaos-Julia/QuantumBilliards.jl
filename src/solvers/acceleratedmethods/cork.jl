@@ -376,15 +376,15 @@ three-term recurrence `T₀(t)=1`, `T₁(t)=t`, and `Tⱼ₊₁(t)=2tTⱼ(t)-T�
 
 ## Arguments
 - `P::CORKPolynomial`: Chebyshev polynomial with vertically stacked coefficients `[B₀;...;Bₚ]`.
-- `t::Real`: Normalized Chebyshev coordinate.
+- `t::Number`: Normalized Chebyshev coordinate, real or complex.
 
 ## Returns
 - `Matrix{ComplexF64}`: Dense matrix `P(t)`.
 """
-function evaluate_cork_polynomial(P::CORKPolynomial, t::Real)::Matrix{ComplexF64}
-    τ = Float64(t); A = copy(Bj(P.B, P.N, 0))
+function evaluate_cork_polynomial(P::CORKPolynomial, t::Number)::Matrix{ComplexF64}
+    τ = t isa Real ? Float64(t) : ComplexF64(t); A = copy(Bj(P.B, P.N, 0))
     P.p == 0 && return A
-    Tm = 1.0; Tn = τ
+    Tm = one(τ); Tn = τ
     axpy!(Tn, Bj(P.B, P.N, 1), A)
     @inbounds for j = 1:P.p-1
         Tp = 2τ * Tn - Tm
@@ -392,6 +392,45 @@ function evaluate_cork_polynomial(P::CORKPolynomial, t::Real)::Matrix{ComplexF64
         Tm, Tn = Tn, Tp
     end
     return A
+end
+
+"""
+    cork_left_vectors(P::CORKPolynomial, ks::AbstractVector{<:Complex}; res_tol::Real=1e-6, cluster_tol::Real=1e-5, rng::AbstractRNG=MersenneTwister(0)) -> Matrix{ComplexF64}
+
+Left null vectors `yᴴP(tⱼ)=0` of the Chebyshev polynomial at the roots `ks` (physical wavenumbers, `tⱼ=(kⱼ-k₀)/Δ`), one unit-norm column per root.
+`P(t)` is evaluated from the stored coefficients (`pN²` flops, no kernel evaluations) and the left vector is obtained by adjoint inverse
+iteration (`_left_null_vectors`). Roots closer than `cluster_tol` share one matrix and one block iteration, so degenerate roots
+receive orthonormal vectors.
+"""
+function cork_left_vectors(P::CORKPolynomial, ks::AbstractVector{<:Complex}; res_tol::Real=1e-6, cluster_tol::Real=1e-5, rng::AbstractRNG=MersenneTwister(0))::Matrix{ComplexF64}
+    Y = zeros(ComplexF64, P.N, length(ks))
+    for cluster in _level_clusters(real.(ks), cluster_tol)
+        kc = sum(ks[cluster]) / length(cluster)
+        A = evaluate_cork_polynomial(P, (kc - P.k0) / P.Δ)
+        Y[:, cluster] .= _left_null_vectors(A, length(cluster), real(kc), res_tol, rng)
+    end
+    return Y
+end
+
+"""
+    cork_left_residuals(P::CORKPolynomial, ks::AbstractVector{<:Complex}, Y::AbstractMatrix{ComplexF64}, idx) -> Vector{Float64}
+
+Relative residuals `‖P(t)ᴴy‖ / (‖y‖ Σⱼ‖Bⱼᴴy‖)` of the left vectors `Y[:,q]`, `q ∈ idx`, at the complex roots
+`t = (ks[q]-k₀)/Δ`, with `Tⱼ(t)` from the three-term recurrence; no kernel evaluations.
+"""
+function cork_left_residuals(P::CORKPolynomial, ks::AbstractVector{<:Complex}, Y::AbstractMatrix{ComplexF64}, idx)::Vector{Float64}
+    N = P.N; g = Vector{ComplexF64}(undef, N); out = Float64[]
+    for q in idx
+        t = ComplexF64((ks[q] - P.k0) / P.Δ); y = @view Y[:,q]
+        res = zeros(ComplexF64, N); scale = 0.0; Tm = one(ComplexF64); Tn = t
+        for j = 0:P.p
+            Tj = j == 0 ? Tm : j == 1 ? Tn : (Tp = 2t * Tn - Tm; Tm = Tn; Tn = Tp; Tp)
+            mul!(g, adjoint(Bj(P.B, N, j)), y)
+            axpy!(conj(Tj), g, res); scale += norm(g)
+        end
+        push!(out, norm(res) / (scale * norm(y)))
+    end
+    return out
 end
 
 """
@@ -1210,6 +1249,19 @@ evaluate_points(solver::CORKSolver, billiard::Bi, k) where {Bi<:AbsBilliard} = e
 # Compact kernel name used only by debug diagnostics.
 @inline _cork_kernel_name(solver)::String = solver isa DoubleLayerPotentialSolver ? "DLP" : solver isa CombinedFieldIntegralEquationSolver ? "CFIE" : solver isa CompositeBIMSolver ? "CompositeBIM" : string(typeof(solver))
 
+# Left vectors of the roots `ks` (tuples `(Re k, Im k, ρ)`) from the polynomial. The polynomial residual `‖P(t)ᴴy‖` of a sample of levels is
+# checked against `tol`; if it fails, every vector is recomputed on the kernel matrix `A(k)`.
+function _cork_left_vectors(solver::CORKSolver, pts, P::CORKPolynomial, ks; multithreaded::Bool=true, tol::Float64=1e-6, nsample::Int=5)
+    kc = ComplexF64[complex(x[1], x[2]) for x in ks]; n = length(kc)
+    n == 0 && return zeros(ComplexF64, P.N, 0)
+    Y = @timeit_debug "left_vectors" cork_left_vectors(P, kc)
+    idx = unique(round.(Int, range(1, n; length=min(n, nsample))))
+    res = cork_left_residuals(P, kc, Y, idx)
+    maximum(res) <= tol && return Y
+    @warn "CORK left vectors: polynomial residual $(maximum(res)) above $tol in a sample of $(length(idx)) of $n levels; recomputing the window on the kernel matrix"
+    return _posthoc_left_vectors(solver.kernel, pts, real.(kc); multithreaded)
+end
+
 """
     _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=true, eigenvectors::Bool=solver.states === :vectors, p::Int=solver.p)
 
@@ -1223,13 +1275,16 @@ Execute the complete Chebyshev-CORK pipeline on the interval `[k₀-dk/2,k₀+dk
 - `multithreaded::Bool`: Whether polynomial assembly and direct validation matrices use Julia threading.
 - `eigenvectors::Bool = solver.states === :vectors`: Whether to reconstruct final physical Fredholm vectors.
 - `p::Int = solver.p`: Polynomial degree for the Chebyshev-CORK expansion.
+- `side::Symbol = :right`: `:left` returns left null vectors `yᴴP(t)=0` instead of right vectors (needs `eigenvectors = true`). The roots come from the right Krylov run in both cases; the left vectors follow from the stored polynomial by [`cork_left_vectors`](@ref) and are validated with [`cork_left_residuals`](@ref) on a sample of levels, with a recomputation on the kernel matrix on failure.
 
 ## Returns
 - `Tuple`: Chebyshev polynomial, final CORK state, accepted roots, optional
   physical vectors, requested Ritz roots, all guarded Ritz roots, requested
   edge roots, edge convergence flags, and final compact Krylov dimension.
 """
-function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=true, eigenvectors::Bool=solver.states === :vectors, p::Int=solver.p)
+function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=true, eigenvectors::Bool=solver.states === :vectors, p::Int=solver.p, side::Symbol=:right)
+    side in (:right, :left) || throw(ArgumentError("side must be :right or :left; received $side"))
+    side === :left && !eigenvectors && throw(ArgumentError("side = :left computes left vectors; pass eigenvectors = true"))
     k0f = Float64(k0); Δ = Float64(dk)/2; Δpoly = Δ*(1+solver.guard)
     @timeit_debug "cork_solve_core" begin
         @debug "CORK solve" maxlog=1 k0=k0f dk p guard=solver.guard npts=length(pts.xy)
@@ -1246,7 +1301,10 @@ function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=t
                 F = lu(A0)
             end
         end
-        S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = adaptive_cork(P.B, F, p, P.N; k0=k0f, Δ=Δ, Δpoly=Δpoly, block_size=solver.block_size, mdim=cork_krylov_dim(P.N, p, solver.block_size, solver.mstep), mstart=solver.mstart, mstep=solver.mstep, stable_checks=solver.stable_checks, imag_tol=solver.imag_tol, edge_tol=solver.edge_tol, res_tol=solver.res_tol, stable_tol=solver.stable_tol, imag_search_tol=solver.imag_search_tol, eigenvectors)
+        S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = adaptive_cork(P.B, F, p, P.N; k0=k0f, Δ=Δ, Δpoly=Δpoly, block_size=solver.block_size, mdim=cork_krylov_dim(P.N, p, solver.block_size, solver.mstep), mstart=solver.mstart, mstep=solver.mstep, stable_checks=solver.stable_checks, imag_tol=solver.imag_tol, edge_tol=solver.edge_tol, res_tol=solver.res_tol, stable_tol=solver.stable_tol, imag_search_tol=solver.imag_search_tol, eigenvectors=eigenvectors && side === :right)
+        if side === :left
+            Ψ = _cork_left_vectors(solver, pts, P, ks; multithreaded)
+        end
         @debug "CORK solve finished" maxlog=1 krylov_dim=mfinal rank=S.r napply=S.napply nroots=length(ks)
         (P, S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal)
     end
@@ -1275,8 +1333,8 @@ function solve(solver::CORKSolver, pts::BoundaryPoints, k0, dk; multithreaded::B
     return λ, ts
 end
 
-function _cork_solve(solver::CORKSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, p::Int=solver.p, vectors::Bool=false)
-    P, S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = _cork_solve_core(solver, pts, k0, dk; multithreaded, eigenvectors=vectors || solver.states === :vectors, p)
+function _cork_solve(solver::CORKSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, p::Int=solver.p, vectors::Bool=false, side::Symbol=:right)
+    P, S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = _cork_solve_core(solver, pts, k0, dk; multithreaded, eigenvectors=vectors || solver.states === :vectors, p, side)
     λ = ComplexF64[complex(x[1],x[2]) for x in ks]; ts = Float64[x[3] for x in ks]
     return λ, ts, Ψ
 end

@@ -33,3 +33,28 @@
     @test all(data.ten .< TENSION_TOL_ACCEL)
     @test all(abs.(data.k_im) .< IMAG_TOL_HOLES)
 end
+
+# solver: CORK, states = :boundary
+# kernel/basis: composite CFIE (outer square GlobalCornerGrading(kressq=2), disc hole), ppw=10, min_pts=200, nlevels=4
+# billiard: Sinai (SinaiBilliard(1.0, 0.25))
+# symmetry: D2 sector (chi_X, chi_Y) = (+1, +1) of D4; u is expanded over the orbit copies of the outer loop and the hole
+# reference: solve_state u on the stored pts (same kernel and sector); reduced Beyn levels of the same sector in [4, 9]
+# functions to test: compute_spectrum (CORKSolver, states = :boundary with a reduced composite kernel), _cork_left_vectors, _boundary_states
+@testset "CORK (CFIE composite) - Sinai - D2 sector (+1, +1) states = :boundary stores u equal to solve_state" begin
+    b = sh_sinai()
+    choices = (XAxisReflection => 1, YAxisReflection => 1)
+    ref = sh_levels(sh_sinai_spectrum(choices...))
+    sec = symmetry_sector(b, choices...)
+    kernel = sh_composite_kernel(sec; min_pts=200)
+    solver = CORKSolver(kernel; nlevels=4, states=:boundary)
+    data = compute_spectrum(solver, b, SINAI_WINDOW...; multithreaded=false, show_progress=false)
+    ks = sort(real.(data.k))
+    @test length(ks) == length(ref)
+    @test all(isapprox.(ks, ref; atol=SPECTRUM_ATOL_SECTOR))
+    @test all(data.ten .< TENSION_TOL_ACCEL)
+    @test all(abs.(data.k_im) .< IMAG_TOL_HOLES)
+    @test boundary_states_wellformed(data)
+    res, idx = stored_u_residuals(data, kernel, b)
+    @test length(idx) == length(ref)
+    @test all(res .< BOUNDARY_U_TOL_BIM)
+end

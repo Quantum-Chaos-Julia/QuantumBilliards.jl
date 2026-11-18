@@ -112,10 +112,11 @@ function _memory_stages(solver::CORKSolver, Nf::Real, M::Real; nw::Integer=1)
 end
 
 function _memory_retained(solver::CORKSolver, nw::Integer, ns::Real, Nf::Real, M::Real)
-    solver.states === :vectors || return Pair{String,Float64}[]
+    solver.states === :none && return Pair{String,Float64}[]
+    label = solver.states === :boundary ? "boundary functions u, full boundary (states x Nf)" : "eigenstates, full boundary (states x Nf)"
     return Pair{String,Float64}[
         "boundary points ($nw windows)" => _PTS_BYTES_PER_POINT * nw * Nf,
-        "eigenstates, full boundary (states x Nf)" => _CPLX_BYTES * ns * Nf,
+        label => _CPLX_BYTES * ns * Nf,
     ]
 end
 

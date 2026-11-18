@@ -918,7 +918,12 @@ windows use deterministic ownership. When `states = :vectors`, each
 retained root stores a [`BIMEigenstate`](@ref) containing the CORK layer
 density. The density is expanded with `symmetrize_layer_density` before
 storage, so both `state.vec` and `state.pts` refer to the complete physical
-boundary.
+boundary. When `states = :boundary`, each window takes its roots from the right
+Krylov run and evaluates the left null vectors `yᴴP(tⱼ) = 0` from the stored
+Chebyshev polynomial by adjoint inverse iteration (no kernel evaluations); the
+state stores `u = y ./ ds` expanded with the orbit phases and no density is
+retained. A sample of the left vectors is validated against the polynomial and
+the window is recomputed on the kernel matrix if the check fails.
 
 ## Arguments
 * `solver::CORKSolver`: Chebyshev-CORK boundary-integral eigensolver.
@@ -965,18 +970,18 @@ function compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; accept_tol::
             @debug "CORK polynomial degree tuned" maxlog=1 p_initial=solver.p p_final=p validation_error=err tolerance=solver.taylor_tol
         end
         ks = Complex{T}[]; ts = T[]
-        if solver.states === :vectors
+        if solver.states !== :none
             states = nothing
             @timeit_debug "solution" begin
                 @maybe_showprogress show_progress for i in eachindex(intervals)
                     a, b = intervals[i]; k0 = (a+b)/2; dk = b-a; pts = @timeit_debug "evaluate_points" evaluate_points(solver, billiard, k0)
-                    ki, ti, X = _cork_solve(solver, pts, k0, dk; multithreaded, p, vectors=true)
+                    ki, ti, X = _cork_solve(solver, pts, k0, dk; multithreaded, p, vectors=true, side=solver.states === :boundary ? :left : :right)
                     keep = findall(j -> begin
                         x = real(ki[j])
                         a<=x && (i==length(intervals) ? x<=k2T : x<b) && k1T<=x
                     end, eachindex(ki))
                     isempty(keep) && continue
-                    si = @timeit_debug "postprocessing" [BIMEigenstate(ki[j], symmetrize_layer_density(solver.kernel, X[:,j], pts, billiard), ti[j], pts) for j in keep]
+                    si = @timeit_debug "postprocessing" (solver.states === :boundary ? _boundary_states(solver.kernel, billiard, ki[keep], ti[keep], X[:,keep], pts) : [BIMEigenstate(ki[j], symmetrize_layer_density(solver.kernel, X[:,j], pts, billiard), ti[j], pts) for j in keep])
                     states===nothing ? (states = si) : append!(states, si)
                     append!(ks, Complex{T}.(ki[keep])); append!(ts, T.(ti[keep]))
                 end

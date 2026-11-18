@@ -963,6 +963,9 @@ using QuantumBilliards: _check_states_supported
         @test _check_states_supported(BeynSolver(beyn_kernel; states=:boundary)) === nothing      # real Beyn accepts :boundary
         @test _check_states_supported(BeynSolver(beyn_kernel; states=:vectors)) === nothing
         @test _check_states_supported(BeynSolver(beyn_kernel; states=:none)) === nothing
+        for st in (:none, :vectors, :boundary)                                                   # CORK accepts every states value
+            @test _check_states_supported(CORKSolver(beyn_kernel; states=st)) === nothing
+        end
     end
 
     @testset "_vs_solve_window: :none stores no states, :vectors stores them" begin
@@ -981,12 +984,13 @@ using QuantumBilliards: _check_states_supported
         @test [st.k for st in s_bnd] == ki
     end
 
-    @testset "ExpandedBIM accepts states = :boundary, CORK still rejects it before any solve" begin
+    @testset "ExpandedBIM and CORK accept states = :boundary (no rejection before the solve)" begin
         circle = CircleBilliard(1.0)
         kernel = DoubleLayerPotentialSolver(10.0, circle)
-        # Beyn accepts :boundary since Step 9, ExpandedBIM since Step 10 (the u-states are covered in unit/solvers/acceleratedmethods/ebim_tests.jl)
+        # Beyn accepts :boundary since Step 9, ExpandedBIM since Step 10, CORK since Step 11 (the u-states are covered in
+        # unit/solvers/acceleratedmethods/ebim_tests.jl, cork_tests.jl and integration/accelerated/cork_spectra.jl)
         @test _check_states_supported(ExpandedBIMSolver(kernel; states=:boundary)) === nothing
         @test _check_states_supported(ExpandedBIMSolver(kernel; states=:none)) === nothing
-        @test_throws ArgumentError compute_spectrum(CORKSolver(kernel; states=:boundary), circle, 5.0, 6.0)
+        @test _check_states_supported(CORKSolver(kernel; states=:boundary)) === nothing
     end
 end

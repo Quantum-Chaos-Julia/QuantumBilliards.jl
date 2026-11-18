@@ -3,7 +3,8 @@
 #                                             evaluate_cork_polynomial, validate_polynomial, get_A0, cache_block!,
 #                                             compact_project!, compact_block_qr!, pack! / unpack!, init_cork, compute_tail! /
 #                                             promote_tail! / extend!, ritz_roots, reconstruct_cork_eigenvectors, adaptive_cork,
-#                                             _cork_solve_core via solve / solve_vectors, solve_wavenumber, solve_spectrum,
+#                                             _cork_solve_core via solve / solve_vectors, solve_wavenumber, solve_spectrum, cork_left_vectors, cork_left_residuals,
+#                                             _cork_left_vectors, side = :left,
 #                                             _cork_warn_if_incomplete)
 # The symmetry-reduced polynomial (build_B_reduced) needs real symmetry orbits and is left to integration coverage; constructor
 # validation is covered in solvers/solverconstructors_tests.jl.
@@ -922,3 +923,95 @@ ck_tolerance(expected) = max(0.3 * expected, 3.0)
         @test_logs _cork_warn_if_incomplete(solver, ck_circle, round(Int, 2 * expected), k1, k2)
     end
 end
+
+# Left null vectors of the polynomial: A(k) = Q diag(d(k)) Q' has the left null vector Q[:,m] at the root kappa_m (up to phase);
+# the semisimple double root kappa = 3.0 has the left null space Q[:,12:13].
+using QuantumBilliards: cork_left_vectors, cork_left_residuals, _cork_left_vectors
+
+@testset "evaluate_cork_polynomial: complex argument" begin
+    P = ck_polynomial(); s = ck_problem()
+    @testset "complex t with zero imaginary part equals real t" begin
+        for t in (-0.7, 0.0, 0.31)
+            @test evaluate_cork_polynomial(P, ComplexF64(t)) ≈ evaluate_cork_polynomial(P, t) atol = 1e-13
+        end
+    end
+    @testset "matches A(k) at a complex k (the cubic is reproduced exactly)" begin
+        for k in (3.05 + 0.04im, 2.9 - 0.1im)
+            t = (k - P.k0) / P.Δ
+            @test evaluate_cork_polynomial(P, t) ≈ ck_matrix(s, k) atol = 1e-10
+        end
+    end
+end
+
+@testset "cork_left_vectors / cork_left_residuals" begin
+    P = ck_polynomial(); s = ck_problem()
+    ks = ComplexF64.(CK_INSIDE)
+    Y = cork_left_vectors(P, ks)
+
+    @testset "shape, unit norm and left null property" begin
+        @test Y isa Matrix{ComplexF64} && size(Y) == (CK_N, 4)
+        @test all(j -> norm(Y[:, j]) ≈ 1, 1:4)
+        for j in 1:4
+            t = (ks[j] - P.k0) / P.Δ
+            @test norm(Y[:, j]' * evaluate_cork_polynomial(P, t)) < 1e-8
+        end
+    end
+
+    @testset "simple roots align with the columns of Q" begin
+        for (j, m) in ((1, 11), (4, 14))
+            @test abs(s.Q[:, m]' * Y[:, j]) ≈ 1 atol = 1e-8
+        end
+    end
+
+    @testset "degenerate pair is orthonormal and spans Q[:,12:13]" begin
+        Yd = Y[:, 2:3]
+        @test Yd' * Yd ≈ Matrix(I, 2, 2) atol = 1e-8
+        Qd = s.Q[:, CK_DOUBLE_IDX]
+        @test norm(Yd - Qd * (Qd' * Yd)) < 1e-8
+    end
+
+    @testset "empty root list" begin
+        @test size(cork_left_vectors(P, ComplexF64[])) == (CK_N, 0)
+    end
+
+    @testset "residuals: small for correct vectors, large for a wrong vector" begin
+        r = cork_left_residuals(P, ks, Y, 1:4)
+        @test r isa Vector{Float64} && length(r) == 4
+        @test maximum(r) < 1e-8
+        Yw = copy(Y); Yw[:, 1] = ComplexF64.(s.Q[:, 1])
+        @test cork_left_residuals(P, ks, Yw, [1])[1] > 1e-3
+        @test length(cork_left_residuals(P, ks, Y, [2, 4])) == 2
+    end
+end
+
+@testset "_cork_solve: side = :left" begin
+    s = ck_problem(); solver = ck_solver()
+    ksR, tsR, ΨR = _cork_solve(solver, CK_PTS, CK_K0, CK_DK; multithreaded=false, vectors=true)
+    ksL, tsL, ΨL = _cork_solve(solver, CK_PTS, CK_K0, CK_DK; multithreaded=false, vectors=true, side=:left)
+
+    @testset "same roots as the right run, left vectors as Ψ" begin
+        @test ksL ≈ ksR
+        @test size(ΨL) == size(ΨR) == (CK_N, 4)
+        @test all(j -> norm(ΨL[:, j]) ≈ 1, 1:4)
+        for j in 1:4
+            @test norm(ΨL[:, j]' * ck_matrix(s, ksL[j])) < 1e-5
+        end
+    end
+
+    @testset "left vectors span the same invariant subspace as Q[:,11:14]" begin
+        Qi = s.Q[:, CK_INSIDE_IDX]
+        @test norm(ΨL - Qi * (Qi' * ΨL)) < 1e-5
+    end
+
+    @testset "argument validation" begin
+        @test_throws ArgumentError _cork_solve(solver, CK_PTS, CK_K0, CK_DK; multithreaded=false, side=:left)
+        @test_throws ArgumentError _cork_solve(solver, CK_PTS, CK_K0, CK_DK; multithreaded=false, vectors=true, side=:middle)
+    end
+
+    @testset "_cork_left_vectors: empty root list" begin
+        P = ck_polynomial()
+        @test size(_cork_left_vectors(solver, CK_PTS, P, NTuple{3,Float64}[]; multithreaded=false)) == (CK_N, 0)
+    end
+end
+# The fallback of `_cork_left_vectors` (polynomial residual above tolerance, recomputation on the kernel matrix through
+# `_posthoc_left_vectors`) is not tested here: it needs a polynomial inconsistent with the kernel, which the exact synthetic problem cannot provide.

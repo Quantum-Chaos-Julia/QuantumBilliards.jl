@@ -94,3 +94,61 @@ end
     @test length(ks) == length(ks_ref)
     @test all(isapprox.(ks, ks_ref; atol=SPECTRUM_ATOL_BIM))
 end
+
+# Boundary functions stored in the spectrum (`states = :boundary`, Step 11 of scratchpad/boundary-function-spectrum-plan.md): compute_spectrum runs the
+# usual right Krylov solve for the roots and takes the left null vectors from the Chebyshev polynomial (cork_left_vectors, validated on a sample and
+# recomputed on the kernel matrix on failure); the stored u is the Rellich-normalized y ./ ds (no layer density). References: solve_state u at the same
+# level on the stored boundary points (compared after the least-squares complex scaling, tolerance BOUNDARY_U_TOL_BIM; worst observed 6.5e-12) and the
+# analytic levels. Window [4.2, 6.0] of the rectangle holds the levels 4.7544, 5.2194, 5.4783.
+# A DLP kernel (same settings) was tried and not kept: the right Krylov solve for the roots does not converge on it (full Krylov dimension reached),
+# independently of the stored states.
+
+# solver: CORK, states = :boundary
+# kernel/basis: CFIE, GlobalCornerGrading, ppw=20, min_pts=800, nlevels=20, taylor_tol=1e-10
+# billiard: Rectangle (RectangleBilliard(1.0, 0.7), the full 2.0 x 1.4 rectangle)
+# symmetry: None
+# reference: solve_state u on the stored pts; analytic levels (3 levels in [4.2, 6.0])
+# functions to test: compute_spectrum (CORKSolver, states = :boundary), _cork_left_vectors, cork_left_vectors, _boundary_states
+@testset "CORK (CFIE) - Rectangle - states = :boundary stores u equal to solve_state, window [4.2, 6.0]" begin
+    billiard = RectangleBilliard(1.0, 0.7)
+    kernel = CombinedFieldIntegralEquationSolver(20.0, billiard; grading=GlobalCornerGrading(), min_pts=800)
+    solver = CORKSolver(kernel; nlevels=20, taylor_tol=1e-10, states=:boundary)
+    data = compute_spectrum(solver, billiard, 4.2, 6.0; multithreaded=true, show_progress=false)
+    ks_ref = rectangle_spectrum(2.0, 1.4, 4.2, 6.0)
+    ks = sort(real.(data.k))
+    @test length(ks_ref) == 3
+    @test length(ks) == length(ks_ref)
+    @test all(isapprox.(ks, ks_ref; atol=SPECTRUM_ATOL_BIM))
+    @test all(data.ten .< TENSION_TOL_ACCEL)
+    @test all(abs.(data.k_im) .< IMAG_TOL)
+    @test boundary_states_wellformed(data)
+    res, idx = stored_u_residuals(data, kernel, billiard)
+    @test length(idx) == 3
+    @test all(res .< BOUNDARY_U_TOL_BIM)
+end
+
+# solver: CORK, states = :boundary
+# kernel/basis: composite CFIE (one SmoothPeriodicGrading component per boundary domain), min_pts=64, ppw=10, nlevels=20
+# billiard: Annular (AnnularBilliard(0.3, 0.0; center=[0.2, 0.1])), inner radius 0.3, outer radius 1
+# symmetry: None
+# reference: analytic annulus levels (4.4124 simple, 4.7058 x2, 5.4702 x2 in [4.2, 5.8]); solve_state u on the stored pts for the simple level
+#   (degenerate levels are skipped by stored_u_residuals: one arbitrary vector of the eigenspace)
+# functions to test: compute_spectrum (CORKSolver, states = :boundary with a composite kernel), _cork_left_vectors, _boundary_states
+@testset "CORK (CFIE composite) - Annular - states = :boundary stores u equal to solve_state, window [4.2, 5.8]" begin
+    billiard = AnnularBilliard(0.3, 0.0; center=[0.2, 0.1])
+    component() = CombinedFieldIntegralEquationSolver(10.0, billiard; grading=SmoothPeriodicGrading(), min_pts=64)
+    kernel = CompositeBIMSolver(component(), component())
+    solver = CORKSolver(kernel; nlevels=20, states=:boundary)
+    data = compute_spectrum(solver, billiard, 4.2, 5.8; multithreaded=true, show_progress=false)
+    ks_ref = annulus_spectrum(0.3, 1.0, 4.2, 5.8)
+    ks = sort(real.(data.k))
+    @test length(ks_ref) == 5
+    @test length(ks) == length(ks_ref)
+    @test all(isapprox.(ks, ks_ref; atol=SPECTRUM_ATOL_BIM))
+    @test all(data.ten .< TENSION_TOL_ACCEL)
+    @test all(abs.(data.k_im) .< IMAG_TOL)
+    @test boundary_states_wellformed(data)
+    res, idx = stored_u_residuals(data, kernel, billiard)
+    @test length(idx) == 1
+    @test all(res .< BOUNDARY_U_TOL_BIM)
+end

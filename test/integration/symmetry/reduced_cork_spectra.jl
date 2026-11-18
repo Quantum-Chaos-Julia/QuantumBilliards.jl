@@ -53,3 +53,40 @@ end
     @test length(_rcork_rectangle_spectrum((1, -1)).k) == 4
     @test length(_rcork_rectangle_spectrum((-1, 1)).k) == 5
 end
+
+# Boundary functions in a reduced sector (`states = :boundary`, Step 11 of scratchpad/boundary-function-spectrum-plan.md): the left vectors of the
+# reduced polynomial are expanded over the symmetry orbits, so the stored u covers the whole boundary. Reference: solve_state u of the same reduced
+# kernel on the stored boundary points (least-squares complex scaling, tolerance BOUNDARY_U_TOL_BIM) and the analytic sector levels.
+const REDUCED_CORK_BOUNDARY_CACHE = Dict{Tuple,Any}()
+
+function _rcork_rectangle_boundary(chars::Tuple{Int,Int})
+    return get!(REDUCED_CORK_BOUNDARY_CACHE, (:rectangle, chars)) do
+        billiard = RectangleBilliard(1.0, 0.7)
+        kernel = CombinedFieldIntegralEquationSolver(10.0, billiard; grading=GlobalCornerGrading(kressq=2), sym_characters=chars, min_pts=200)
+        solver = CORKSolver(kernel; nlevels=4, states=:boundary)
+        data = compute_spectrum(solver, billiard, 3.0, 10.0; multithreaded=false, show_progress=false)
+        (; billiard, kernel, data)
+    end
+end
+
+# solver: CORK, states = :boundary
+# kernel/basis: CFIE, GlobalCornerGrading(kressq=2), ppw=10, min_pts=200 (reduced N = 50), nlevels=4
+# billiard: Rectangle (RectangleBilliard(1.0, 0.7), the full 2.0 x 1.4 rectangle)
+# symmetry: D2 reflection sector (1, 1); the stored u covers the whole boundary (orbit expansion)
+# reference: solve_state u of the same reduced kernel on the stored pts; analytic sector levels in [3, 10]
+# functions to test: compute_spectrum (CORKSolver, states = :boundary with a reduced kernel), _cork_left_vectors, _boundary_states
+@testset "CORK (CFIE) - Rectangle - sector (1, 1) - states = :boundary stores u equal to solve_state, window [3, 10]" begin
+    r = _rcork_rectangle_boundary((1, 1))
+    data = r.data
+    ks_ref = rectangle_spectrum(2.0, 1.4, 3.0, 10.0; parity_x=1, parity_y=1)
+    ks = sort(real.(data.k))
+    @test length(ks) == length(ks_ref)
+    @test all(isapprox.(ks, ks_ref; atol=SPECTRUM_ATOL_BIM))
+    @test all(data.ten .< TENSION_TOL_ACCEL)
+    @test all(abs.(data.k_im) .< IMAG_TOL)
+    @test boundary_states_wellformed(data)
+    @test all(length(st.u) == length(st.pts) for st in data.states)
+    res, idx = stored_u_residuals(data, r.kernel, r.billiard)
+    @test length(idx) == length(ks_ref)
+    @test all(res .< BOUNDARY_U_TOL_BIM)
+end
