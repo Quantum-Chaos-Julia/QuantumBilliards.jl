@@ -22,6 +22,8 @@ const SPECTRUM_ATOL_SECTOR = 1e-5     # Beyn levels, symmetry sector spectra vs 
 const IMAG_TOL_HOLES = 1e-5           # |Im k| of Beyn levels, composite CFIE on billiards with holes (worst observed 2.1e-7)
 const SPECTRUM_ATOL_ISOSPECTRAL = 5e-3  # Beyn DLP levels, Gordon-Webb-Wolpert polygon A vs B at ppw = 16 (worst observed 5.3e-4)
 const IMAG_TOL_POLYGON = 5e-3         # |Im k| of Beyn DLP levels, reflex-corner polygons at ppw = 16 (worst observed 4.1e-4)
+const BOUNDARY_U_TOL_BIM = 1e-3       # relative L2 error of u from solve_state (left singular vector), DLP, CFIE, composite (worst observed 1.4e-5 graded rectangle, 6e-5 plan calibration)
+const RELLICH_TOL_BIM = 1e-6          # deviation of the Rellich norm of u from the analytic value or from 1 (worst observed 2.5e-8 graded rectangle)
 
 # High-wavenumber tier.
 const HIGH_K = 100.0

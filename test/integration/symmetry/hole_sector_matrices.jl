@@ -109,7 +109,7 @@ end
 # billiard: quarter square with SymmetrizedHoles(disc, D2), G' = D2
 # symmetry: CompositeReflection(Y, X), (chi_Y, chi_X) = (1, -1)
 # reference: the defining orbit identity vec[g(q)] = chi_g vec[q] of the expansion to the full boundary (BilliardGeometry orbit map)
-# functions to test: solve_state (symmetrize_layer_density, _cfie_normal_derivative for a reduced composite solver), _composite_symmetry_orbits
+# functions to test: solve_state (symmetrize_layer_density, _bim_normal_derivative for a reduced composite solver), _composite_symmetry_orbits
 @testset "Composite CFIE - D2 quarter square, SymmetrizedHoles(disc, D2) - solve_state expands the reduced density" begin
     b = hf_symmetrized_disc_billiard()
     k = 6.3

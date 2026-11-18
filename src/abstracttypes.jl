@@ -89,10 +89,11 @@ for basis-expansion solvers. Concrete implementations are
 and [`CompositeBIMSolver`](@ref). `solve_state` is generic across the whole
 branch: it assembles `A(k)` once and reuses the *same* Krylov singular-value
 solve `solve_vect` performs to also recover the physical boundary normal
-derivative `∂ₙψ`, via `_bim_normal_derivative`'s Helmholtz-kernel-reciprocity
-relation between `A(k)`'s left singular vector and its weighted-transpose
-adjoint's right singular vector — no concrete solver needs to implement this
-itself unless its kernel does not follow that reciprocity convention.
+derivative `∂ₙψ`, via `_bim_normal_derivative`: `u = l ./ ds`, the left singular
+vector `l` of `A(k)` divided by the quadrature weights (the weighted transpose
+of the discrete operator is its adjoint), expanded with the orbit phases when a
+symmetry is active — no concrete solver needs to implement this itself unless
+its kernel does not follow that convention.
 
 ## API
 The following functions can be evaluated for any `SweepBIMSolver`:

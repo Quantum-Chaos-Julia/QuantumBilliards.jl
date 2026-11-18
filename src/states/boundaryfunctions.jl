@@ -158,7 +158,8 @@ Unlike the basis-state method [`boundary_function(state, billiard)`](@ref), `sta
 (the *primal* density from [`solve_vect`](@ref)) is not directly usable as
 `∂ₙψ`. Since [`compute_eigenstate`](@ref) already computes the physical
 boundary normal derivative via [`solve_state`](@ref)/`_bim_normal_derivative`
-(from the *same* Krylov solve as `vec`/`ten`, at no extra cost), this is a
+(the left singular vector of the *same* Krylov solve as `vec`/`ten`, divided by
+the quadrature weights, at no extra cost), this is a
 plain read of the precomputed `state.u`/`state.pts`/`state.bnd_norm` fields —
 no matrix is assembled and no solve happens here.
 

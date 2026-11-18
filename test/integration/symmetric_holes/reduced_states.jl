@@ -122,3 +122,37 @@ end
     @test single.ten[1] < TENSION_TOL_BIM
     @test length(single.states[1].vec) == length(single.states[1].pts)
 end
+
+# solver: Sweep CompositeBIM (solve_state)
+# kernel/basis: composite CFIE (outer square graded, hole copies share one component solver), ppw=10, min_pts=96
+# billiard: D2 quarter square with SymmetrizedHoles(DomainHole(disc), D2_symmetry()), four hole loops in one group
+# symmetry: D2 reflection sector (chi_Y, chi_X) = (+1, -1)
+# reference: cross-method, the unreduced composite solve_state at the same k (a level of the sector Beyn spectrum, observed deviation 2e-14); defining orbit identity of u; Rellich identity
+# functions to test: solve_state (left-vector u, _composite_symmetry_orbits with hole copies), _bim_normal_derivative, _rellich
+@testset "Sweep (CFIE composite) - SymmetrizedHoles - sector (1, -1) - boundary derivative u" begin
+    b = sh_billiard(:symmetrized_discs) do
+        hf_symmetrized_disc_billiard()
+    end
+    choices = (YAxisReflection => 1, XAxisReflection => -1)
+    levels = sh_levels(sh_spectrum(:symmetrized_discs, b, 4.0, 9.0, choices...))
+    @test !isempty(levels)
+    k = levels[1]
+    reduced = sh_composite_kernel(symmetry_sector(b, choices...))
+    unreduced = sh_composite_kernel(b)
+    pts = evaluate_points(reduced, b, k)
+    pts_full = evaluate_points(unreduced, b, k)
+    @test pts.xy == pts_full.xy                                            # the reduced solver samples the whole boundary
+
+    ten, _, u, _ = QuantumBilliards.solve_state(reduced, pts, k, b; multithreaded=false)
+    ten_full, _, u_full, _ = QuantumBilliards.solve_state(unreduced, pts_full, k, b; multithreaded=false)
+    @test ten < TENSION_TOL_BIM && ten_full < TENSION_TOL_BIM
+    @test length(u) == length(pts) == length(u_full)                        # full-boundary u over the outer loop and all four hole loops
+
+    orbits = QuantumBilliards._composite_symmetry_orbits(Float64, reduced, pts)
+    @test maximum(abs(u[orbits.fund_to_full[g, a]] - orbits.fund_to_scale[g, a] * u[orbits.fundamental_indices[a]])
+                  for g in 1:orbit_size(orbits), a in 1:fundamental_size(orbits)) < 1e-10 * maximum(abs, u)
+
+    c = dot(u_full, u) / dot(u_full, u_full)                               # arbitrary phase and sign of the unreduced singular vector
+    @test norm(u - c * u_full) / norm(u) < BOUNDARY_U_TOL_BIM              # the reduced and the unreduced solve give the same u
+    @test abs(QuantumBilliards._rellich(pts, u, k) - 1) < RELLICH_TOL_BIM
+end

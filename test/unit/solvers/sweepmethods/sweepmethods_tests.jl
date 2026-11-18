@@ -1,7 +1,7 @@
 # Unit tests for the solver-agnostic helpers of
-#   src/solvers/sweepmethods/sweepmethods.jl   (_fold_boundary, _infer_bim_symmetry, symmetrize_layer_density,
-#                                               _bim_normal_derivative for DLP kernels, _bim_dlp_cross_kernel_entry,
-#                                               _cfie_derivative!, and the symmetric-holes plumbing _orbit_character_args,
+#   src/solvers/sweepmethods/sweepmethods.jl   (_fold_boundary, _infer_bim_symmetry, _boundary_orbits, symmetrize_layer_density,
+#                                               _bim_normal_derivative for every BIM kernel, _bim_dlp_cross_kernel_entry,
+#                                               and the symmetric-holes plumbing _orbit_character_args,
 #                                               _fold_group, _bim_node_multiple, _bim_round_nodes, _bim_node_count)
 #   _bim_node_count (the shared DLP/CFIE node-count rule) is checked against hand-computed counts and against the number of nodes
 #   evaluate_points returns for DLP and CFIE on a triangle and a rectangle, with and without symmetry, smooth and corner graded.
@@ -11,8 +11,9 @@
 # symmetrize_layer_density expands a reduced density to the full boundary through the defining orbit identity
 # full[g(q)] = chi_g * reduced[q]. The orbit maps themselves are tested in BilliardGeometry.jl; here only the dispatch, the
 # argument checks and the identities that tie the helpers together are checked. The generic solve_wavenumber and k_sweep of
-# this file solve eigenproblems and belong to the integration tier; solve_state and the CFIE normal derivative are covered
-# with the DLP and CFIE kernels.
+# this file solve eigenproblems and belong to the integration tier; solve_state is covered there with the DLP and CFIE kernels.
+# _bim_normal_derivative maps the left singular vector l of a Fredholm matrix to the full-boundary u = l ./ ds (no conjugation,
+# every kernel); with a symmetry the reduced l ./ ds is expanded through the orbit map of _boundary_orbits (single curve or composite).
 # No eigen solves. Helper definitions use the prefix `sw_`.
 # _orbit_character_args turns the stored character tuple into the arguments that follow the symmetry in symmetry_index_orbits /
 # group_symmetry_orbits; _fold_group is the same fold for one boundary group of a billiard with holes (group 0 is the outer boundary,
@@ -24,7 +25,8 @@
 using SpecialFunctions: hankelh1
 using StaticArrays: SVector
 using QuantumBilliards: _fold_boundary, _infer_bim_symmetry, symmetrize_layer_density, _bim_normal_derivative,
-                        _bim_dlp_cross_kernel_entry, _cfie_derivative!, _orbit_character_args, _fold_group,
+                        _boundary_orbits, _composite_symmetry_orbits,
+                        _bim_dlp_cross_kernel_entry, _orbit_character_args, _fold_group,
                         _bim_node_multiple, _bim_round_nodes, _bim_solver_node_multiple, _bim_node_count
 
 # Whether two SymmetryOrbitMaps agree in every field.
@@ -36,6 +38,15 @@ sw_same_orbits(a, b) = a.fundamental_indices == b.fundamental_indices && a.orbit
 function sw_orbit_identity_holds(orbits, full, reduced)
     ng, nf = size(orbits.fund_to_full)
     return all(full[orbits.fund_to_full[g, b]] ≈ orbits.fund_to_scale[g, b] * reduced[b] for g in 1:ng, b in 1:nf)
+end
+
+# Composite CFIE solver on the D2 quarter square with SymmetrizedHoles (forced node counts 32 outer, 12 per hole loop: 80 nodes)
+# for the D2 characters `chars` (empty: no symmetry), with its boundary points at k = 6.3. No solve.
+function sw_composite_d2(b, chars)
+    kw = isempty(chars) ? (;) : (; symmetry=CompositeReflection(YAxisReflection(), XAxisReflection()), sym_characters=chars)
+    solver = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(0.01, b; min_pts=32, kw...),
+                                CombinedFieldIntegralEquationSolver(0.01, b; min_pts=12, kw...))
+    return solver, evaluate_points(solver, b, 6.3)
 end
 
 # Minimal SweepBIMSolver without reusable geometry: its matrix records the wavenumber and the multithreaded flag.
@@ -535,29 +546,113 @@ end
     end
 end
 
-@testset "_bim_normal_derivative (DLP)" begin
+@testset "_boundary_orbits" begin
     rect = RectangleBilliard(1.0, 0.7)
+    c3 = C3Billiard(0.02)
 
-    @testset "without symmetry: conj(lvec) / ds on the whole boundary" begin
-        solver = DoubleLayerPotentialSolver(10.0, rect)
-        pts = evaluate_points(solver, rect, 10.0)
-        lvec = ComplexF64[(1 + 2im) * j for j in 1:length(pts)]
-        u = _bim_normal_derivative(solver, pts, lvec, rect)
-        @test length(u) == length(pts)
-        @test u == conj.(lvec) ./ pts.ds
-        @test _bim_normal_derivative(solver, pts, 2 .* lvec, rect) ≈ 2 .* u         # linear (antilinear in the conjugate) in lvec
-    end
-
-    @testset "with symmetry: weights of the orbit representatives" begin
+    @testset "single curve, reflection sector equals _fold_boundary" begin
         solver = DoubleLayerPotentialSolver(10.0, rect; sym_characters=(1, -1))
         pts = evaluate_points(solver, rect, 10.0)
-        orbits = _fold_boundary(Float64, rect, length(pts), solver.symmetry, solver.sym_characters)
-        lvec = ComplexF64[(1 - 1im) * j for j in 1:orbits.fundamental_size]
-        u = _bim_normal_derivative(solver, pts, lvec, rect)
-        @test length(u) == orbits.fundamental_size
-        @test u == conj.(lvec) ./ pts.ds[orbits.fundamental_indices]
-        # on a symmetric billiard the weights of all images of one node coincide, so any orbit member gives the same u
-        @test all(pts.ds[orbits.fund_to_full[g, b]] ≈ pts.ds[orbits.fund_to_full[1, b]] for g in 1:4, b in 1:orbits.fundamental_size)
+        orbits = _boundary_orbits(solver, pts, rect)
+        @test orbits isa BilliardGeometry.SymmetryOrbitMap{Float64}
+        @test sw_same_orbits(orbits, _fold_boundary(Float64, rect, length(pts), solver.symmetry, solver.sym_characters))
+        @test orbits.full_size == length(pts)
+        csolver = CombinedFieldIntegralEquationSolver(10.0, rect; sym_characters=(1, -1))
+        cpts = evaluate_points(csolver, rect, 10.0)
+        @test sw_same_orbits(_boundary_orbits(csolver, cpts, rect), _fold_boundary(Float64, rect, length(cpts), csolver.symmetry, csolver.sym_characters))
+    end
+
+    @testset "single curve, rotation sector equals _fold_boundary" begin
+        solver = DoubleLayerPotentialSolver(10.0, c3; sym_characters=(1,))
+        pts = evaluate_points(solver, c3, 10.0)
+        orbits = _boundary_orbits(solver, pts, c3)
+        @test sw_same_orbits(orbits, _fold_boundary(Float64, c3, length(pts), solver.symmetry, solver.sym_characters))
+        @test orbits.fundamental_size == length(pts) ÷ 3
+    end
+
+    @testset "composite solver equals _composite_symmetry_orbits" begin
+        b = hf_symmetrized_disc_billiard()
+        solver, pts = sw_composite_d2(b, (1, -1))
+        orbits = _boundary_orbits(solver, pts, b)
+        @test sw_same_orbits(orbits, _composite_symmetry_orbits(Float64, solver, pts))
+        @test orbits.full_size == 80 && orbits.fundamental_size == 20
+    end
+
+    @testset "no symmetry throws ArgumentError" begin
+        solver = DoubleLayerPotentialSolver(10.0, rect)
+        pts = evaluate_points(solver, rect, 10.0)
+        @test_throws ArgumentError _boundary_orbits(solver, pts, rect)
+        b = hf_symmetrized_disc_billiard()
+        plain, plain_pts = sw_composite_d2(b, ())
+        @test_throws ArgumentError _boundary_orbits(plain, plain_pts, b)
+    end
+end
+
+@testset "_bim_normal_derivative" begin
+    rect = RectangleBilliard(1.0, 0.7)
+    c3 = C3Billiard(0.02)
+
+    @testset "DLP and CFIE without symmetry: lvec / ds on the whole boundary, no conjugation" begin
+        for solver in (DoubleLayerPotentialSolver(10.0, rect), CombinedFieldIntegralEquationSolver(10.0, rect))
+            pts = evaluate_points(solver, rect, 10.0)
+            lvec = ComplexF64[(1 + 2im) * j for j in 1:length(pts)]
+            u = _bim_normal_derivative(solver, pts, lvec, rect)
+            @test length(u) == length(pts)
+            @test u == lvec ./ pts.ds
+            @test u != conj.(lvec) ./ pts.ds                                 # the old DLP convention is gone
+            @test _bim_normal_derivative(solver, pts, 2 .* lvec, rect) ≈ 2 .* u
+            @test _bim_normal_derivative(solver, pts, im .* lvec, rect) ≈ im .* u     # complex-linear in lvec
+        end
+    end
+
+    @testset "DLP and CFIE, reflection sector: full-length u from the orbit representatives" begin
+        for solver in (DoubleLayerPotentialSolver(10.0, rect; sym_characters=(1, -1)),
+                       CombinedFieldIntegralEquationSolver(10.0, rect; sym_characters=(1, -1)))
+            pts = evaluate_points(solver, rect, 10.0)
+            orbits = _fold_boundary(Float64, rect, length(pts), solver.symmetry, solver.sym_characters)
+            lvec = ComplexF64[(1 - 1im) * j for j in 1:orbits.fundamental_size]
+            u = _bim_normal_derivative(solver, pts, lvec, rect)
+            reduced = lvec ./ pts.ds[orbits.fundamental_indices]
+            @test length(u) == length(pts)                                   # the full boundary, not the reduced vector
+            @test u == symmetrize_layer_density(solver, reduced, pts, rect)
+            @test sw_orbit_identity_holds(orbits, u, reduced)
+            @test u[orbits.fundamental_indices] == reduced                   # representatives keep lvec ./ ds
+        end
+    end
+
+    @testset "DLP and CFIE, rotation sector: complex u by the cube roots of unity" begin
+        for solver in (DoubleLayerPotentialSolver(10.0, c3; sym_characters=(1,)),
+                       CombinedFieldIntegralEquationSolver(10.0, c3; sym_characters=(1,)))
+            pts = evaluate_points(solver, c3, 10.0)
+            orbits = _boundary_orbits(solver, pts, c3)
+            lvec = ComplexF64[b + 0.5im * b for b in 1:orbits.fundamental_size]
+            u = _bim_normal_derivative(solver, pts, lvec, c3)
+            reduced = lvec ./ pts.ds[orbits.fundamental_indices]
+            @test length(u) == length(pts) == 3 * orbits.fundamental_size
+            @test sw_orbit_identity_holds(orbits, u, reduced)
+            @test any(!isreal, orbits.phase)                                 # genuinely complex expansion phases
+        end
+    end
+
+    @testset "CompositeBIMSolver, SymmetrizedHoles: full-length u over all loops" begin
+        b = hf_symmetrized_disc_billiard()
+        solver, pts = sw_composite_d2(b, (1, -1))
+        orbits = _composite_symmetry_orbits(Float64, solver, pts)
+        lvec = ComplexF64[(2 + 1im) * j for j in 1:fundamental_size(orbits)]
+        u = _bim_normal_derivative(solver, pts, lvec, b)
+        reduced = lvec ./ pts.ds[orbits.fundamental_indices]
+        @test length(u) == length(pts) == 80
+        @test sw_orbit_identity_holds(orbits, u, reduced)
+        @test u[orbits.fundamental_indices] == reduced
+        plain, plain_pts = sw_composite_d2(b, ())
+        full = ComplexF64.(1:length(plain_pts))
+        @test _bim_normal_derivative(plain, plain_pts, full, b) == full ./ plain_pts.ds
+    end
+
+    @testset "length validation with symmetry" begin
+        solver = DoubleLayerPotentialSolver(10.0, rect; sym_characters=(1, 1))
+        pts = evaluate_points(solver, rect, 10.0)
+        @test_throws DimensionMismatch _bim_normal_derivative(solver, pts, ones(ComplexF64, length(pts) ÷ 4 + 1), rect)
     end
 end
 
@@ -600,62 +695,5 @@ end
         v = _bim_dlp_cross_kernel_entry(pts, 3.0, 4.0, 2.0 + 0.1im, 5)
         @test v isa ComplexF64
         @test isfinite(v)
-    end
-end
-
-@testset "_cfie_derivative!" begin
-    N = 16
-    t = [2π * (j - 0.5) / N for j in 1:N]
-    du = zeros(ComplexF64, N)
-
-    @testset "differentiates the Fourier modes exactly" begin
-        for q in (1, 3, -2, 7)
-            u = ComplexF64.(cis.(q .* t))
-            out = _cfie_derivative!(du, u)
-            @test out === du
-            @test du ≈ im * q .* u atol = 1e-12
-        end
-    end
-
-    @testset "constants have zero derivative" begin
-        _cfie_derivative!(du, ones(ComplexF64, N))
-        @test maximum(abs, du) < 1e-12
-    end
-
-    @testset "the Nyquist mode of an even grid is dropped" begin
-        u = ComplexF64.(cis.(8 .* t))                                       # q = N/2
-        _cfie_derivative!(du, u)
-        @test maximum(abs, du) < 1e-12
-    end
-
-    @testset "odd grids keep the highest mode" begin
-        n = 15
-        tn = [2π * (j - 0.5) / n for j in 1:n]
-        u = ComplexF64.(cis.(7 .* tn))
-        dn = zeros(ComplexF64, n)
-        _cfie_derivative!(dn, u)
-        @test dn ≈ 7im .* u atol = 1e-11
-    end
-
-    @testset "linearity and the derivative of sin" begin
-        a, b = 0.7, -1.3
-        u1 = ComplexF64.(cos.(2 .* t))
-        u2 = ComplexF64.(sin.(3 .* t))
-        d1, d2, d12 = zeros(ComplexF64, N), zeros(ComplexF64, N), zeros(ComplexF64, N)
-        _cfie_derivative!(d1, u1)
-        _cfie_derivative!(d2, u2)
-        _cfie_derivative!(d12, a .* u1 .+ b .* u2)
-        @test d12 ≈ a .* d1 .+ b .* d2 atol = 1e-12
-        @test real.(d1) ≈ -2 .* sin.(2 .* t) atol = 1e-12
-        @test real.(d2) ≈ 3 .* cos.(3 .* t) atol = 1e-12
-    end
-
-    @testset "single precision" begin
-        t32 = Float32[2π * (j - 0.5) / N for j in 1:N]
-        u = ComplexF32.(cis.(3 .* t32))
-        d32 = zeros(ComplexF32, N)
-        _cfie_derivative!(d32, u)
-        @test d32 isa Vector{ComplexF32}
-        @test d32 ≈ 3im .* u atol = 1e-4
     end
 end

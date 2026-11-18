@@ -55,6 +55,7 @@ end
 @group "drivers and states" begin
     run_file("integration/drivers/compute_spectrum_drivers.jl")
     run_file("integration/states/spectrum_states.jl")
+    run_file("integration/states/boundary_functions_wavenumber.jl")
 end
 
 @group "docs" begin
