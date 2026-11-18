@@ -414,6 +414,19 @@ function husimi_function(state::BIMEigenstate, billiard::AbsBilliard, solver::Ab
 end
 
 """
+    husimi_function(state::BIMEigenstate, billiard::AbsBilliard; c::Real=10.0, w::Real=7.0, full_p::Bool=false)
+
+Solver-free Husimi function of a BIM eigenstate with stored `u`, on the outer boundary loop.
+Throws an `ArgumentError` when `state.u === nothing`. Keywords as in the solver-taking method.
+
+## Returns
+* [`HusimiFunction`](@ref) with `k = state.k`.
+"""
+function husimi_function(state::BIMEigenstate, billiard::AbsBilliard; c::Real=10.0, w::Real=7.0, full_p::Bool=false)
+    return husimi_function(boundary_function(state, billiard); c, w, full_p)
+end
+
+"""
     husimi_function(state::BasisEigenstate, billiard::AbsBilliard; ppw::Real=5.0, c::Real=10.0, w::Real=7.0, multithreaded::Bool=true, full_p::Bool=false)
 
 Compute the Poincare-Husimi function of a basis eigenstate.

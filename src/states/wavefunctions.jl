@@ -336,13 +336,39 @@ Reconstruct BIM eigenstates on a common Cartesian grid.
 ## Returns
 - `Vector{Wavefunction}`: One [`Wavefunction`](@ref) per state, carrying the `k` of its state. All objects share the coordinate vectors `x` and `y`.
 """
-function wavefunction(states::AbstractVector{<:BIMEigenstate{K,T}}, billiard::AbsBilliard, solver::AbsBIMSolver; ppw::Real = 5, inside_only::Bool = true, fundamental_only::Bool = true, min_chunk::Int = 4096, use_chebyshev::Bool = true, show_progress::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(T), nan_mask::Bool = false) where {K<:Number,T<:Real}
+function wavefunction(states::AbstractVector{<:BIMEigenstate{K,T}}, billiard::AbsBilliard, solver::AbsBIMSolver; kwargs...) where {K<:Number,T<:Real}
+    return _bim_wavefunctions(states, billiard, _bim_kernel(solver); kwargs...)
+end
+
+"""
+    wavefunction(states::AbstractVector{<:BIMEigenstate{K,T}}, billiard::AbsBilliard; kwargs...) where {K<:Number,T<:Real}
+
+Solver-free reconstruction of BIM eigenstates that store the boundary normal derivative `u`, through the single-layer formula on the complete boundary (all loops for billiards with holes). Keywords are those of the solver-taking method.
+
+Throws an `ArgumentError` when a state has `u === nothing`.
+
+## Returns
+- `Vector{Wavefunction}`: One [`Wavefunction`](@ref) per state, sharing the coordinate vectors `x` and `y`.
+"""
+function wavefunction(states::AbstractVector{<:BIMEigenstate{K,T}}, billiard::AbsBilliard; kwargs...) where {K<:Number,T<:Real}
+    return _bim_wavefunctions(states, billiard, nothing; kwargs...)
+end
+
+"""
+    wavefunction(state::BIMEigenstate, billiard::AbsBilliard; kwargs...) → Wavefunction
+
+Solver-free reconstruction of one BIM eigenstate with stored `u`; see the vector method.
+"""
+function wavefunction(state::BIMEigenstate{K,T}, billiard::AbsBilliard; kwargs...) where {K<:Number,T<:Real}
+    return only(wavefunction([state], billiard; kwargs..., show_progress = false))
+end
+
+function _bim_wavefunctions(states::AbstractVector{<:BIMEigenstate{K,T}}, billiard::AbsBilliard, kernel; ppw::Real = 5, inside_only::Bool = true, fundamental_only::Bool = true, min_chunk::Int = 4096, use_chebyshev::Bool = true, show_progress::Bool = true, cheb_config::ChebyshevConfig = ChebyshevConfig(T), nan_mask::Bool = false) where {K<:Number,T<:Real}
     isempty(states) && throw(ArgumentError("states must be nonempty"))
-    kernel = _bim_kernel(solver)
     P = typeof(first(states).pts)
     ks = T[real(s.k) for s in states]; bds = P[s.pts for s in states]
-    density = all(s.vec !== nothing for s in states)
-    density || all(s.u !== nothing for s in states) || error("states must provide the same boundary representation")
+    density = kernel !== nothing && all(s.vec !== nothing for s in states)
+    density || all(s.u !== nothing for s in states) || throw(ArgumentError("states must all store the boundary normal derivative `u` (or the layer density `vec` with a solver)"))
     us = density ? Vector{K}[s.vec::Vector{K} for s in states] : Vector{K}[s.u::Vector{K} for s in states]
     bval = T(ppw)
     xgrid, ygrid, pts, indices, nx, ny = _wavefunction_grid(maximum(ks), billiard, bval; inside_only, fundamental_only)

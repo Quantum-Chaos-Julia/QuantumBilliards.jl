@@ -599,6 +599,44 @@ end
     end
 end
 
+# Solver-free form husimi_function(state, billiard): composes the solver-free boundary_function(state, billiard).
+@testset "husimi_function(::BIMEigenstate, billiard) - solver-free" begin
+    @testset "uniform grid, J02 mode: analytic constant density" begin
+        s, ds, _ = hu_uniform_grid(Float64, 256)
+        st = hu_bim_state(HU_J02, fill(-HU_J02 * besselj(1, HU_J02), 256), hu_pts(s, ds))
+        hf = husimi_function(st, HU_CIRCLE)
+        @test hf isa HusimiFunction{Float64} && hf.k === st.k
+        H, qs, ps = hf
+        hu_check_density(H, qs, ps)
+        hu_check_constant(H, qs, ps, st.k; var=false)
+    end
+
+    @testset "graded grid, cos(10 s): analytic two-Gaussian density" begin
+        s, ds, _ = hu_graded_grid(512)
+        k = HU_K
+        st = hu_bim_state(k, cos.(k * HU_P0 .* s), hu_pts(s, ds))
+        H, qs, ps = husimi_function(st, HU_CIRCLE)
+        hu_check_density(H, qs, ps)
+        E = hu_expected((q, p) -> hu_cos_density(k, HU_P0, q, p), qs, ps)
+        @test hu_err(H, E) < 1e-5
+    end
+
+    @testset "equals the solver-taking result for a u-only state" begin
+        s, ds, _ = hu_uniform_grid(Float64, 256)
+        st = hu_bim_state(HU_J02, cos.(10 .* s), hu_pts(s, ds))
+        @test hu_same(husimi_function(st, HU_CIRCLE), husimi_function(st, HU_CIRCLE, hu_SweepStub()))
+        @test hu_same(husimi_function(st, HU_CIRCLE; c=5.0, w=5.0, full_p=true),
+                      husimi_function(st, HU_CIRCLE, hu_SweepStub(); c=5.0, w=5.0, full_p=true))
+        @test hu_same(husimi_function(st, HU_CIRCLE), husimi_function(boundary_function(st, HU_CIRCLE)))
+    end
+
+    @testset "missing u throws ArgumentError" begin
+        s, ds, _ = hu_uniform_grid(Float64, 256)
+        st = BIMEigenstate{Float64,Float64}(HU_J01, 0.0, nothing, 1e-9, hu_pts(s, ds), nothing, nothing)
+        @test_throws ArgumentError husimi_function(st, HU_CIRCLE)
+    end
+end
+
 @testset "husimi_function(states, billiard) - several basis eigenstates" begin
     s0 = hu_j0_state(); s1 = hu_j1_state()
 

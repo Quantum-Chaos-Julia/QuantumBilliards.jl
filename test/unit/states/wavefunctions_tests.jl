@@ -791,7 +791,65 @@ end
         @test_throws ArgumentError wavefunction(typeof(s1)[], WF_CIRCLE, solver)
         # one state with only a density, one with only the normal derivative
         mixed = [wf_bim_density_state(WF_J01), s2]
-        @test_throws ErrorException wavefunction(mixed, WF_CIRCLE, solver; show_progress=false)
+        @test_throws ArgumentError wavefunction(mixed, WF_CIRCLE, solver; show_progress=false)
+    end
+end
+
+# Solver-free reconstruction from a stored u (hand-built circle state with the analytic u = -k J1(k) of the J0 mode, no solve).
+@testset "wavefunction(state, billiard) - solver-free reconstruction from u" begin
+    st = wf_bim_u_state(WF_J01)
+
+    @testset "single state: analytic J0 mode" begin
+        wf = wavefunction(st, WF_CIRCLE; use_chebyshev=false)
+        @test wf isa Wavefunction{Float64,Float64} && wf.k === st.k
+        psi, x, y = wf
+        @test size(psi) == (length(x), length(y))
+        inside = wf_quadrant_interior(x, y, 0.6)
+        @test count(inside) > 4e4
+        @test psi[inside] ≈ -wf_j0(x, y)[inside] atol = 1e-10
+        @test all(psi[wf_disc_exterior(x, y)] .== 0)
+    end
+
+    @testset "Chebyshev Hankel evaluation" begin
+        psi, x, y = wavefunction(st, WF_CIRCLE; use_chebyshev=true)
+        inside = wf_quadrant_interior(x, y, 0.6)
+        @test psi[inside] ≈ -wf_j0(x, y)[inside] atol = 1e-6
+    end
+
+    @testset "equals the solver-taking result for a u-only state" begin
+        a = wavefunction(st, WF_CIRCLE; use_chebyshev=false)
+        b = wavefunction(st, WF_CIRCLE, wf_SweepStub(); use_chebyshev=false)
+        @test a.psi == b.psi && a.x == b.x && a.y == b.y && a.k === b.k
+        c = wavefunction(st, WF_CIRCLE; use_chebyshev=false, fundamental_only=false, nan_mask=true)
+        d = wavefunction(st, WF_CIRCLE, wf_SweepStub(); use_chebyshev=false, fundamental_only=false, nan_mask=true)
+        @test isequal(c.psi, d.psi)
+    end
+
+    @testset "vector: one Wavefunction per state with a shared grid" begin
+        s2 = wf_bim_u_state(WF_J02)
+        wfs = wavefunction([st, s2], WF_CIRCLE; use_chebyshev=false, show_progress=false)
+        @test wfs isa Vector{Wavefunction{Float64,Float64}} && length(wfs) == 2
+        @test wfs[2].x === wfs[1].x && wfs[2].y === wfs[1].y
+        @test wfs[1].k === st.k && wfs[2].k === s2.k
+        inside = wf_quadrant_interior(wfs[1].x, wfs[1].y, 0.6)
+        @test wfs[1].psi[inside] ≈ -wf_j0(wfs[1].x, wfs[1].y, WF_J01)[inside] atol = 1e-10
+        @test wfs[2].psi[inside] ≈ -wf_j0(wfs[1].x, wfs[1].y, WF_J02)[inside] atol = 1e-10
+        @test wfs[1].psi == wavefunction(st, WF_CIRCLE; use_chebyshev=false).psi
+    end
+
+    @testset "stored u is used even when a density is present" begin
+        both = BIMEigenstate{Float64,Float64}(WF_J01, 0.0, ones(WF_NODES), 1e-9, WF_PTS, fill(-WF_J01 * besselj(1, WF_J01), WF_NODES), nothing)
+        psi, x, y = wavefunction(both, WF_CIRCLE; use_chebyshev=false)
+        inside = wf_quadrant_interior(x, y, 0.6)
+        @test psi[inside] ≈ -wf_j0(x, y)[inside] atol = 1e-10
+    end
+
+    @testset "missing u throws ArgumentError" begin
+        nou = BIMEigenstate{Float64,Float64}(WF_J01, 0.0, nothing, 1e-9, WF_PTS, nothing, nothing)
+        @test_throws ArgumentError wavefunction(nou, WF_CIRCLE)
+        @test_throws ArgumentError wavefunction(wf_bim_density_state(WF_J01), WF_CIRCLE)      # density only: needs a solver
+        @test_throws ArgumentError wavefunction([st, nou], WF_CIRCLE; show_progress=false)    # one bad state is enough
+        @test_throws ArgumentError wavefunction(typeof(st)[], WF_CIRCLE)
     end
 end
 

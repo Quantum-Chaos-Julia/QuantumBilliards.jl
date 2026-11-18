@@ -168,3 +168,36 @@ end
 @testset "Sweep (CFIE vs DLP) - C3 - complex irrep s = 2 (k = 11.4003)" begin
     bf_c3_check(2, 11.400292336799)
 end
+
+# solver: Sweep CompositeBIM (solve_state), solver-free and density-based wavefunction
+# kernel/basis: composite CFIE (outer circle and hole circle), SmoothPeriodicGrading, ppw=10
+# billiard: Annulus (AnnularBilliard(0.3, 0.0; center=[0.2, 0.1]), concentric, no symmetry)
+# symmetry: None
+# reference: cross-method, the density-based wavefunction(state, billiard, solver).psi of the same state (equal after the least-squares scaling, since the
+#            density and the Rellich-normalised u carry different normalisation); the analytic radial mode psi(r) = J0(kr) Y0(0.3k) - Y0(kr) J0(0.3k) at k = 4.41239469277677
+# functions to test: wavefunction(state, billiard) (single-layer reconstruction from u on both loops), wavefunction(state, billiard, solver) (density path)
+@testset "Sweep (CFIE composite) - Annulus - u-based wavefunction equals density-based (k = 4.4124)" begin
+    b = AnnularBilliard(0.3, 0.0; center=[0.2, 0.1])
+    k = 4.41239469277677
+    solver = CompositeBIMSolver(CombinedFieldIntegralEquationSolver(10.0, b), CombinedFieldIntegralEquationSolver(10.0, b))
+    pts = evaluate_points(solver, b, k)
+    ten, vec, u, bnd_norm = solve_state(solver, pts, k, b; multithreaded=false)
+    @test ten < TENSION_TOL_BIM
+    state = BIMEigenstate(k, vec, ten, pts; u, bnd_norm)
+    kw = (; ppw=4.0, use_chebyshev=false, fundamental_only=false)
+    wf_u = wavefunction(state, b; kw...)
+    wf_d = wavefunction(state, b, solver; kw...)
+    @test wf_u isa Wavefunction && wf_u.k == state.k
+    @test wf_u.x == wf_d.x && wf_u.y == wf_d.y
+    r = [hypot(x - 0.2, y - 0.1) for x in wf_u.x, y in wf_u.y]
+    inside = [0.4 < ri < 0.9 for ri in r]                                   # away from both circles
+    @test count(inside) > 100
+    pu, pd = wf_u.psi[inside], wf_d.psi[inside]
+    @test all(isfinite, pu) && maximum(abs, pu) > 0
+    c = dot(pd, pu) / dot(pd, pd)                                           # least-squares scaling of the density result onto the u result
+    @test norm(pu .- c .* pd) / norm(pu) < BOUNDARY_U_TOL_BIM
+    @test all(iszero, wf_u.psi[[ri < 0.3 - 0.02 || ri > 1 + 1e-9 for ri in r]])   # mask: zero in the hole and outside the outer circle
+    # analytic radial mode
+    psi_ref = [besselj(0, k * ri) * bessely(0, k * 0.3) - bessely(0, k * ri) * besselj(0, k * 0.3) for ri in r[inside]]
+    @test norm(pu .- (dot(psi_ref, pu) / dot(psi_ref, psi_ref)) .* psi_ref) / norm(pu) < BOUNDARY_U_TOL_BIM
+end
