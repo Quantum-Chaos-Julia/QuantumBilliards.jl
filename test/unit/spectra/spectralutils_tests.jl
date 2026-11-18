@@ -401,6 +401,18 @@ end
         @test real.(kL) == [2.000001, 3.0, 4.0]
         @test [s.id for s in sL] == [11, 2, 12]
     end
+
+    @testset "states follow the duplicate with the smallest correction (equal imaginary parts)" begin
+        # Equal |Im k|: the score is decided by the tension, so the duplicate with the smaller correction (and its state) wins in either order.
+        for (tl, tr, winner) in (([3e-3], [1e-4], 2), ([1e-4], [3e-3], 1))
+            kL = ComplexF64[2.0]; kR = ComplexF64[2.0000001]; cL = [false]
+            sL = [SpectraTestState(1)]; sR = [SpectraTestState(2)]
+            overlap_and_merge_ebim!(kL, tl, kR, tr, cL; states_left=sL, states_right=sR)
+            @test length(kL) == length(sL) == 1
+            @test sL[1].id == winner
+            @test cL == [true]
+        end
+    end
 end
 
 @testset "sweep_windows" begin
@@ -969,11 +981,12 @@ using QuantumBilliards: _check_states_supported
         @test [st.k for st in s_bnd] == ki
     end
 
-    @testset "compute_spectrum rejects states = :boundary for EBIM and CORK before any solve" begin
+    @testset "ExpandedBIM accepts states = :boundary, CORK still rejects it before any solve" begin
         circle = CircleBilliard(1.0)
         kernel = DoubleLayerPotentialSolver(10.0, circle)
-        # Beyn accepts :boundary since Step 9 (covered by _check_states_supported above and the Beyn integration tests)
-        @test_throws ArgumentError compute_spectrum(ExpandedBIMSolver(kernel; states=:boundary), circle, 5.0, 6.0)
+        # Beyn accepts :boundary since Step 9, ExpandedBIM since Step 10 (the u-states are covered in unit/solvers/acceleratedmethods/ebim_tests.jl)
+        @test _check_states_supported(ExpandedBIMSolver(kernel; states=:boundary)) === nothing
+        @test _check_states_supported(ExpandedBIMSolver(kernel; states=:none)) === nothing
         @test_throws ArgumentError compute_spectrum(CORKSolver(kernel; states=:boundary), circle, 5.0, 6.0)
     end
 end

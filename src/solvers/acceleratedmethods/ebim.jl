@@ -773,16 +773,23 @@ the second-order correction from `ddA`.
 * `k`: EBIM expansion center.
 * `nlevels::Int`: Minimum number of converged local candidates.
 
+## Keyword Arguments
+* `left::Bool = false`: Also return the left generalized eigenvectors.
+
 ## Returns
 * `ks::Vector{Complex{T}}`: Second-order EBIM eigenvalue estimates.
 * `ts::Vector{T}`: Magnitudes of the corresponding total corrections.
+* `Y::Matrix{Complex{T}}`: Only with `left = true`. Column `q` is `y_q = A⁻ᴴ uₗ` for the left Krylov vector `uₗ` of candidate `q`, a left null vector of `A(ks[q])` to first order in the correction; its angle error is `O(ε²)`.
 """
-function _solve(solver::ExpandedBIMSolver, A::Matrix{Complex{T}}, dA::Matrix{Complex{T}}, ddA::Matrix{Complex{T}}, k, nlevels::Int) where {T<:Real}
+function _solve(solver::ExpandedBIMSolver, A::Matrix{Complex{T}}, dA::Matrix{Complex{T}}, ddA::Matrix{Complex{T}}, k, nlevels::Int; left::Bool = false) where {T<:Real}
     n::Int = size(A, 1)
-    n >= 2 || return Complex{T}[], T[]
+    if n < 2
+        return left ? (Complex{T}[], T[], Matrix{Complex{T}}(undef, n, 0)) : (Complex{T}[], T[])
+    end
     nev::Int = min(nlevels + 5, n - 1)
     ks = Complex{T}[]
     ts = T[]
+    Y = Matrix{Complex{T}}(undef, n, 0)
     @blas_multi_then_1 MAX_BLAS_THREADS begin
         @timeit_debug "lu_factorization" F = lu!(A)
         Ft = adjoint(F)
@@ -799,6 +806,7 @@ function _solve(solver::ExpandedBIMSolver, A::Matrix{Complex{T}}, dA::Matrix{Com
         nkeep::Int = min(nev, nconv)
         resize!(ks, nkeep)
         resize!(ts, nkeep)
+        left && (Y = Matrix{Complex{T}}(undef, n, nkeep))
         buf = Vector{Complex{T}}(undef, n)
         @timeit_debug "second_order_correction" begin
             @inbounds for q = 1:nkeep
@@ -806,6 +814,7 @@ function _solve(solver::ExpandedBIMSolver, A::Matrix{Complex{T}}, dA::Matrix{Com
                 λ = inv(μ[j])
                 v = VR[j]
                 u = Ft \ UL[j]
+                left && copyto!(view(Y, :, q), u)
                 ε1 = -λ
                 mul!(buf, ddA, v)
                 num = dot(u, buf)
@@ -818,11 +827,11 @@ function _solve(solver::ExpandedBIMSolver, A::Matrix{Complex{T}}, dA::Matrix{Com
             end
         end
     end
-    return ks, ts
+    return left ? (ks, ts, Y) : (ks, ts)
 end
 
 """
-    solve(solver::ExpandedBIMSolver, pts::BoundaryPoints, k, nlevels::Int; multithreaded::Bool=true)
+    solve(solver::ExpandedBIMSolver, pts::BoundaryPoints, k, nlevels::Int; multithreaded::Bool=true, left::Bool=false)
 
 Compute local EBIM candidates using direct matrix construction.
 
@@ -834,18 +843,20 @@ Compute local EBIM candidates using direct matrix construction.
 
 ## Keyword Arguments
 * `multithreaded::Bool = true`: Enable multithreaded matrix construction.
+* `left::Bool = false`: Also return the left vectors, see [`_solve`](@ref).
 
 ## Returns
 * `ks::Vector`: Local EBIM eigenvalue estimates.
 * `ts::Vector`: Magnitudes of the corresponding corrections.
+* `Y::Matrix`: Left vectors as columns, only with `left = true`.
 """
-function solve(solver::ExpandedBIMSolver, pts::BoundaryPoints, k, nlevels::Int; multithreaded::Bool = true)
+function solve(solver::ExpandedBIMSolver, pts::BoundaryPoints, k, nlevels::Int; multithreaded::Bool = true, left::Bool = false)
     A, dA, ddA = construct_matrices(solver, pts, k; multithreaded)
-    return _solve(solver, A, dA, ddA, k, nlevels)
+    return _solve(solver, A, dA, ddA, k, nlevels; left)
 end
 
 """
-    solve(solver::ExpandedBIMSolver, cache::EBIMTaylorCache, k, nlevels::Int)
+    solve(solver::ExpandedBIMSolver, cache::EBIMTaylorCache, k, nlevels::Int; left::Bool=false)
 
 Compute local EBIM candidates from a cached Taylor panel.
 
@@ -859,9 +870,9 @@ Compute local EBIM candidates from a cached Taylor panel.
 * `ks::Vector`: Local EBIM eigenvalue estimates.
 * `ts::Vector`: Magnitudes of the corresponding corrections.
 """
-function solve(solver::ExpandedBIMSolver, cache::EBIMTaylorCache, k, nlevels::Int)
+function solve(solver::ExpandedBIMSolver, cache::EBIMTaylorCache, k, nlevels::Int; left::Bool = false)
     A, dA, ddA = construct_matrices(solver, cache, k)
-    return _solve(solver, A, dA, ddA, k, nlevels)
+    return _solve(solver, A, dA, ddA, k, nlevels; left)
 end
 
 """

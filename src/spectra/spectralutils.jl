@@ -783,7 +783,10 @@ directly at every expansion center.
 * `max_memory::Real = default_memory_limit()`: Memory limit in bytes. An error is thrown before the sweep if [`estimate_memory`](@ref) exceeds it (`Inf` disables the check).
 
 ## Returns
-* `data::SpectralData`: Merged and sorted EBIM spectrum with correction magnitudes and merge-control flags.
+* `data::SpectralData`: Merged and sorted EBIM spectrum with correction magnitudes and merge-control flags. With `states = :boundary` it also holds one [`BIMEigenstate`](@ref) per level with the Rellich-normalized `u = ∂ₙψ` (no density).
+
+## Accuracy of `u`
+With `states = :boundary`, `u` comes from the left generalized eigenvectors of the local problem at the expansion center, at no extra cost. The vector is a left null vector of `A(k)` to first order in the correction `ε = k_j - k₀`, with angle error `O(ε²)`: about `4e-5` for the default `dk`, comparable to the discretization error of `u`. Of the duplicates from overlapping windows the merge keeps the candidate with the smallest correction, which has the most accurate `u`. A window function `dk` much wider than the default degrades `u` (about `6e-3` at `ε = 0.13`); use [`compute_boundary_functions`](@ref) on a spectrum computed with another `states` mode for such runs.
 """
 function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::Function = (k -> 0.05 * k^(-1/3)), window_overlap::Real = 0.5, merge_tol = 1e-5, spacing_frac = 0.02, tolmax = 5e-3, local_window::Int = 4, accept_tol::Union{Nothing,Real} = 5e-4, multithreaded::Bool = true, show_progress::Bool = true, max_memory::Real = default_memory_limit()) where {Bi<:AbsBilliard}
     _check_states_supported(solver)
@@ -794,15 +797,19 @@ function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::F
         @debug "EBIM sweep" maxlog=1 k1 k2 ncenters=length(centers) use_taylor=solver.use_taylor live_GiB=Base.gc_live_bytes()/2^30 maxrss_GiB=Sys.maxrss()/2^30
         ks = Complex{T}[]
         ts = T[]
+        want_u = solver.states === :boundary
+        states = BIMEigenstate{Complex{T},T}[]
         if !solver.use_taylor
             @maybe_showprogress show_progress for i = eachindex(centers)
                 ki = centers[i]
                 pts = @timeit_debug "preparation" evaluate_points(solver, billiard, ki)
-                ksi, tsi = @timeit_debug "solution" solve(solver, pts, ki, nlevels[i]; multithreaded)
+                res = @timeit_debug "solution" solve(solver, pts, ki, nlevels[i]; multithreaded, left = want_u)
+                ksi, tsi = res[1], res[2]
                 @inbounds for q = eachindex(ksi)
                     if abs(real(ksi[q]) - ki) <= dks[i]
                         push!(ks, ksi[q])
                         push!(ts, tsi[q])
+                        want_u && push!(states, _boundary_state(solver.kernel, billiard, pts, ksi[q], tsi[q], view(res[3], :, q)))
                     end
                 end
             end
@@ -834,11 +841,13 @@ function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::F
                 @inbounds for i = panel_start:panel_stop
                     ki = centers[i]
                     @timeit_debug "horner_evaluation" _construct_matrices!(solver, A, dA, ddA, cache, ki; multithreaded)
-                    ksi, tsi = @timeit_debug "solution" _solve(solver, A, dA, ddA, ki, nlevels[i])
+                    res = @timeit_debug "solution" _solve(solver, A, dA, ddA, ki, nlevels[i]; left = want_u)
+                    ksi, tsi = res[1], res[2]
                     for q = eachindex(ksi)
                         if abs(real(ksi[q]) - ki) <= dks[i]
                             push!(ks, ksi[q])
                             push!(ts, tsi[q])
+                            want_u && push!(states, _boundary_state(solver.kernel, billiard, pts, ksi[q], tsi[q], view(res[3], :, q)))
                         end
                     end
                 end
@@ -849,11 +858,13 @@ function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::F
         keep = (k1T .<= real.(ks)) .& (real.(ks) .<= k2T)
         ks = ks[keep]
         ts = ts[keep]
+        want_u && (states = states[keep])
         kout = Complex{T}[]
         tout = T[]
         control = Bool[]
-        @timeit_debug "postprocessing" overlap_and_merge_ebim!(kout, tout, ks, ts, control; tol = T(merge_tol), spacing_frac = T(spacing_frac), tolmax = T(tolmax), local_window = local_window)
-        return _finalize_spectrum(billiard, solver, kout, tout, control; accept_tol)
+        sout = want_u ? BIMEigenstate{Complex{T},T}[] : nothing
+        @timeit_debug "postprocessing" overlap_and_merge_ebim!(kout, tout, ks, ts, control; tol = T(merge_tol), spacing_frac = T(spacing_frac), tolmax = T(tolmax), local_window = local_window, states_left = sout, states_right = want_u ? states : nothing)
+        return _finalize_spectrum(billiard, solver, kout, tout, control; states = sout, accept_tol)
     end
 end
 

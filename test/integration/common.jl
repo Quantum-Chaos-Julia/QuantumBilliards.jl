@@ -25,6 +25,7 @@ const IMAG_TOL_POLYGON = 5e-3         # |Im k| of Beyn DLP levels, reflex-corner
 const BOUNDARY_U_TOL_BIM = 1e-3       # relative L2 error of u from solve_state (left singular vector), DLP, CFIE, composite (worst observed 1.4e-5 graded rectangle, 6e-5 plan calibration)
 const BOUNDARY_U_TOL_VS = 1e-12       # VS (worst observed 2.3e-16)
 const RELLICH_TOL_BIM = 1e-6          # deviation of the Rellich norm of u from the analytic value or from 1 (worst observed 2.5e-8 graded rectangle)
+const BOUNDARY_U_TOL_EBIM = 1e-3      # EBIM (worst observed 6.1e-5; O(ε²) angle error of the left vectors)
 
 using LinearAlgebra: norm, dot
 

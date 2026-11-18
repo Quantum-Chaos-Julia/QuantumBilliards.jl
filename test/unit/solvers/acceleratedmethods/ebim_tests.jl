@@ -34,7 +34,7 @@
 # that the window, centre and merge handling of solve_wavenumber, solve_spectrum and compute_spectrum is tested on hand-built candidate lists.
 # Helper definitions use the prefix `eb_`.
 
-using LinearAlgebra: Diagonal, qr, norm, diag, I
+using LinearAlgebra: Diagonal, qr, norm, diag, I, svd, dot
 using Random: MersenneTwister
 using SpecialFunctions: besselj, besselh
 using QuantumBilliards: construct_matrices, _bim_numeric_type, TaylorWorkspace, EBIMTaylorCache, _construct_matrices!, _solve,
@@ -114,8 +114,17 @@ end
 QuantumBilliards._bim_numeric_type(::eb_Scripted) = Float64
 QuantumBilliards.boundary_matrix_size(::eb_Scripted, ::BoundaryPoints) = 0
 QuantumBilliards.evaluate_points(::eb_Scripted, ::AbsBilliard, k) = EB_PTS
-QuantumBilliards.solve(s::ExpandedBIMSolver{Float64,<:eb_Scripted}, ::BoundaryPoints, k, nlevels::Int; multithreaded::Bool=true) = s.kernel.f(k, nlevels)
+# `f` returns `(ks, ts)` or, for the `left = true` calls of states = :boundary spectra, `(ks, ts, Y)`.
+function QuantumBilliards.solve(s::ExpandedBIMSolver{Float64,<:eb_Scripted}, ::BoundaryPoints, k, nlevels::Int; multithreaded::Bool=true, left::Bool=false)
+    r = s.kernel.f(k, nlevels)
+    return left ? r : (r[1], r[2])
+end
 eb_scripted(f; kwargs...) = ExpandedBIMSolver(eb_Scripted(f, nothing); kwargs...)
+
+# `u`-state stub of the test kernels: stores the left vector as `u` unchanged, so the tests can see which vector a level carries.
+function QuantumBilliards._boundary_state(::Union{eb_Scripted,eb_Problem}, ::AbsBilliard, pts::BoundaryPoints{T}, k::Number, ten::Real, y::AbstractVector) where {T<:Real}
+    return QuantumBilliards.BIMEigenstate{Complex{T},T}(T(real(k)), T(imag(k)), nothing, T(ten), pts, Vector{Complex{T}}(y), one(T))
+end
 
 # Central finite differences of the ordinary Fredholm matrix of the wrapped kernel.
 eb_fd1(kernel, pts, k, h) = (construct_matrices(kernel, pts, k + h) - construct_matrices(kernel, pts, k - h)) / (2h)
@@ -672,5 +681,109 @@ end
     @testset "Taylor panels (several panels: 2 taylor_radius is shorter than the interval)" begin
         data = compute_spectrum(eb_solver(use_taylor=true, taylor_degree=5, taylor_radius=0.1), eb_circle, k1, k2; dk=k -> dk, multithreaded=false, show_progress=false)
         check(data)
+    end
+end
+
+# Angle between two vectors: sin of the principal angle.
+eb_angle(x, y) = sqrt(max(0.0, 1 - abs2(dot(x, y)) / (norm(x)^2 * norm(y)^2)))
+
+@testset "_solve: left = true returns left null vectors" begin
+    s = eb_problem()
+    solver = eb_solver()
+    k0, nlevels = 3.1, 3
+    nkeep = nlevels + 5
+    kexp, _, mexp = eb_expected(s, k0, nkeep)
+
+    @testset "left = false keeps the two-tuple, left = true appends an N x nkeep matrix" begin
+        res0 = _solve(solver, eb_matrix(s, k0), eb_dmatrix(s, k0), eb_ddmatrix(s, k0), k0, nlevels)
+        res1 = _solve(solver, eb_matrix(s, k0), eb_dmatrix(s, k0), eb_ddmatrix(s, k0), k0, nlevels; left=true)
+        @test length(res0) == 2 && length(res1) == 3
+        @test res1[1] ≈ res0[1] atol = 1e-10                                 # the levels do not depend on `left`
+        @test res1[2] ≈ res0[2] atol = 1e-10
+        @test res1[3] isa Matrix{ComplexF64}
+        @test size(res1[3]) == (EB_N, nkeep)
+        @test all(q -> norm(res1[3][:, q]) > 0 && all(isfinite, res1[3][:, q]), 1:nkeep)
+    end
+
+    @testset "matrices smaller than 2 x 2 give an N x 0 matrix" begin
+        ks, ts, Y = _solve(solver, ComplexF64[2.0;;], ComplexF64[1.0;;], ComplexF64[0.0;;], 1.0, 1; left=true)
+        @test isempty(ks) && isempty(ts)
+        @test size(Y) == (1, 0)
+    end
+
+    @testset "normal problem: y_q is the left null vector Q[:, m] of its level" begin
+        # A(k) = Q D(k) Q' has the k-independent left null vectors Q[:, m], and the left Krylov vector of the diagonal operator is exact.
+        ks, _, Y = _solve(solver, eb_matrix(s, k0), eb_dmatrix(s, k0), eb_ddmatrix(s, k0), k0, nlevels; left=true)
+        p = sortperm(real.(ks))
+        for (idx, m) in enumerate(mexp)
+            y = Y[:, p[idx]]
+            @test eb_angle(s.Q[:, m], y) < 1e-6
+        end
+    end
+
+    @testset "non-normal problem: y_q is a left null vector of A(ks[q]) to O(eps^2)" begin
+        # A(k) = Q D(k) Q' + (k - 3) E: the left null vectors rotate with k, so y_q (formed at the center) is correct to first order.
+        E = 0.3 * randn(MersenneTwister(5), EB_N, EB_N) / sqrt(EB_N)
+        Ak(k) = eb_matrix(s, k) + (k - 3.0) * E
+        ks, ts, Y = _solve(solver, Ak(k0), eb_dmatrix(s, k0) + E, eb_ddmatrix(s, k0), k0, nlevels; left=true)
+        # Observed: angle / t^2 <= 0.093 and ||A(ks[q])' y|| / t^2 <= 0.042 for the three smallest corrections (t = 0.10 to 0.26).
+        for q in sortperm(ts)[1:3]
+            yref = svd(Ak(ks[q])).U[:, end]
+            @test eb_angle(yref, Y[:, q]) < 1.0 * ts[q]^2
+            @test norm(Ak(ks[q])' * Y[:, q]) / norm(Y[:, q]) < 0.5 * ts[q]^2
+        end
+    end
+end
+
+@testset "compute_spectrum(::ExpandedBIMSolver): states = :boundary routing and merge on hand-built inputs" begin
+    dk = 0.25
+    # Centers 1.0 and 1.25 both find the level near 1.2 (corrections 3e-3 and 1e-4); center 1.25 also finds 1.6 (outside its window: dropped).
+    # Column j of Y is the left vector of candidate j.
+    candidates = Dict(
+        1.0 => (ComplexF64[1.2, 1.05], [3e-3, 1e-3], ComplexF64[1 0; 0 1; 0 0]),
+        1.25 => (ComplexF64[1.2000003, 1.6], [1e-4, 1e-3], ComplexF64[0 0; 0 1; 1 0]),
+        1.5 => (ComplexF64[], Float64[], Matrix{ComplexF64}(undef, 3, 0)))
+    f = (k0, nl) -> candidates[k0]
+    kw = (; dk=k -> dk, accept_tol=nothing, multithreaded=false, show_progress=false, max_memory=Inf)
+
+    @testset "states = :none stores no states" begin
+        data_none = compute_spectrum(eb_scripted(f; use_taylor=false), eb_circle, 1.0, 1.5; kw...)
+        @test data_none.states === nothing
+    end
+
+    @testset "one BIMEigenstate per retained level, aligned with the wavenumbers" begin
+        data = compute_spectrum(eb_scripted(f; use_taylor=false, states=:boundary), eb_circle, 1.0, 1.5; kw...)
+        @test length(data.states) == length(data.k)
+        @test all(st -> st isa QuantumBilliards.BIMEigenstate && st.u !== nothing && st.vec === nothing, data.states)
+        @test [st.k for st in data.states] == real.(data.k)
+        @test [st.ten for st in data.states] == data.ten
+        @test all(st -> st.pts === EB_PTS, data.states)                      # the window points are shared, not copied
+    end
+
+    @testset "the merge keeps the state of the candidate with the smallest correction" begin
+        data = compute_spectrum(eb_scripted(f; use_taylor=false, states=:boundary), eb_circle, 1.0, 1.5; kw...)
+        @test data.k == [1.05, 1.2000003]                                    # 1.6 is outside the window of center 1.25, 1.2 merged away
+        @test data.ten == [1e-3, 1e-4]
+        u = [st.u for st in data.states]
+        @test u[2] == ComplexF64[0, 0, 1]                                    # column 1 of center 1.25, not column 1 of center 1.0
+        @test u[1] == ComplexF64[0, 1, 0]                                    # singleton keeps its own column (column 2 of center 1.0)
+    end
+end
+
+@testset "compute_spectrum(::ExpandedBIMSolver): states = :boundary, direct and Taylor-panel paths on the synthetic problem" begin
+    s = eb_problem()
+    k1, k2, dk = 2.7, 3.4, 0.05
+    roots = [2.85, 3.0, 3.3]; ms = [4, 5, 6]
+    for (label, solver) in (("direct", eb_solver(use_taylor=false, states=:boundary)),
+                            ("Taylor panels", eb_solver(use_taylor=true, taylor_degree=5, taylor_radius=0.1, states=:boundary)))
+        @testset "$label" begin
+            data = compute_spectrum(solver, eb_circle, k1, k2; dk=k -> dk, multithreaded=false, show_progress=false, max_memory=Inf)
+            @test length(data.states) == length(data.k)
+            for (κ, m) in zip(roots, ms)
+                q = argmin(abs.(data.k .- κ))
+                # y_q is the left null vector Q[:, m] of its level (normal problem, exact up to the Krylov tolerance).
+                @test eb_angle(s.Q[:, m], data.states[q].u) < 1e-6
+            end
+        end
     end
 end

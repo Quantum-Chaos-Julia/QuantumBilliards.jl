@@ -128,7 +128,13 @@ function _memory_stages(solver::ExpandedBIMSolver, Nf::Real, M::Real; nw::Intege
     ]
 end
 
-_memory_retained(::ExpandedBIMSolver, nw::Integer, ns::Real, Nf::Real, M::Real) = Pair{String,Float64}[]
+function _memory_retained(solver::ExpandedBIMSolver, nw::Integer, ns::Real, Nf::Real, M::Real)
+    solver.states === :boundary || return Pair{String,Float64}[]
+    return Pair{String,Float64}[
+        "boundary points ($nw windows)" => _PTS_BYTES_PER_POINT * nw * Nf,
+        "boundary functions u before merge (2 x states x Nf)" => _CPLX_BYTES * 2 * ns * Nf,
+    ]
+end
 
 _working_bytes(solver::VerginiSaracenoSolver, basis::AbsBasis, dim::Real, M::Real) = _stage_peak(_memory_stages(solver, basis, dim, M))
 _working_bytes(solver::Union{BeynSolver,CORKSolver,ExpandedBIMSolver}, Nf::Real, M::Real; nw::Integer=1) = _stage_peak(_memory_stages(solver, Nf, M; nw))

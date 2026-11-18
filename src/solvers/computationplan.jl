@@ -14,6 +14,7 @@ end
 
 _check_states_supported(::VerginiSaracenoSolver) = nothing
 _check_states_supported(::BeynSolver) = nothing
+_check_states_supported(::ExpandedBIMSolver) = nothing
 
 function _check_states_supported(solver)
     solver.states === :boundary && throw(ArgumentError("$(nameof(typeof(solver))): `states = :boundary` is not implemented yet"))

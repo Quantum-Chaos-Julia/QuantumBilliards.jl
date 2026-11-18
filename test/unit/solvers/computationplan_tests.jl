@@ -1089,6 +1089,20 @@ cp_valid_items(items) = all(!isempty(first(x)) && isfinite(last(x)) && last(x) >
         @test isempty(_memory_retained(direct, 3, ns, Nf, M))
     end
 
+    @testset "ExpandedBIMSolver retained, states = :boundary" begin
+        for s in (with_params(eb; use_taylor=true, states=:boundary), with_params(eb; use_taylor=false, states=:boundary))
+            r = _memory_retained(s, 3, ns, Nf, M)
+            @test length(r) == 2                                                 # boundary points and u
+            @test occursin("boundary points", first(first(r)))
+            @test occursin("boundary functions", first(last(r)))
+            @test last(last(r)) == _CPLX_BYTES * 2 * ns * Nf                     # two complex u per level before the merge
+            @test sum(last, r) == _persistent_bytes(s, 3, ns, Nf, M)
+        end
+        s = with_params(eb; states=:boundary)
+        @test sum(last, _memory_retained(s, 6, ns, Nf, M)) > sum(last, _memory_retained(s, 3, ns, Nf, M))   # points scale with the window count
+        @test isempty(_memory_retained(with_params(eb; states=:none), 3, ns, Nf, M))
+    end
+
     @testset "VerginiSaraceno" begin
         lp = cp_stage_labels(_memory_stages(vs, pw, Nf, M))
         lt = cp_stage_labels(_memory_stages(vs, tpw, Nf, M))
