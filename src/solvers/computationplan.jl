@@ -1,3 +1,22 @@
+_allowed_states(::Type) = (:none, :vectors, :boundary)
+
+function _check_states(S::Type, states)
+    allowed = _allowed_states(S)
+    states isa Symbol && states in allowed && return states
+    throw(ArgumentError("$(nameof(S)): `states` must be one of $(join(repr.(allowed), ", ")); received $(repr(states))"))
+end
+
+function _resolve_states(S::Type, states, eigenvectors, default::Symbol)
+    states === nothing || eigenvectors === nothing || throw(ArgumentError("$(nameof(S)): pass either `states` or the alias `eigenvectors`, not both"))
+    eigenvectors === nothing || return _check_states(S, eigenvectors ? :vectors : :none)
+    return _check_states(S, states === nothing ? default : states)
+end
+
+function _check_states_supported(solver)
+    solver.states === :boundary && throw(ArgumentError("$(nameof(typeof(solver))): `states = :boundary` is not implemented yet"))
+    return nothing
+end
+
 """
     with_params(solver; kwargs...) -> typeof(solver)
 
@@ -19,6 +38,7 @@ function with_params(solver::S; kwargs...) where {S}
     for k in keys(kwargs)
         k in names || throw(ArgumentError("$(nameof(S)) has no field `$k`"))
     end
+    haskey(kwargs, :states) && _check_states(S, kwargs[:states])
     vals = ntuple(i -> get(kwargs, names[i], getfield(solver, names[i])), length(names))
     return S(vals...)
 end

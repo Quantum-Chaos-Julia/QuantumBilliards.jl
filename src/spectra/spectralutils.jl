@@ -304,7 +304,7 @@ end
 # Solve one Vergini-Saraceno window; `args` is `(basis, pts)` or `(basis, pts, cache)`.
 function _vs_solve_window(solver, args::Tuple, k0, Δk; multithreaded::Bool, merge_tol::Real)
     @timeit_debug "vs_window_solve" begin
-        if solver.eigenvectors
+        if solver.states === :vectors
             ki, ti, X = solve_vectors(solver, args..., k0, Δk + merge_tol; multithreaded)
             si = BasisEigenstate{eltype(ki),eltype(ti),typeof(args[1])}[BasisEigenstate(ki[j], k0, X[:, j], ti[j], args[1]) for j in eachindex(ki)]
             @debug "VS window solved" maxlog=1 k0 Δk nlevels=length(ki)
@@ -379,6 +379,7 @@ determined from the largest scaling center in the panel.
 * `data`: [`SpectralData`](@ref) containing the merged spectrum and, when requested by the solver, the associated eigenstates.
 """
 function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, k1, k2, dk::Union{Real,Function}; window_overlap::Real = 0.5, merge_tol::Real = 1e-4, accept_tol::Union{Nothing,Real} = 5e-4, multithreaded::Bool = true, show_progress::Bool = true, max_memory::Real = default_memory_limit())
+    _check_states_supported(solver)
     _enforce_memory_limit(max_memory, "Vergini-Saraceno", solver, basis, billiard, k1, k2, dk; window_overlap)
     @timeit_debug "compute_spectrum_vs" begin
         centers, widths = sweep_windows(k1, k2, dk; window_overlap)
@@ -461,7 +462,7 @@ function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billi
             end
         end
         keep = (k1T .<= real.(ks)) .& (real.(ks) .<= k2T)
-        return @timeit_debug "postprocessing" _finalize_spectrum(billiard, solver, ks[keep], ts[keep], control[keep]; states = solver.eigenvectors ? states[keep] : nothing, accept_tol)
+        return @timeit_debug "postprocessing" _finalize_spectrum(billiard, solver, ks[keep], ts[keep], control[keep]; states = solver.states === :vectors ? states[keep] : nothing, accept_tol)
     end
 end
 
@@ -489,7 +490,7 @@ from the Weyl spectral density.
 * `max_memory::Real=default_memory_limit()`: Memory limit in bytes, see the `k1,k2` method.
 
 ## Returns
-* `data::SpectralData`: Merged and sorted spectrum over the wavenumber range corresponding to state indices `N1:N2`, including stored [`BasisEigenstate`](@ref)s when `solver.eigenvectors=true`.
+* `data::SpectralData`: Merged and sorted spectrum over the wavenumber range corresponding to state indices `N1:N2`, including stored [`BasisEigenstate`](@ref)s when `states = :vectors`.
 """
 function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, N1::Int, N2::Int; nlevels::Real=6, window_overlap::Real=0.5, merge_tol::Real=1e-4, accept_tol::Union{Nothing,Real}=5e-4, multithreaded::Bool=true, show_progress::Bool=true, max_memory::Real=default_memory_limit())
     fundamental_only = basis.symmetries !== nothing
@@ -508,7 +509,7 @@ end
 Computes the Beyn spectrum over the requested wavenumber interval using
 Weyl-sized contour windows.
 
-When `solver.eigenvectors=true`, each retained eigenvalue stores a
+When `states = :vectors`, each retained eigenvalue stores a
 [`BIMEigenstate`](@ref) containing the layer density produced by the Beyn
 solve. The density is expanded with `symmetrize_layer_density` before
 storage, so both `state.vec` and `state.pts` refer to the complete physical
@@ -531,15 +532,16 @@ residual check before the final spectrum is constructed.
 * `max_memory::Real=default_memory_limit()`: Memory limit in bytes. An error is thrown before the sweep if [`estimate_memory`](@ref) exceeds it (`Inf` disables the check).
 
 ## Returns
-* `data::SpectralData`: Sorted complex spectrum, including full-boundary [`BIMEigenstate`](@ref)s when `solver.eigenvectors=true`.
+* `data::SpectralData`: Sorted complex spectrum, including full-boundary [`BIMEigenstate`](@ref)s when `states = :vectors`.
 """
 function compute_spectrum(solver::BeynSolver, billiard::Bi, k1, k2; accept_tol::Union{Nothing,Real}=1e-8, multithreaded::Bool=true, show_progress::Bool=true, max_memory::Real=default_memory_limit()) where {Bi<:AbsBilliard}
+    _check_states_supported(solver)
     _enforce_memory_limit(max_memory, "Beyn", solver, billiard, k1, k2)
     @timeit_debug "compute_spectrum_beyn" @with_kress_q_floor begin
         T = _bim_numeric_type(solver)
         intervals = _beyn_intervals(solver, billiard, k1, k2)
         k0, R = beyn_disks_from_windows(intervals); nw = length(k0)
-        @debug "Beyn sweep" maxlog=1 k1 k2 nwindows=nw eigenvectors=solver.eigenvectors imag_k_check=solver.imag_k_check live_GiB=Base.gc_live_bytes()/2^30 maxrss_GiB=Sys.maxrss()/2^30
+        @debug "Beyn sweep" maxlog=1 k1 k2 nwindows=nw states=solver.states imag_k_check=solver.imag_k_check live_GiB=Base.gc_live_bytes()/2^30 maxrss_GiB=Sys.maxrss()/2^30
         pts_type = typeof(evaluate_points(solver, billiard, T(k1))); pts = Vector{pts_type}(undef, nw)
         @timeit_debug "preparation" begin
             for i in 1:nw
@@ -556,7 +558,7 @@ function compute_spectrum(solver::BeynSolver, billiard::Bi, k1, k2; accept_tol::
         end
         if !solver.imag_k_check
             ks_win = Vector{Vector{Complex{T}}}(undef, nw); ts_win = Vector{Vector{T}}(undef, nw)
-            if solver.eigenvectors
+            if solver.states === :vectors
                 X_win = Vector{Matrix{Complex{T}}}(undef, nw)
                 @timeit_debug "solution" begin
                     @maybe_showprogress show_progress for i in 1:nw
@@ -584,7 +586,7 @@ function compute_spectrum(solver::BeynSolver, billiard::Bi, k1, k2; accept_tol::
         end
         idx_keep, residuals = @timeit_debug "postprocessing" _beyn_imag_k_check(solver, ks_win, X_win, pts; multithreaded, cheb_config, krange=(T(k1), T(k2)))
         n = sum(length, idx_keep); ks = Vector{Complex{T}}(undef, n); ts = Vector{T}(undef, n); control = Vector{Bool}(undef, n)
-        if solver.eigenvectors
+        if solver.states === :vectors
             entries = Tuple{Int,Int}[]; p = 0
             for i in 1:nw, q in eachindex(idx_keep[i])
                 j = idx_keep[i][q]; p += 1
@@ -624,7 +626,7 @@ approximately to Weyl-law state indices `N1` through `N2`.
 * `max_memory::Real=default_memory_limit()`: Memory limit in bytes, see the `k1,k2` method.
 
 ## Returns
-* `data::SpectralData`: Sorted complex spectrum over the corresponding Weyl-law wavenumber range, including full-boundary [`BIMEigenstate`](@ref)s when `solver.eigenvectors=true`.
+* `data::SpectralData`: Sorted complex spectrum over the corresponding Weyl-law wavenumber range, including full-boundary [`BIMEigenstate`](@ref)s when `states = :vectors`.
 """
 function compute_spectrum(solver::BeynSolver, billiard::Bi, N1::Int, N2::Int; accept_tol::Union{Nothing,Real}=1e-8, multithreaded::Bool=true, show_progress::Bool=true, max_memory::Real=default_memory_limit()) where {Bi<:AbsBilliard}
     fundamental_only = solver.kernel.symmetry!==nothing
@@ -757,6 +759,7 @@ directly at every expansion center.
 * `data::SpectralData`: Merged and sorted EBIM spectrum with correction magnitudes and merge-control flags.
 """
 function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::Function = (k -> 0.05 * k^(-1/3)), window_overlap::Real = 0.5, merge_tol = 1e-5, spacing_frac = 0.02, tolmax = 5e-3, local_window::Int = 4, accept_tol::Union{Nothing,Real} = 5e-4, multithreaded::Bool = true, show_progress::Bool = true, max_memory::Real = default_memory_limit()) where {Bi<:AbsBilliard}
+    _check_states_supported(solver)
     _enforce_memory_limit(max_memory, "EBIM", solver, billiard, k1, k2; dk, window_overlap)
     @timeit_debug "compute_spectrum_ebim" @with_kress_q_floor begin
         centers, dks, nlevels = _ebim_windows(solver, billiard, k1, k2, dk; window_overlap)
@@ -873,7 +876,7 @@ Computes the complete CORK spectrum over the requested wavenumber interval
 using adjacent Weyl-sized spectral windows.
 
 Each requested interval is independently edge-certified and neighboring
-windows use deterministic ownership. When `solver.eigenvectors=true`, each
+windows use deterministic ownership. When `states = :vectors`, each
 retained root stores a [`BIMEigenstate`](@ref) containing the CORK layer
 density. The density is expanded with `symmetrize_layer_density` before
 storage, so both `state.vec` and `state.pts` refer to the complete physical
@@ -892,14 +895,15 @@ boundary.
 * `max_memory::Real=default_memory_limit()`: Memory limit in bytes. An error is thrown before the sweep if [`estimate_memory`](@ref) exceeds it (`Inf` disables the check).
 
 ## Returns
-* `data::SpectralData`: Complete sorted complex spectrum over `k1 ≤ Re(k) ≤ k2`, including full-boundary [`BIMEigenstate`](@ref)s when `solver.eigenvectors=true`.
+* `data::SpectralData`: Complete sorted complex spectrum over `k1 ≤ Re(k) ≤ k2`, including full-boundary [`BIMEigenstate`](@ref)s when `states = :vectors`.
 """
 function compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; accept_tol::Union{Nothing,Real}=1e-8, multithreaded::Bool=true, show_progress::Bool=true, max_memory::Real=default_memory_limit()) where {Bi<:AbsBilliard}
+    _check_states_supported(solver)
     _enforce_memory_limit(max_memory, "CORK", solver, billiard, k1, k2)
     @timeit_debug "compute_spectrum_cork" @with_kress_q_floor begin
         T = _bim_numeric_type(solver); k1T = T(k1); k2T = T(k2); k1T<k2T || throw(ArgumentError("require k1<k2"))
         intervals = _cork_intervals(solver, billiard, k1, k2)
-        @debug "CORK sweep" maxlog=1 k1 k2 nwindows=length(intervals) eigenvectors=solver.eigenvectors live_GiB=Base.gc_live_bytes()/2^30 maxrss_GiB=Sys.maxrss()/2^30
+        @debug "CORK sweep" maxlog=1 k1 k2 nwindows=length(intervals) states=solver.states live_GiB=Base.gc_live_bytes()/2^30 maxrss_GiB=Sys.maxrss()/2^30
         a, b = intervals[1]; k0 = (a+b)/2; Δpoly = (1+solver.guard)*(b-a)/2; pts = evaluate_points(solver, billiard, k0)
         pmin = max(2, ceil(Int, sqrt(solver.block_size))); p = max(solver.p, pmin)
         @timeit_debug "preparation" begin
@@ -923,7 +927,7 @@ function compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; accept_tol::
             @debug "CORK polynomial degree tuned" maxlog=1 p_initial=solver.p p_final=p validation_error=err tolerance=solver.taylor_tol
         end
         ks = Complex{T}[]; ts = T[]
-        if solver.eigenvectors
+        if solver.states === :vectors
             states = nothing
             @timeit_debug "solution" begin
                 @maybe_showprogress show_progress for i in eachindex(intervals)
@@ -978,7 +982,7 @@ approximately to Weyl-law state indices `N1` through `N2`.
 * `max_memory::Real=default_memory_limit()`: Memory limit in bytes, see the `k1,k2` method.
 
 ## Returns
-* `data::SpectralData`: Complete sorted complex spectrum over the corresponding Weyl-law wavenumber range, including full-boundary [`BIMEigenstate`](@ref)s when `solver.eigenvectors=true`.
+* `data::SpectralData`: Complete sorted complex spectrum over the corresponding Weyl-law wavenumber range, including full-boundary [`BIMEigenstate`](@ref)s when `states = :vectors`.
 """
 function compute_spectrum(solver::CORKSolver, billiard::Bi, N1::Int, N2::Int; accept_tol::Union{Nothing,Real}=1e-8, multithreaded::Bool=true, show_progress::Bool=true, max_memory::Real=default_memory_limit()) where {Bi<:AbsBilliard}
     fundamental_only = solver.kernel.symmetry!==nothing

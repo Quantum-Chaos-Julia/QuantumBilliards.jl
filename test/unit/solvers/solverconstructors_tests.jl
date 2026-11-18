@@ -277,32 +277,60 @@ end
         @test solver.eig_tol == eps(Float64)
         @test solver.min_dim == 100
         @test solver.min_pts == 500
-        @test solver.eigenvectors === true
+        @test solver.states === :vectors
+        @test solver.boundary_ppw === 5.0
         @test fieldnames(VerginiSaracenoSolver) ==
-              (:dim_scaling_factor, :pts_scaling_factor, :sampler, :eig_tol, :min_dim, :min_pts, :eigenvectors)
+              (:dim_scaling_factor, :pts_scaling_factor, :sampler, :eig_tol, :min_dim, :min_pts, :states, :boundary_ppw)
+    end
+
+    @testset "states selection, eigenvectors alias and boundary_ppw" begin
+        @test VerginiSaracenoSolver(2.0, 5.0; states=:none).states === :none
+        @test VerginiSaracenoSolver(2.0, 5.0; states=:vectors).states === :vectors
+        @test VerginiSaracenoSolver(2.0, 5.0; states=:boundary).states === :boundary
+        @test VerginiSaracenoSolver(2.0, 5.0; eigenvectors=true).states === :vectors
+        @test VerginiSaracenoSolver(2.0, 5.0; eigenvectors=false).states === :none
+        @test_throws ArgumentError VerginiSaracenoSolver(2.0, 5.0; states=:vectors, eigenvectors=true)
+        @test_throws ArgumentError VerginiSaracenoSolver(2.0, 5.0; states=:none, eigenvectors=false)
+        @test_throws ArgumentError VerginiSaracenoSolver(2.0, 5.0; states=:foo)
+        @test_throws ArgumentError VerginiSaracenoSolver(2.0, 5.0, AbsSampler[LinearNodes()]; states=:foo)
+        @test VerginiSaracenoSolver(2.0, 5.0, AbsSampler[LinearNodes()]; eigenvectors=false).states === :none
+        @test VerginiSaracenoSolver(2.0, 5.0; boundary_ppw=8).boundary_ppw === 8.0
+        @test VerginiSaracenoSolver(2f0, 5f0; boundary_ppw=8).boundary_ppw === 8f0
+    end
+
+    @testset "solver log prints states and boundary_ppw" begin
+        txt = sprint(show, MIME("text/plain"), VerginiSaracenoSolver(2.0, 5.0))
+        @test occursin("states = vectors", txt) && !occursin("eigenvectors", txt)
+        @test !occursin("boundary_ppw", txt)
+        txt_b = sprint(show, MIME("text/plain"), VerginiSaracenoSolver(2.0, 5.0; states=:boundary))
+        @test occursin("states = boundary", txt_b) && occursin("boundary_ppw = 5.0", txt_b)
     end
 
     @testset "vector scaling factors, samplers and keywords" begin
         solver = VerginiSaracenoSolver(2.0, [5.0, 6.0]; min_dim=10, min_pts=40, eigenvectors=false)
         @test solver.pts_scaling_factor == [5.0, 6.0]
         @test solver.min_dim == 10 && solver.min_pts == 40
-        @test solver.eigenvectors === false
+        @test solver.states === :none
 
         samplers = AbsSampler[LinearNodes(), GaussLegendreNodes()]
         solver = VerginiSaracenoSolver(2.0, 5.0, samplers; eigenvectors=false)
         @test solver.sampler === samplers
-        @test solver.eigenvectors === false
+        @test solver.states === :none
     end
 
     @testset "solver is immutable" begin
         solver = VerginiSaracenoSolver(2.0, 5.0)
         @test !ismutabletype(VerginiSaracenoSolver)
-        copy = with_params(solver; eigenvectors=false, min_dim=20)
+        copy = with_params(solver; states=:none, min_dim=20)
         @test copy isa VerginiSaracenoSolver{Float64}
-        @test copy.eigenvectors === false && copy.min_dim == 20
-        @test solver.eigenvectors === true && solver.min_dim == 100
+        @test copy.states === :none && copy.min_dim == 20
+        @test solver.states === :vectors && solver.min_dim == 100
         @test copy.sampler === solver.sampler
+        @test copy.boundary_ppw == solver.boundary_ppw && copy.min_pts == solver.min_pts
+        @test with_params(solver; states=:boundary, boundary_ppw=7.0).boundary_ppw == 7.0
         @test_throws ArgumentError with_params(solver; nonexistent=1)
+        @test_throws ArgumentError with_params(solver; eigenvectors=false)               # no such field any more
+        @test_throws ArgumentError with_params(solver; states=:foo)
     end
 
     @testset "Float32 parameters" begin
@@ -318,7 +346,8 @@ end
         @test_throws Exception VerginiSaracenoSolver(2, 5)
         @test_throws TypeError VerginiSaracenoSolver(2.0, 5.0; min_dim=5.5)              # minimum sizes are typed Int
         @test_throws TypeError VerginiSaracenoSolver(2.0, 5.0; min_pts=5.5)
-        @test_throws TypeError VerginiSaracenoSolver(2.0, 5.0; eigenvectors=1)           # flag is typed Bool
+        @test_throws TypeError VerginiSaracenoSolver(2.0, 5.0; eigenvectors=1)           # alias is typed Bool
+        @test_throws TypeError VerginiSaracenoSolver(2.0, 5.0; states="vectors")         # states is typed Symbol
         @test_throws MethodError VerginiSaracenoSolver(2.0, 5.0; rellich_origin=SVector(0.0, 0.0))   # DM-only keyword
     end
 
@@ -588,7 +617,7 @@ end
         @test solver.imag_k_check === true
         @test solver.imag_k_pad == 20
         @test solver.imag_k_group_size == 20
-        @test solver.eigenvectors === true
+        @test solver.states === :vectors
         @test _bim_numeric_type(solver) === Float64
         @test !ismutabletype(BeynSolver)
     end
@@ -601,6 +630,22 @@ end
         @test solver.taylor_degree == 14 && solver.nlevels == 100
         @test tuned.kernel === solver.kernel
         @test tuned.Rmax == solver.Rmax && tuned.cheb_config === solver.cheb_config
+        @test with_params(solver; states=:none).states === :none
+        @test with_params(solver; states=:boundary).states === :boundary
+        @test solver.states === :vectors
+        @test with_params(solver; states=:none).nlevels == solver.nlevels && with_params(solver; states=:none).kernel === solver.kernel
+        @test_throws ArgumentError with_params(solver; states=:foo)
+        @test_throws ArgumentError with_params(solver; eigenvectors=false)
+    end
+
+    @testset "states selection and eigenvectors alias" begin
+        @test BeynSolver(kernel).states === :vectors
+        @test BeynSolver(kernel; states=:none).states === :none
+        @test BeynSolver(kernel; states=:boundary).states === :boundary
+        @test BeynSolver(kernel; eigenvectors=true).states === :vectors
+        @test BeynSolver(kernel; eigenvectors=false).states === :none
+        @test_throws ArgumentError BeynSolver(kernel; states=:vectors, eigenvectors=true)
+        @test_throws ArgumentError BeynSolver(kernel; states=:foo)
     end
 
     @testset "Chebyshev configuration" begin
@@ -624,7 +669,7 @@ end
         @test solver.svd_tol === 1e-10 && solver.res_tol === 1e-6
         @test solver.use_taylor === false && solver.use_chebyshev === true
         @test solver.taylor_degree == 8
-        @test solver.imag_k_check === false && solver.eigenvectors === false
+        @test solver.imag_k_check === false && solver.states === :none
 
         solver32 = BeynSolver(DoubleLayerPotentialSolver(10f0, circle))
         @test solver32 isa BeynSolver{Float32}
@@ -686,10 +731,26 @@ end
         @test solver.krylov_tol == 1e-12
         @test solver.maxiter == 5000
         @test solver.krylovdim == 40
+        @test solver.states === :none
         @test fieldnames(ExpandedBIMSolver) ==
-              (:kernel, :use_taylor, :taylor_degree, :taylor_radius, :taylor_tol, :krylov_tol, :maxiter, :krylovdim)
+              (:kernel, :use_taylor, :taylor_degree, :taylor_radius, :taylor_tol, :krylov_tol, :maxiter, :krylovdim, :states)
         @test _bim_numeric_type(solver) === Float64
         @test !ismutabletype(ExpandedBIMSolver)
+    end
+
+    @testset "states selection and eigenvectors alias" begin
+        @test ExpandedBIMSolver(kernel; states=:none).states === :none
+        @test ExpandedBIMSolver(kernel; states=:boundary).states === :boundary
+        @test ExpandedBIMSolver(kernel; eigenvectors=false).states === :none
+        @test_throws ArgumentError ExpandedBIMSolver(kernel; states=:vectors)               # no layer densities
+        @test_throws ArgumentError ExpandedBIMSolver(kernel; eigenvectors=true)
+        @test_throws ArgumentError ExpandedBIMSolver(kernel; states=:none, eigenvectors=false)
+        @test_throws ArgumentError ExpandedBIMSolver(kernel; states=:foo)
+        solver = ExpandedBIMSolver(kernel)
+        @test with_params(solver; states=:boundary).states === :boundary
+        @test with_params(solver; states=:boundary).krylovdim == solver.krylovdim
+        @test_throws ArgumentError with_params(solver; states=:vectors)
+        @test_throws ArgumentError with_params(solver; states=:foo)
     end
 
     @testset "keywords are converted to the kernel type" begin
@@ -758,13 +819,27 @@ end
         @test solver.res_tol == 1e-10
         @test solver.stable_tol == 1e-9
         @test solver.imag_search_tol == 1e-4
-        @test solver.eigenvectors === false
+        @test solver.states === :none
         @test solver.taylor_tol == 3e-10
         @test _bim_numeric_type(solver) === Float64
         @test !ismutabletype(CORKSolver)
         tuned = with_params(solver; p=8)
         @test tuned isa typeof(solver) && tuned.p == 8 && solver.p == 12
         @test tuned.kernel === solver.kernel
+    end
+
+    @testset "states selection and eigenvectors alias" begin
+        @test CORKSolver(kernel; states=:vectors).states === :vectors
+        @test CORKSolver(kernel; states=:boundary).states === :boundary
+        @test CORKSolver(kernel; eigenvectors=true).states === :vectors
+        @test CORKSolver(kernel; eigenvectors=false).states === :none
+        @test_throws ArgumentError CORKSolver(kernel; states=:vectors, eigenvectors=true)
+        @test_throws ArgumentError CORKSolver(kernel; states=:foo)
+        solver = CORKSolver(kernel)
+        @test with_params(solver; states=:vectors).states === :vectors
+        @test with_params(solver; states=:vectors).p == solver.p
+        @test_throws ArgumentError with_params(solver; states=:foo)
+        @test_throws ArgumentError with_params(solver; eigenvectors=true)
     end
 
     @testset "Krylov dimensions follow nlevels and block_size" begin

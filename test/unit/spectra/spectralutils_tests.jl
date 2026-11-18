@@ -788,10 +788,10 @@ end
 # Vergini-Saraceno method). `ncalls` counts solves.
 struct SpectraRefineStub
     roots::Vector{Float64}
-    eigenvectors::Bool
+    states::Symbol
     ncalls::Base.RefValue{Int}
 end
-SpectraRefineStub(roots) = SpectraRefineStub(roots, false, Ref(0))
+SpectraRefineStub(roots) = SpectraRefineStub(roots, :none, Ref(0))
 
 function QuantumBilliards.solve(s::SpectraRefineStub, basis, pts, k0::Real, w::Real; multithreaded::Bool=true)
     s.ncalls[] += 1
@@ -860,11 +860,11 @@ end
     end
 end
 
-# Stub solver for _vs_solve_window with eigenvectors = true: same window rule as SpectraRefineStub; the vector of the
+# Stub solver for _vs_solve_window with states = :vectors: same window rule as SpectraRefineStub; the vector of the
 # j-th level of a window is the constant column j * ones(basis.dim).
 struct SpectraVectorStub
     roots::Vector{Float64}
-    eigenvectors::Bool
+    states::Symbol
 end
 
 function QuantumBilliards.solve_vectors(s::SpectraVectorStub, basis, pts, k0::Real, w::Real; multithreaded::Bool=true)
@@ -885,8 +885,8 @@ using QuantumBilliards: _vs_solve_window
     roots = [0.5, 1.0, 1.2, 3.0]
     k0, Δk, merge_tol = 1.0, 0.5, 1e-6
 
-    @testset "eigenvectors = true: concrete vector of BasisEigenstate" begin
-        s = SpectraVectorStub(roots, true)
+    @testset "states = :vectors: concrete vector of BasisEigenstate" begin
+        s = SpectraVectorStub(roots, :vectors)
         ki, ti, si = _vs_solve_window(s, (basis, :pts), k0, Δk; multithreaded=false, merge_tol)
         @test ki == [0.5, 1.0, 1.2]
         @test length(si) == length(ki)
@@ -902,23 +902,23 @@ using QuantumBilliards: _vs_solve_window
         end
     end
 
-    @testset "eigenvectors = true: empty window keeps the concrete element type" begin
-        s = SpectraVectorStub(roots, true)
+    @testset "states = :vectors: empty window keeps the concrete element type" begin
+        s = SpectraVectorStub(roots, :vectors)
         ki, ti, si = _vs_solve_window(s, (basis, :pts), 2.0, 0.1; multithreaded=false, merge_tol)
         @test isempty(ki) && isempty(ti) && isempty(si)
         @test isconcretetype(eltype(si))
         @test eltype(si) <: BasisEigenstate
     end
 
-    @testset "eigenvectors = false: no states" begin
-        s = SpectraVectorStub(roots, false)
+    @testset "states = :none: no states" begin
+        s = SpectraVectorStub(roots, :none)
         ki, ti, si = _vs_solve_window(s, (basis, :pts), k0, Δk; multithreaded=false, merge_tol)
         @test ki == [0.5, 1.0, 1.2]
         @test si === nothing
     end
 
-    @testset "_vs_refine_window with eigenvectors = true keeps the states concrete" begin
-        s = SpectraVectorStub(roots, true)
+    @testset "_vs_refine_window with states = :vectors keeps the states concrete" begin
+        s = SpectraVectorStub(roots, :vectors)
         @testset "single solve" begin
             ki, ti, si = _vs_refine_window(s, (basis, :pts), k0, Δk, 10.0, _VS_MAX_REFINEMENTS; multithreaded=false, merge_tol)
             @test length(si) == length(ki)
@@ -932,5 +932,37 @@ using QuantumBilliards: _vs_solve_window
             @test length(si) == length(ki)
             @test isconcretetype(eltype(si))
         end
+    end
+end
+
+using QuantumBilliards: _check_states_supported
+
+@testset "states routing" begin
+    roots = [0.5, 1.0, 1.2, 3.0]
+    basis = FourierBessel(3)
+    k0, Δk, merge_tol = 1.0, 0.5, 1e-6
+
+    @testset "_check_states_supported: only :boundary is rejected (stub solvers)" begin
+        @test _check_states_supported(SpectraVectorStub(roots, :none)) === nothing
+        @test _check_states_supported(SpectraVectorStub(roots, :vectors)) === nothing
+        @test_throws ArgumentError _check_states_supported(SpectraVectorStub(roots, :boundary))
+    end
+
+    @testset "_vs_solve_window: :none stores no states, :vectors stores them" begin
+        _, _, s_none = _vs_solve_window(SpectraVectorStub(roots, :none), (basis, :pts), k0, Δk; multithreaded=false, merge_tol)
+        _, _, s_vec = _vs_solve_window(SpectraVectorStub(roots, :vectors), (basis, :pts), k0, Δk; multithreaded=false, merge_tol)
+        @test s_none === nothing
+        @test s_vec isa AbstractVector && length(s_vec) == 3
+    end
+
+    @testset "compute_spectrum rejects states = :boundary before any solve" begin
+        circle = CircleBilliard(1.0)
+        kernel = DoubleLayerPotentialSolver(10.0, circle)
+        vs = VerginiSaracenoSolver(2.0, 5.0; states=:boundary)
+        @test_throws ArgumentError compute_spectrum(vs, basis, circle, 5.0, 6.0, 0.1)
+        @test_throws ArgumentError compute_spectrum(vs, basis, circle, 1, 3)
+        @test_throws ArgumentError compute_spectrum(BeynSolver(kernel; states=:boundary), circle, 5.0, 6.0)
+        @test_throws ArgumentError compute_spectrum(ExpandedBIMSolver(kernel; states=:boundary), circle, 5.0, 6.0)
+        @test_throws ArgumentError compute_spectrum(CORKSolver(kernel; states=:boundary), circle, 5.0, 6.0)
     end
 end

@@ -1139,12 +1139,12 @@ struct CORKSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
     res_tol::T
     stable_tol::T
     imag_search_tol::T
-    eigenvectors::Bool
+    states::Symbol
     taylor_tol::T
 end
 
 """
-    CORKSolver(kernel::K; p::Int=12, guard::Real=0.05, nlevels::Real=100, Rmax::Real=0.6, block_size::Int=10, mstart::Int=block_size*ceil(Int,5.0nlevels/block_size), mstep::Int=block_size*ceil(Int,50/block_size), stable_checks::Int=1, imag_tol::Real=1e-4, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, eigenvectors::Bool=false, taylor_tol::Real=3e-10) where {K<:SweepBIMSolver}
+    CORKSolver(kernel::K; p::Int=12, guard::Real=0.05, nlevels::Real=100, Rmax::Real=0.6, block_size::Int=10, mstart::Int=block_size*ceil(Int,5.0nlevels/block_size), mstep::Int=block_size*ceil(Int,50/block_size), stable_checks::Int=1, imag_tol::Real=1e-4, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, states::Union{Nothing,Symbol}=nothing, eigenvectors::Union{Nothing,Bool}=nothing, taylor_tol::Real=3e-10) where {K<:SweepBIMSolver}
 
 Construct a Chebyshev-CORK eigensolver for a BIM Fredholm nonlinear
 eigenvalue problem `A(k)u=0`.
@@ -1185,19 +1185,21 @@ of each window.
 - `res_tol::Real=1e-10`: Maximum projected CORK residual indicator for accepted roots.
 - `stable_tol::Real=1e-9`: Maximum root displacement allowed between consecutive accepted spectra.
 - `imag_search_tol::Real=1e-4`: Loose imaginary strip used during Ritz discovery.
-- `eigenvectors::Bool=false`: Whether ordinary solve calls also reconstruct physical Fredholm vectors internally.
+- `states::Union{Nothing,Symbol}=nothing`: What `compute_spectrum` stores: `:none`, `:vectors` or `:boundary`. `nothing` selects `:none`.
+- `eigenvectors::Union{Nothing,Bool}=nothing`: Alias of `states`: `true` gives `:vectors`, `false` gives `:none`. Not combinable with `states`.
 - `taylor_tol::Real=3e-10`: Maximum relative polynomial-validation error used by `compute_spectrum` when tuning the polynomial degree `p`.
 
 ## Returns
 - `CORKSolver`: Configured Chebyshev-CORK solver.
 """
-function CORKSolver(kernel::K; p::Int=12, guard::Real=0.05, nlevels::Real=100, Rmax::Real=0.6, block_size::Int=10, mstart::Int=block_size*ceil(Int,5.0nlevels/block_size), mstep::Int=block_size*ceil(Int,50/block_size), stable_checks::Int=1, imag_tol::Real=1e-4, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, eigenvectors::Bool=false, taylor_tol::Real=3e-10) where {K<:SweepBIMSolver}
+function CORKSolver(kernel::K; p::Int=12, guard::Real=0.05, nlevels::Real=100, Rmax::Real=0.6, block_size::Int=10, mstart::Int=block_size*ceil(Int,5.0nlevels/block_size), mstep::Int=block_size*ceil(Int,50/block_size), stable_checks::Int=1, imag_tol::Real=1e-4, edge_tol::Real=1e-8, res_tol::Real=1e-10, stable_tol::Real=1e-9, imag_search_tol::Real=1e-4, states::Union{Nothing,Symbol}=nothing, eigenvectors::Union{Nothing,Bool}=nothing, taylor_tol::Real=3e-10) where {K<:SweepBIMSolver}
+    st = _resolve_states(CORKSolver, states, eigenvectors, :none)
     T = _bim_numeric_type(kernel)
     T === Float64 || throw(ArgumentError("CORKSolver currently requires a Float64 BIM kernel"))
     nlevels > 0 || throw(ArgumentError("nlevels must be positive; received nlevels=$nlevels"))
     mstart % block_size == 0 || throw(ArgumentError("mstart must be divisible by block_size"))
     mstep % block_size == 0 || throw(ArgumentError("mstep must be divisible by block_size"))
-    return CORKSolver{T,K}(kernel,p,T(guard),T(nlevels),T(Rmax),block_size,mstart,mstep,stable_checks,T(imag_tol),T(edge_tol),T(res_tol),T(stable_tol),T(imag_search_tol),eigenvectors,T(taylor_tol))
+    return CORKSolver{T,K}(kernel,p,T(guard),T(nlevels),T(Rmax),block_size,mstart,mstep,stable_checks,T(imag_tol),T(edge_tol),T(res_tol),T(stable_tol),T(imag_search_tol),st,T(taylor_tol))
 end
 
 _bim_numeric_type(::CORKSolver{T}) where {T} = T
@@ -1209,7 +1211,7 @@ evaluate_points(solver::CORKSolver, billiard::Bi, k) where {Bi<:AbsBilliard} = e
 @inline _cork_kernel_name(solver)::String = solver isa DoubleLayerPotentialSolver ? "DLP" : solver isa CombinedFieldIntegralEquationSolver ? "CFIE" : solver isa CompositeBIMSolver ? "CompositeBIM" : string(typeof(solver))
 
 """
-    _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=true, eigenvectors::Bool=solver.eigenvectors, p::Int=solver.p)
+    _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=true, eigenvectors::Bool=solver.states === :vectors, p::Int=solver.p)
 
 Execute the complete Chebyshev-CORK pipeline on the interval `[k₀-dk/2,k₀+dk/2]`.
 
@@ -1219,7 +1221,7 @@ Execute the complete Chebyshev-CORK pipeline on the interval `[k₀-dk/2,k₀+dk
 - `k0`: Center of the requested physical interval.
 - `dk`: Full width of the requested physical interval.
 - `multithreaded::Bool`: Whether polynomial assembly and direct validation matrices use Julia threading.
-- `eigenvectors::Bool = solver.eigenvectors`: Whether to reconstruct final physical Fredholm vectors.
+- `eigenvectors::Bool = solver.states === :vectors`: Whether to reconstruct final physical Fredholm vectors.
 - `p::Int = solver.p`: Polynomial degree for the Chebyshev-CORK expansion.
 
 ## Returns
@@ -1227,7 +1229,7 @@ Execute the complete Chebyshev-CORK pipeline on the interval `[k₀-dk/2,k₀+dk
   physical vectors, requested Ritz roots, all guarded Ritz roots, requested
   edge roots, edge convergence flags, and final compact Krylov dimension.
 """
-function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=true, eigenvectors::Bool=solver.eigenvectors, p::Int=solver.p)
+function _cork_solve_core(solver::CORKSolver, pts, k0, dk; multithreaded::Bool=true, eigenvectors::Bool=solver.states === :vectors, p::Int=solver.p)
     k0f = Float64(k0); Δ = Float64(dk)/2; Δpoly = Δ*(1+solver.guard)
     @timeit_debug "cork_solve_core" begin
         @debug "CORK solve" maxlog=1 k0=k0f dk p guard=solver.guard npts=length(pts.xy)
@@ -1274,7 +1276,7 @@ function solve(solver::CORKSolver, pts::BoundaryPoints, k0, dk; multithreaded::B
 end
 
 function _cork_solve(solver::CORKSolver, pts::BoundaryPoints, k0, dk; multithreaded::Bool=true, p::Int=solver.p, vectors::Bool=false)
-    P, S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = _cork_solve_core(solver, pts, k0, dk; multithreaded, eigenvectors=vectors || solver.eigenvectors, p)
+    P, S, ks, Ψ, requested, allroots, edge_roots, edge_good, mfinal = _cork_solve_core(solver, pts, k0, dk; multithreaded, eigenvectors=vectors || solver.states === :vectors, p)
     λ = ComplexF64[complex(x[1],x[2]) for x in ks]; ts = Float64[x[3] for x in ks]
     return λ, ts, Ψ
 end

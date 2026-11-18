@@ -83,7 +83,7 @@ kernel = DoubleLayerPotentialSolver(
 )
 
 solver = BeynSolver(kernel; nlevels = 10, nq = 40, Rmax = 0.5,
-                    svd_tol = 1e-11, res_tol = 1e-7, eigenvectors = true)
+                    svd_tol = 1e-11, res_tol = 1e-7, states = :vectors)
 
 # 8 states starting from the 250-th
 k_min, k_max = k_range_for_states(billiard, 250, 257)

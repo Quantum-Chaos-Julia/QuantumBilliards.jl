@@ -78,7 +78,7 @@ order and terminates after a prescribed sequence of residual-good roots.
 * `imag_k_check::Bool`: Enable global imaginary-`k` screening. In production should be true.
 * `imag_k_pad::Int`: Consecutive good roots required before stopping if imaginary-`k` screening is enabled.
 * `imag_k_group_size::Int`: Maximum residual-check batch size for imaginary-`k` screening. 
-* `eigenvectors::Bool`: Whether `compute_spectrum` retains the layer densities returned by the Beyn solve.
+* `states::Symbol`: What `compute_spectrum` stores: `:none` (levels only), `:vectors` (layer densities) or `:boundary` (boundary normal-derivative states).
 """
 struct BeynSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
     kernel::K
@@ -97,11 +97,11 @@ struct BeynSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
     imag_k_check::Bool
     imag_k_pad::Int
     imag_k_group_size::Int
-    eigenvectors::Bool
+    states::Symbol
 end
 
 """
-    BeynSolver(kernel::K; nlevels::Real=100, nq::Int=40, r::Int=200, Rmax::Real=0.5, svd_tol::Real=1e-11, res_tol::Real=1e-8, auto_discard_spurious::Bool=true, use_taylor::Bool=true, taylor_degree::Int=14, taylor_tol::Real=1e-12, use_chebyshev::Bool=false, cheb_config::Union{Nothing,ChebyshevConfig}=nothing, imag_k_check::Bool=true, imag_k_pad::Int=20, imag_k_group_size::Int=20, eigenvectors::Bool=true)
+    BeynSolver(kernel::K; nlevels::Real=100, nq::Int=40, r::Int=200, Rmax::Real=0.5, svd_tol::Real=1e-11, res_tol::Real=1e-8, auto_discard_spurious::Bool=true, use_taylor::Bool=true, taylor_degree::Int=14, taylor_tol::Real=1e-12, use_chebyshev::Bool=false, cheb_config::Union{Nothing,ChebyshevConfig}=nothing, imag_k_check::Bool=true, imag_k_pad::Int=20, imag_k_group_size::Int=20, states::Union{Nothing,Symbol}=nothing, eigenvectors::Union{Nothing,Bool}=nothing)
 
 Construct a Beyn nonlinear eigensolver.
 
@@ -128,14 +128,16 @@ imaginary-`k` screening by default to verify the spectrum integrity.
 * `imag_k_check::Bool=true`: Enable imaginary-`k` screening in `compute_spectrum`. Should always be used in production runs to verify spectrum integrity.
 * `imag_k_pad::Int=20`: Consecutive residual-good roots required before stopping. Only applies when `imag_k_check` is enabled.
 * `imag_k_group_size::Int=20`: Maximum residual-check batch size. Only applies when `imag_k_check` is enabled.
-* `eigenvectors::Bool=true`: Whether `compute_spectrum` retains the layer densities returned by the Beyn solve.
+* `states::Union{Nothing,Symbol}=nothing`: What `compute_spectrum` stores: `:none`, `:vectors` or `:boundary`. `nothing` selects `:vectors`.
+* `eigenvectors::Union{Nothing,Bool}=nothing`: Alias of `states`: `true` gives `:vectors`, `false` gives `:none`. Not combinable with `states`.
 
 ## Returns
 * `BeynSolver{T,K}`: Configured Beyn solver.
 """
-function BeynSolver(kernel::K; nlevels::Real=100, nq::Int=40, r::Int=200, Rmax::Real=0.5, svd_tol::Real=1e-11, res_tol::Real=1e-8, auto_discard_spurious::Bool=true, use_taylor::Bool=true, taylor_degree::Int=14, taylor_tol::Real=1e-12, use_chebyshev::Bool=false, cheb_config::Union{Nothing,ChebyshevConfig}=nothing, imag_k_check::Bool=true, imag_k_pad::Int=20, imag_k_group_size::Int=20, eigenvectors::Bool=true) where {K<:SweepBIMSolver}
+function BeynSolver(kernel::K; nlevels::Real=100, nq::Int=40, r::Int=200, Rmax::Real=0.5, svd_tol::Real=1e-11, res_tol::Real=1e-8, auto_discard_spurious::Bool=true, use_taylor::Bool=true, taylor_degree::Int=14, taylor_tol::Real=1e-12, use_chebyshev::Bool=false, cheb_config::Union{Nothing,ChebyshevConfig}=nothing, imag_k_check::Bool=true, imag_k_pad::Int=20, imag_k_group_size::Int=20, states::Union{Nothing,Symbol}=nothing, eigenvectors::Union{Nothing,Bool}=nothing) where {K<:SweepBIMSolver}
+    st = _resolve_states(BeynSolver, states, eigenvectors, :vectors)
     T = _bim_numeric_type(kernel); cfg = cheb_config === nothing ? ChebyshevConfig(T) : cheb_config
-    return BeynSolver{T,K}(kernel, T(nlevels), nq, r, T(Rmax), T(svd_tol), T(res_tol), auto_discard_spurious, use_taylor, taylor_degree, T(taylor_tol), use_chebyshev, cfg, imag_k_check, imag_k_pad, imag_k_group_size, eigenvectors)
+    return BeynSolver{T,K}(kernel, T(nlevels), nq, r, T(Rmax), T(svd_tol), T(res_tol), auto_discard_spurious, use_taylor, taylor_degree, T(taylor_tol), use_chebyshev, cfg, imag_k_check, imag_k_pad, imag_k_group_size, st)
 end
 
 _bim_numeric_type(::BeynSolver{T}) where {T} = T

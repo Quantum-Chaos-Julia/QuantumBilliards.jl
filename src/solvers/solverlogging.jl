@@ -153,7 +153,7 @@ function _write_solver!(io::IO, s::BeynSolver, ind::Int)
         _rowstr!(io, ind + 2, "backend", "direct")
     end
     _sec!(io, ind, "Output")
-    _row!(io, ind + 2, "eigenvectors", s.eigenvectors)
+    _rowstr!(io, ind + 2, "states", s.states)
 end
 
 function _write_solver!(io::IO, s::ExpandedBIMSolver, ind::Int)
@@ -171,6 +171,8 @@ function _write_solver!(io::IO, s::ExpandedBIMSolver, ind::Int)
     _row!(io, ind + 2, "krylov_tol", s.krylov_tol)
     _row!(io, ind + 2, "maxiter", s.maxiter)
     _row!(io, ind + 2, "krylovdim", s.krylovdim)
+    _sec!(io, ind, "Output")
+    _rowstr!(io, ind + 2, "states", s.states)
 end
 
 function _write_solver!(io::IO, s::CORKSolver, ind::Int)
@@ -194,7 +196,7 @@ function _write_solver!(io::IO, s::CORKSolver, ind::Int)
     _row!(io, ind + 2, "edge_tol", s.edge_tol)
     _row!(io, ind + 2, "res_tol", s.res_tol)
     _sec!(io, ind, "Output")
-    _row!(io, ind + 2, "eigenvectors", s.eigenvectors)
+    _rowstr!(io, ind + 2, "states", s.states)
 end
 
 ################################################################################
@@ -240,5 +242,6 @@ function _write_solver!(io::IO, s::VerginiSaracenoSolver, ind::Int)
     _sec!(io, ind, "Scaling eigenproblem")
     _row!(io, ind + 2, "eig_tol", s.eig_tol)
     _sec!(io, ind, "Output")
-    _row!(io, ind + 2, "eigenvectors", s.eigenvectors)
+    _rowstr!(io, ind + 2, "states", s.states)
+    s.states === :boundary && _row!(io, ind + 2, "boundary_ppw", s.boundary_ppw)
 end

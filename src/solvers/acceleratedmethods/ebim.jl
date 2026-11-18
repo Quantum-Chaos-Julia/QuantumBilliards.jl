@@ -73,6 +73,7 @@ reused for all EBIM expansion centers lying within its validity radius.
 * `krylov_tol::T`: Convergence tolerance used by the Krylov eigensolver.
 * `maxiter::Int`: Maximum number of Krylov iterations.
 * `krylovdim::Int`: Minimum Krylov subspace dimension.
+* `states::Symbol`: What `compute_spectrum` stores: `:none` (levels only) or `:boundary`. `:vectors` is rejected.
 
 ## API
 The principal operations are [`evaluate_points`](@ref),
@@ -88,10 +89,13 @@ struct ExpandedBIMSolver{T<:Real,K<:SweepBIMSolver} <: AcceleratedBIMSolver
     krylov_tol::T
     maxiter::Int
     krylovdim::Int
+    states::Symbol
 end
 
+_allowed_states(::Type{<:ExpandedBIMSolver}) = (:none, :boundary)
+
 """
-    ExpandedBIMSolver(kernel::K; use_taylor::Bool=true, taylor_degree::Int=16, taylor_radius::Real=0.5, taylor_tol::Real=1e-11, krylov_tol::Real=1e-12, maxiter::Int=5000, krylovdim::Int=40) where {K<:SweepBIMSolver}
+    ExpandedBIMSolver(kernel::K; use_taylor::Bool=true, taylor_degree::Int=16, taylor_radius::Real=0.5, taylor_tol::Real=1e-11, krylov_tol::Real=1e-12, maxiter::Int=5000, krylovdim::Int=40, states::Union{Nothing,Symbol}=nothing, eigenvectors::Union{Nothing,Bool}=nothing) where {K<:SweepBIMSolver}
 
 Construct an [`ExpandedBIMSolver`](@ref).
 
@@ -106,15 +110,18 @@ Construct an [`ExpandedBIMSolver`](@ref).
 * `krylov_tol::Real = 1e-12`: Krylov eigensolver tolerance.
 * `maxiter::Int = 5000`: Maximum number of Krylov iterations.
 * `krylovdim::Int = 40`: Minimum Krylov subspace dimension.
+* `states::Union{Nothing,Symbol} = nothing`: What `compute_spectrum` stores: `:none` or `:boundary`. `nothing` selects `:none`; `:vectors` throws `ArgumentError`.
+* `eigenvectors::Union{Nothing,Bool} = nothing`: Alias of `states` (`false` gives `:none`; `true` throws). Not combinable with `states`.
 
 ## Returns
 * `solver::ExpandedBIMSolver`: Configured EBIM solver.
 """
-function ExpandedBIMSolver(kernel::K; use_taylor::Bool = true, taylor_degree::Int = 16, taylor_radius::Real = 0.5, taylor_tol::Real = 1e-11, krylov_tol::Real = 1e-12, maxiter::Int = 5000, krylovdim::Int = 40) where {K<:SweepBIMSolver}
+function ExpandedBIMSolver(kernel::K; use_taylor::Bool = true, taylor_degree::Int = 16, taylor_radius::Real = 0.5, taylor_tol::Real = 1e-11, krylov_tol::Real = 1e-12, maxiter::Int = 5000, krylovdim::Int = 40, states::Union{Nothing,Symbol} = nothing, eigenvectors::Union{Nothing,Bool} = nothing) where {K<:SweepBIMSolver}
+    st = _resolve_states(ExpandedBIMSolver, states, eigenvectors, :none)
     T = _bim_numeric_type(kernel)
     maxiter >= 1 || throw(ArgumentError("maxiter must be positive"))
     krylovdim >= 2 || throw(ArgumentError("krylovdim must be at least 2"))
-    return ExpandedBIMSolver{T,K}(kernel, use_taylor, taylor_degree, T(taylor_radius), T(taylor_tol), T(krylov_tol), maxiter, krylovdim)
+    return ExpandedBIMSolver{T,K}(kernel, use_taylor, taylor_degree, T(taylor_radius), T(taylor_tol), T(krylov_tol), maxiter, krylovdim, st)
 end
 
 _bim_numeric_type(::ExpandedBIMSolver{T}) where {T} = T

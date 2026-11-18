@@ -841,7 +841,7 @@ end
         @test edge_good == (true, true)
     end
 
-    @testset "eigenvectors keyword overrides the solver field" begin
+    @testset "eigenvectors keyword overrides solver.states" begin
         _, _, ks, Ψ = _cork_solve_core(ck_solver(), CK_PTS, CK_K0, CK_DK; multithreaded=false, eigenvectors=true)
         @test size(Ψ) == (CK_N, length(ks))
     end

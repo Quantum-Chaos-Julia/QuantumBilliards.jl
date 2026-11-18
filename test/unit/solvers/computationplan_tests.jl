@@ -774,9 +774,9 @@ using QuantumBilliards: estimate_memory, total_bytes, _working_bytes, _persisten
             @test _persistent_bytes(s, 6, 10.0, 100.0, 50.0) >= p
             @test _persistent_bytes(s, 3, 20.0, 100.0, 50.0) >= p
         end
-        @test _persistent_bytes(with_params(beyn; eigenvectors=true), 3, 10.0, 100.0, 50.0) > _persistent_bytes(with_params(beyn; eigenvectors=false, imag_k_check=false), 3, 10.0, 100.0, 50.0)
-        @test _persistent_bytes(with_params(cork; eigenvectors=false), 3, 10.0, 100.0, 50.0) == 0.0
-        @test _persistent_bytes(with_params(cork; eigenvectors=true), 3, 10.0, 100.0, 50.0) > 0.0
+        @test _persistent_bytes(with_params(beyn; states=:vectors), 3, 10.0, 100.0, 50.0) > _persistent_bytes(with_params(beyn; states=:none, imag_k_check=false), 3, 10.0, 100.0, 50.0)
+        @test _persistent_bytes(with_params(cork; states=:none), 3, 10.0, 100.0, 50.0) == 0.0
+        @test _persistent_bytes(with_params(cork; states=:vectors), 3, 10.0, 100.0, 50.0) > 0.0
     end
 
     @testset "VerginiSaraceno formulas" begin
@@ -786,8 +786,8 @@ using QuantumBilliards: estimate_memory, total_bytes, _working_bytes, _persisten
         @test _working_bytes(vs, pw, 100.0, 100.0) > w
         tpw = RealPlaneWaves(6; use_taylor=true, taylor_radius=0.5)
         @test _working_bytes(vs, tpw, 100.0, 50.0) > w     # Taylor tensors add to the working set
-        @test _persistent_bytes(with_params(vs; eigenvectors=false), pw, 10.0, 100.0) == 0.0
-        @test _persistent_bytes(with_params(vs; eigenvectors=true), pw, 10.0, 100.0) == 8.0 * 10.0 * 100.0
+        @test _persistent_bytes(with_params(vs; states=:none), pw, 10.0, 100.0) == 0.0
+        @test _persistent_bytes(with_params(vs; states=:vectors), pw, 10.0, 100.0) == 8.0 * 10.0 * 100.0
     end
 
     @testset "_enforce_memory_limit forwards kwargs" begin
@@ -957,7 +957,7 @@ cp_valid_items(items) = all(!isempty(first(x)) && isfinite(last(x)) && last(x) >
             @test stages isa Vector{Pair{String,Float64}}
             @test !isempty(stages)
             @test cp_valid_items(stages)
-            @test cp_valid_items(_memory_retained(with_params(vs; eigenvectors=true), b, ns, Nf))
+            @test cp_valid_items(_memory_retained(with_params(vs; states=:vectors), b, ns, Nf))
         end
     end
 
@@ -978,7 +978,7 @@ cp_valid_items(items) = all(!isempty(first(x)) && isfinite(last(x)) && last(x) >
             @test sum(last, _memory_retained(s, 3, ns, Nf, M); init=0.0) == _persistent_bytes(s, 3, ns, Nf, M)
         end
         for b in (pw, tpw), ev in (true, false)
-            v = with_params(vs; eigenvectors=ev)
+            v = with_params(vs; states=ev ? :vectors : :none)
             @test sum(last, _memory_retained(v, b, ns, Nf); init=0.0) == _persistent_bytes(v, b, ns, Nf)
         end
     end
@@ -1024,11 +1024,11 @@ cp_valid_items(items) = all(!isempty(first(x)) && isfinite(last(x)) && last(x) >
     end
 
     @testset "Beyn retained" begin
-        base = with_params(beyn; imag_k_check=false, eigenvectors=false)
+        base = with_params(beyn; imag_k_check=false, states=:none)
         r0 = _memory_retained(base, 3, ns, Nf, M)
         @test length(r0) == 1                                     # boundary points are always retained
         r_imag = _memory_retained(with_params(base; imag_k_check=true), 3, ns, Nf, M)
-        r_vec = _memory_retained(with_params(base; eigenvectors=true), 3, ns, Nf, M)
+        r_vec = _memory_retained(with_params(base; states=:vectors), 3, ns, Nf, M)
         @test length(r_imag) == 2
         @test length(r_vec) == 3
         @test sum(last, r_vec) > sum(last, r_imag) > sum(last, r0)
@@ -1040,8 +1040,8 @@ cp_valid_items(items) = all(!isempty(first(x)) && isfinite(last(x)) && last(x) >
         @test length(labels) == 2
         @test any(startswith("polynomial tuning"), labels)
         @test any(startswith("Krylov solve"), labels)
-        @test isempty(_memory_retained(with_params(cork; eigenvectors=false), 3, ns, Nf, M))
-        @test !isempty(_memory_retained(with_params(cork; eigenvectors=true), 3, ns, Nf, M))
+        @test isempty(_memory_retained(with_params(cork; states=:none), 3, ns, Nf, M))
+        @test !isempty(_memory_retained(with_params(cork; states=:vectors), 3, ns, Nf, M))
     end
 
     @testset "CORK Krylov stage uses the extended Krylov dimension" begin
@@ -1084,10 +1084,10 @@ cp_valid_items(items) = all(!isempty(first(x)) && isfinite(last(x)) && last(x) >
         @test length(lt) == 2
         @test any(startswith("Taylor validation"), lt)
         @test any(startswith("panel solve"), lt)
-        @test isempty(_memory_retained(with_params(vs; eigenvectors=false), pw, ns, Nf))
-        @test isempty(_memory_retained(with_params(vs; eigenvectors=false), tpw, ns, Nf))
+        @test isempty(_memory_retained(with_params(vs; states=:none), pw, ns, Nf))
+        @test isempty(_memory_retained(with_params(vs; states=:none), tpw, ns, Nf))
         for b in (pw, tpw)
-            r = _memory_retained(with_params(vs; eigenvectors=true), b, ns, Nf)
+            r = _memory_retained(with_params(vs; states=:vectors), b, ns, Nf)
             @test length(r) == 1
             @test startswith(only(r).first, "eigenstates")
         end
@@ -1169,7 +1169,7 @@ end
     end
 
     @testset "Beyn" begin
-        for s in (beyn, with_params(beyn; use_taylor=false), with_params(beyn; eigenvectors=false, imag_k_check=false))
+        for s in (beyn, with_params(beyn; use_taylor=false), with_params(beyn; states=:none, imag_k_check=false))
             plan = plan_computation(s, rect, 20.0, 40.0; tune=false)
             @test length(plan.windows) > 1
             stages, retained = check_memory_plan(plan)
@@ -1183,7 +1183,7 @@ end
 
     @testset "CORK" begin
         for ev in (true, false)
-            plan = plan_computation(with_params(cork; eigenvectors=ev), rect, 20.0, 40.0; tune=false)
+            plan = plan_computation(with_params(cork; states=ev ? :vectors : :none), rect, 20.0, 40.0; tune=false)
             _, retained = check_memory_plan(plan)
             @test isempty(retained) == !ev
         end
@@ -1205,7 +1205,7 @@ end
             @test plan.basis === b
             @test (length(stages) == 2) == QuantumBilliards.uses_taylor(b)
             for ev in (true, false)
-                p = plan_computation(with_params(vs; eigenvectors=ev), b, rect, 20.0, 22.0, 0.05; tune=false)
+                p = plan_computation(with_params(vs; states=ev ? :vectors : :none), b, rect, 20.0, 22.0, 0.05; tune=false)
                 _, retained = check_memory_plan(p)
                 @test isempty(retained) == !ev
             end

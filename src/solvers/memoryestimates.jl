@@ -70,7 +70,7 @@ function _memory_stages(solver::VerginiSaracenoSolver, basis::AbsBasis, dim::Rea
 end
 
 function _memory_retained(solver::VerginiSaracenoSolver, ::AbsBasis, ns::Real, dim::Real)
-    solver.eigenvectors || return Pair{String,Float64}[]
+    solver.states === :vectors || return Pair{String,Float64}[]
     return Pair{String,Float64}["eigenstates (states x basis dim)" => _REAL_BYTES * ns * dim]
 end
 
@@ -96,8 +96,8 @@ end
 
 function _memory_retained(solver::BeynSolver, nw::Integer, ns::Real, Nf::Real, M::Real)
     retained = Pair{String,Float64}["boundary points ($nw windows)" => _PTS_BYTES_PER_POINT * nw * Nf]
-    (solver.imag_k_check || solver.eigenvectors) && push!(retained, "layer densities, reduced (states x M)" => _CPLX_BYTES * ns * M)
-    solver.eigenvectors && push!(retained, "eigenstates, full boundary (states x Nf)" => _CPLX_BYTES * ns * Nf)
+    (solver.imag_k_check || solver.states === :vectors) && push!(retained, "layer densities, reduced (states x M)" => _CPLX_BYTES * ns * M)
+    solver.states === :vectors && push!(retained, "eigenstates, full boundary (states x Nf)" => _CPLX_BYTES * ns * Nf)
     return retained
 end
 
@@ -111,7 +111,7 @@ function _memory_stages(solver::CORKSolver, Nf::Real, M::Real; nw::Integer=1)
 end
 
 function _memory_retained(solver::CORKSolver, nw::Integer, ns::Real, Nf::Real, M::Real)
-    solver.eigenvectors || return Pair{String,Float64}[]
+    solver.states === :vectors || return Pair{String,Float64}[]
     return Pair{String,Float64}[
         "boundary points ($nw windows)" => _PTS_BYTES_PER_POINT * nw * Nf,
         "eigenstates, full boundary (states x Nf)" => _CPLX_BYTES * ns * Nf,
@@ -143,6 +143,6 @@ function _enforce_memory_limit(max_memory::Real, name::AbstractString, args...; 
     est = estimate_memory(args...; kwargs...)
     need = _MEMORY_SLACK * total_bytes(est)
     @debug "$name memory estimate" maxlog=1 working_GiB=est.working/2^30 persistent_GiB=est.persistent/2^30 need_GiB=need/2^30 limit_GiB=max_memory/2^30
-    need <= max_memory || error("$name: estimated peak memory $(round(need / 2^30; digits=1)) GiB (working $(round(est.working / 2^30; digits=1)) GiB + retained $(round(est.persistent / 2^30; digits=1)) GiB, incl. GC slack) exceeds the limit of $(round(max_memory / 2^30; digits=1)) GiB. Compute the range in smaller chunks, use `eigenvectors=false`, or lower `nq`/`nlevels`/`taylor_degree`; pass `max_memory=Inf` to disable this check.")
+    need <= max_memory || error("$name: estimated peak memory $(round(need / 2^30; digits=1)) GiB (working $(round(est.working / 2^30; digits=1)) GiB + retained $(round(est.persistent / 2^30; digits=1)) GiB, incl. GC slack) exceeds the limit of $(round(max_memory / 2^30; digits=1)) GiB. Compute the range in smaller chunks, use `states = :none`, or lower `nq`/`nlevels`/`taylor_degree`; pass `max_memory=Inf` to disable this check.")
     return nothing
 end

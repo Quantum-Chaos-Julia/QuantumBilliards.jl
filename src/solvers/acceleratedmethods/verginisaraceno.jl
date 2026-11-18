@@ -54,7 +54,8 @@ wavenumber `k` (see [`solve`](@ref), [`sm_results`](@ref)).
 * `eig_tol`: Relative tolerance used to filter small eigenvalues in the generalized eigenvalue decomposition.
 * `min_dim`: Minimum basis dimension.
 * `min_pts`: Minimum number of boundary sampling points.
-* `eigenvectors::Bool`: Whether `compute_spectrum` retains the basis eigenvectors returned by the scaling solve.
+* `states::Symbol`: What `compute_spectrum` stores: `:none` (levels only), `:vectors` (basis coefficients) or `:boundary` (boundary normal-derivative states).
+* `boundary_ppw`: Boundary points per wavelength of the boundary grid used for `:boundary` states.
 
 ## API
 The following functions can be evaluated for this type:
@@ -72,11 +73,12 @@ struct VerginiSaracenoSolver{T} <: AcceleratedBasisSolver where {T<:Real}
     eig_tol::T
     min_dim::Int64
     min_pts::Int64
-    eigenvectors::Bool
+    states::Symbol
+    boundary_ppw::T
 end
 
 """
-    VerginiSaracenoSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}; min_dim::Int=100, min_pts::Int=500, eigenvectors::Bool=true) where {T<:Real}
+    VerginiSaracenoSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}; min_dim::Int=100, min_pts::Int=500, states::Union{Nothing,Symbol}=nothing, eigenvectors::Union{Nothing,Bool}=nothing, boundary_ppw::Real=5.0) where {T<:Real}
 
 Construct a [`VerginiSaracenoSolver`](@ref) with a single
 [`GaussLegendreNodes`](@ref) sampler shared by every fundamental boundary
@@ -89,18 +91,21 @@ curve.
 ## Keyword Arguments
 * `min_dim::Int=100`: Minimum basis dimension.
 * `min_pts::Int=500`: Minimum number of boundary sampling points.
-* `eigenvectors::Bool=true`: Whether `compute_spectrum` retains the basis eigenvectors returned by the scaling solve.
+* `states::Union{Nothing,Symbol}=nothing`: What `compute_spectrum` stores: `:none`, `:vectors` or `:boundary`. `nothing` selects `:vectors`.
+* `eigenvectors::Union{Nothing,Bool}=nothing`: Alias of `states`: `true` gives `:vectors`, `false` gives `:none`. Not combinable with `states`.
+* `boundary_ppw::Real=5.0`: Boundary points per wavelength of the boundary grid used for `:boundary` states.
 
 ## Returns
 * `VerginiSaracenoSolver{T}`: Configured solver.
 """
-function VerginiSaracenoSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}; min_dim::Int=100, min_pts::Int=500, eigenvectors::Bool=true) where {T<:Real}
+function VerginiSaracenoSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}; min_dim::Int=100, min_pts::Int=500, states::Union{Nothing,Symbol}=nothing, eigenvectors::Union{Nothing,Bool}=nothing, boundary_ppw::Real=5.0) where {T<:Real}
+    st = _resolve_states(VerginiSaracenoSolver, states, eigenvectors, :vectors)
     d = dim_scaling_factor; bs = pts_scaling_factor isa T ? [pts_scaling_factor] : pts_scaling_factor; sampler = [GaussLegendreNodes()]
-    return VerginiSaracenoSolver(d, bs, sampler, eps(T), min_dim, min_pts, eigenvectors)
+    return VerginiSaracenoSolver(d, bs, sampler, eps(T), min_dim, min_pts, st, T(boundary_ppw))
 end
 
 """
-    VerginiSaracenoSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}, samplers::Vector{AbsSampler}; min_dim::Int=100, min_pts::Int=500, eigenvectors::Bool=true) where {T<:Real}
+    VerginiSaracenoSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}, samplers::Vector{AbsSampler}; min_dim::Int=100, min_pts::Int=500, states::Union{Nothing,Symbol}=nothing, eigenvectors::Union{Nothing,Bool}=nothing, boundary_ppw::Real=5.0) where {T<:Real}
 
 Construct a [`VerginiSaracenoSolver`](@ref) with a user-supplied sampler for
 each fundamental boundary curve.
@@ -113,14 +118,17 @@ each fundamental boundary curve.
 ## Keyword Arguments
 * `min_dim::Int=100`: Minimum basis dimension.
 * `min_pts::Int=500`: Minimum number of boundary sampling points.
-* `eigenvectors::Bool=true`: Whether `compute_spectrum` retains the basis eigenvectors returned by the scaling solve.
+* `states::Union{Nothing,Symbol}=nothing`: What `compute_spectrum` stores: `:none`, `:vectors` or `:boundary`. `nothing` selects `:vectors`.
+* `eigenvectors::Union{Nothing,Bool}=nothing`: Alias of `states`: `true` gives `:vectors`, `false` gives `:none`. Not combinable with `states`.
+* `boundary_ppw::Real=5.0`: Boundary points per wavelength of the boundary grid used for `:boundary` states.
 
 ## Returns
 * `VerginiSaracenoSolver{T}`: Configured solver.
 """
-function VerginiSaracenoSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}, samplers::Vector{AbsSampler}; min_dim::Int=100, min_pts::Int=500, eigenvectors::Bool=true) where {T<:Real}
+function VerginiSaracenoSolver(dim_scaling_factor::T, pts_scaling_factor::Union{T,Vector{T}}, samplers::Vector{AbsSampler}; min_dim::Int=100, min_pts::Int=500, states::Union{Nothing,Symbol}=nothing, eigenvectors::Union{Nothing,Bool}=nothing, boundary_ppw::Real=5.0) where {T<:Real}
+    st = _resolve_states(VerginiSaracenoSolver, states, eigenvectors, :vectors)
     d = dim_scaling_factor; bs = pts_scaling_factor isa T ? [pts_scaling_factor] : pts_scaling_factor
-    return VerginiSaracenoSolver(d, bs, samplers, eps(T), min_dim, min_pts, eigenvectors)
+    return VerginiSaracenoSolver(d, bs, samplers, eps(T), min_dim, min_pts, st, T(boundary_ppw))
 end
 
 """
