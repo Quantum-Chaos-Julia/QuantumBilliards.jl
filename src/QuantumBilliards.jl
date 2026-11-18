@@ -111,7 +111,7 @@ include("states/boundarystates.jl")
 include("states/husimifunctions.jl")
 
 export wavefunction, compute_psi, boundary_limits #wavefunction_norm 
-export get_boundary_curves_with_ignored, boundary_function, momentum_function, husimi_function, boundary_states
+export get_boundary_curves_with_ignored, boundary_function, momentum_function, husimi_function, boundary_states, compute_boundary_functions
 
 
 end

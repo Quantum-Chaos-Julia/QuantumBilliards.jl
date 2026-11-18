@@ -12,7 +12,9 @@
 # Helper definitions use the prefix `bs_` / `BS_`.
 
 using StaticArrays
-using LinearAlgebra: dot
+using LinearAlgebra: dot, norm, qr, Diagonal, I
+using Random: MersenneTwister
+using QuantumBilliards: _level_clusters, _pts_groups, _complex_state, _adjoint_inverse_iteration, _left_residuals, _left_null_vectors
 using QuantumBilliards: boundary_states, _rellich, get_boundary_curves_with_ignored, FourierNodes, boundary_coords,
                         _debroglie_grid_size, gradient_matrices
 
@@ -192,5 +194,120 @@ end
         @test bfs isa Vector{<:BoundaryFunction} && length(bfs) == 1
         @test bfs[1].u ≈ ref.u rtol = 1e-12
         @test bfs[1].k === ref.k
+    end
+end
+
+# compute_boundary_functions helpers (no eigen solves, synthetic matrices and hand-built states).
+#  * _level_clusters: clusters of sorted-neighbour gaps <= tol, indices into ks,
+#  * _pts_groups: levels grouped by identity of the stored boundary points,
+#  * _complex_state: conversion of a BIMEigenstate to Complex{T} storage,
+#  * _adjoint_inverse_iteration, _left_residuals, _left_null_vectors on A = U diag(s) V' with known left null vectors (the last columns of U).
+
+@testset "_level_clusters - clusters of sorted neighbours" begin
+    @test _level_clusters([1.0, 3.0, 1 + 1e-7, 2.0, 1 + 3e-7], 1e-6) == [[1, 3, 5], [4], [2]]
+    @test _level_clusters([1.0, 2.0, 3.0], 1e-6) == [[1], [2], [3]]
+    @test _level_clusters([1.0, 1.0, 1.0], 0.0) == [[1, 2, 3]]                  # gap == tol joins the cluster
+    @test _level_clusters(Float64[], 1e-6) == Vector{Vector{Int}}()
+    @test _level_clusters([5.0], 1e-6) == [[1]]
+    @test _level_clusters([1.0, 1.0 + 3e-6, 1.0 + 6e-6], 4e-6) == [[1, 2, 3]]   # chaining through neighbours, not distance to the first member
+    @test _level_clusters([1.0, 1.0 + 3e-6, 1.0 + 9e-6], 4e-6) == [[1, 2], [3]]
+end
+
+@testset "_pts_groups - grouping by boundary points identity" begin
+    @test _pts_groups(nothing, 4) == [[1, 2, 3, 4]]
+    pts1 = bs_grid(BS_RECT, 3.0)
+    pts2 = bs_grid(BS_RECT, 3.0)                                                 # equal content, different object
+    mk(pts) = BIMEigenstate{Float64,Float64}(3.0, 0.0, nothing, 0.0, pts, nothing, nothing)
+    states = [mk(pts1), mk(pts2), mk(pts1)]
+    @test _pts_groups(states, 3) == [[1, 3], [2]]
+    @test _pts_groups([mk(pts1), mk(pts1)], 2) == [[1, 2]]
+end
+
+@testset "_complex_state - conversion to Complex storage" begin
+    pts = bs_grid(BS_RECT, 3.0)
+    n = length(pts.xy)
+    u = collect(range(0.5, 1.5; length=n))
+    vec = collect(range(-1.0, 1.0; length=n))
+    st = BIMEigenstate{Float64,Float64}(3.2, 1e-9, vec, 1e-8, pts, u, 0.7)
+    cs = _complex_state(st)
+    @test cs isa BIMEigenstate{ComplexF64,Float64}
+    @test cs.u == complex.(u) && cs.vec == complex.(vec)
+    @test cs.pts === pts
+    @test (cs.k, cs.k_im, cs.ten, cs.bnd_norm) == (3.2, 1e-9, 1e-8, 0.7)
+    bare = _complex_state(BIMEigenstate{Float64,Float64}(3.2, 0.0, nothing, 0.0, pts, nothing, nothing))
+    @test bare isa BIMEigenstate{ComplexF64,Float64}
+    @test bare.vec === nothing && bare.u === nothing && bare.bnd_norm === nothing
+    already = BIMEigenstate{ComplexF64,Float64}(3.2, 0.0, nothing, 0.0, pts, complex.(u), 0.7)
+    @test _complex_state(already).u == already.u
+    @test @inferred(_complex_state(st)) isa BIMEigenstate{ComplexF64,Float64}
+end
+
+# A = U diag(s) V' (complex), with the last m singular values `tiny`; returns A and the unitary U.
+function bs_synthetic_matrix(n, m; tiny=fill(1e-12, m), seed=1)
+    rng = MersenneTwister(seed)
+    U = Matrix(qr(randn(rng, ComplexF64, n, n)).Q)
+    V = Matrix(qr(randn(rng, ComplexF64, n, n)).Q)
+    s = vcat(collect(range(1.0, 2.0; length=n - m)), tiny)
+    return U * Diagonal(s) * V', U
+end
+
+@testset "_adjoint_inverse_iteration - left null vectors of a synthetic matrix" begin
+    n = 8
+    @testset "one left null vector" begin
+        A, U = bs_synthetic_matrix(n, 1)
+        Y = _adjoint_inverse_iteration(A, 1, MersenneTwister(3))
+        @test size(Y) == (n, 1)
+        @test norm(Y' * Y - I(1)) < 1e-12
+        @test abs(dot(U[:, end], Y[:, 1])) > 1 - 1e-10                           # equal up to a global phase
+        @test only(_left_residuals(A, Y)) < 1e-10
+    end
+    @testset "degenerate pair spans the left null space" begin
+        A, U = bs_synthetic_matrix(n, 2; seed=2)
+        Y = _adjoint_inverse_iteration(A, 2, MersenneTwister(4))
+        @test norm(Y' * Y - I(2)) < 1e-12
+        N = U[:, end-1:end]
+        @test norm(Y - N * (N' * Y)) < 1e-9                                       # columns inside span of the two null vectors
+        @test all(<(1e-9), _left_residuals(A, Y))
+    end
+    @testset "singular factorization returns nothing" begin
+        A = ComplexF64[2 0 0; 0 3 0; 0 0 0]
+        @test _adjoint_inverse_iteration(A, 1, MersenneTwister(0)) === nothing
+    end
+    @testset "deterministic for a fixed rng" begin
+        A, _ = bs_synthetic_matrix(n, 1)
+        @test _adjoint_inverse_iteration(A, 1, MersenneTwister(9)) == _adjoint_inverse_iteration(A, 1, MersenneTwister(9))
+    end
+end
+
+@testset "_left_residuals - norm of A' y" begin
+    A = ComplexF64[1 2; 3 4]
+    Y = ComplexF64[1 0; 0 1]
+    @test _left_residuals(A, Y) ≈ [norm(A'[:, 1]), norm(A'[:, 2])]
+    @test _left_residuals(A, ComplexF64[1; 0;;]) ≈ [norm(A'[:, 1])]
+end
+
+@testset "_left_null_vectors - inverse iteration and singular-vector fallback" begin
+    n = 8
+    A, U = bs_synthetic_matrix(n, 1)
+    Y = _left_null_vectors(A, 1, 5.0, 1e-6, MersenneTwister(5))
+    @test abs(dot(U[:, end], Y[:, 1])) > 1 - 1e-10
+    @testset "fallback: residual above res_tol (svdsolve left vector)" begin
+        Yf = _left_null_vectors(A, 1, 5.0, 1e-20, MersenneTwister(5))
+        @test size(Yf) == (n, 1)
+        @test abs(dot(U[:, end], Yf[:, 1])) > 1 - 1e-8
+    end
+    @testset "fallback: singular LU" begin
+        As = ComplexF64[2 0 0 0; 0 3 0 0; 0 0 4 0; 0 0 0 0]
+        Ys = _left_null_vectors(As, 1, 5.0, 1e-6, MersenneTwister(5))
+        @test abs(Ys[4, 1]) > 1 - 1e-10
+    end
+    @testset "pair with resolved tiny singular values, fallback keeps the orthonormal span" begin
+        # svdsolve starts from one vector: pairs closer than about 1e-12 are not resolved (see report), so the gap here is 1e-9.
+        A2, U2 = bs_synthetic_matrix(n, 2; tiny=[1e-12, 1e-9], seed=2)
+        Y2 = _left_null_vectors(A2, 2, 5.0, 1e-20, MersenneTwister(5))
+        N = U2[:, end-1:end]
+        @test size(Y2) == (n, 2)
+        @test norm(Y2 - N * (N' * Y2)) < 1e-7
+        @test norm(Y2' * Y2 - I(2)) < 1e-8
     end
 end
