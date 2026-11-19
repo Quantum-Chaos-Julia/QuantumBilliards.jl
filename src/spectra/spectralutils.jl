@@ -546,7 +546,7 @@ from the Weyl spectral density.
 * `data::SpectralData`: Merged and sorted spectrum over the wavenumber range corresponding to state indices `N1:N2`, including stored [`BasisEigenstate`](@ref)s when `states = :vectors`.
 """
 function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billiard::AbsBilliard, N1::Int, N2::Int; nlevels::Real=6, window_overlap::Real=0.5, merge_tol::Real=1e-4, accept_tol::Union{Nothing,Real}=5e-4, multithreaded::Bool=true, show_progress::Bool=true, max_memory::Real=default_memory_limit())
-    fundamental_only = basis.symmetries !== nothing
+    fundamental_only = _fundamental_only(solver)
     k1, k2 = k_range_for_states(billiard, N1, N2; fundamental_only)
     dk = k -> nlevels/(2*spectral_density(k, billiard; fundamental_only))
     return compute_spectrum(solver, basis, billiard, k1, k2, dk; window_overlap, merge_tol, accept_tol, multithreaded, show_progress, max_memory)
@@ -705,7 +705,7 @@ approximately to Weyl-law state indices `N1` through `N2`.
 * `data::SpectralData`: Sorted complex spectrum over the corresponding Weyl-law wavenumber range, including full-boundary [`BIMEigenstate`](@ref)s when `states = :vectors`.
 """
 function compute_spectrum(solver::BeynSolver, billiard::Bi, N1::Int, N2::Int; accept_tol::Union{Nothing,Real}=1e-8, multithreaded::Bool=true, show_progress::Bool=true, max_memory::Real=default_memory_limit()) where {Bi<:AbsBilliard}
-    fundamental_only = solver.kernel.symmetry!==nothing
+    fundamental_only = _fundamental_only(solver)
     k1, k2 = k_range_for_states(billiard, N1, N2; fundamental_only)
     return compute_spectrum(solver, billiard, k1, k2; accept_tol, multithreaded, show_progress, max_memory)
 end
@@ -946,7 +946,7 @@ approximately to Weyl-law state indices `N1` through `N2`.
 * `data::SpectralData`: Merged and sorted complex spectrum over the corresponding Weyl-law wavenumber range.
 """
 function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, N1::Int, N2::Int; dk::Function = (k -> 0.05 * k^(-1/3)), nlevels::Union{Nothing,Real} = nothing, window_overlap::Real = 0.5, merge_tol = 1e-5, spacing_frac = 0.02, tolmax = 5e-3, local_window::Int = 4, accept_tol::Union{Nothing,Real} = 5e-4, multithreaded::Bool = true, show_progress::Bool = true, max_memory::Real = default_memory_limit()) where {Bi<:AbsBilliard}
-    fundamental_only = solver.kernel.symmetry !== nothing
+    fundamental_only = _fundamental_only(solver)
     k1, k2 = k_range_for_states(billiard, N1, N2; fundamental_only)
     nlevels === nothing || (dk = k -> nlevels / (2 * spectral_density(k, billiard; fundamental_only)))
     return compute_spectrum(solver, billiard, k1, k2; dk, window_overlap, merge_tol, spacing_frac, tolmax, local_window, accept_tol, multithreaded, show_progress, max_memory)
@@ -1077,7 +1077,7 @@ approximately to Weyl-law state indices `N1` through `N2`.
 * `data::SpectralData`: Complete sorted complex spectrum over the corresponding Weyl-law wavenumber range, including full-boundary [`BIMEigenstate`](@ref)s when `states = :vectors`.
 """
 function compute_spectrum(solver::CORKSolver, billiard::Bi, N1::Int, N2::Int; accept_tol::Union{Nothing,Real}=1e-8, multithreaded::Bool=true, show_progress::Bool=true, max_memory::Real=default_memory_limit()) where {Bi<:AbsBilliard}
-    fundamental_only = solver.kernel.symmetry!==nothing
+    fundamental_only = _fundamental_only(solver)
     k1, k2 = k_range_for_states(billiard, N1, N2; fundamental_only)
     return compute_spectrum(solver, billiard, k1, k2; accept_tol, multithreaded, show_progress, max_memory)
 end

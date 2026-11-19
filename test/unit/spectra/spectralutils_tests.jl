@@ -890,6 +890,9 @@ end
 QuantumBilliards.solve(s::SpectraVectorStub, basis, pts, k0::Real, w::Real; multithreaded::Bool=true) =
     (sel = [r for r in s.roots if abs(r - k0) <= w]; (sel, [2 * (k0 - r)^2 for r in sel]))
 
+QuantumBilliards._check_states_supported(s::SpectraVectorStub) =
+    s.states === :boundary ? throw(ArgumentError("SpectraVectorStub: `states = :boundary` is not implemented")) : nothing
+
 using QuantumBilliards: _vs_solve_window
 
 @testset "_vs_solve_window" begin
