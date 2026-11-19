@@ -186,22 +186,27 @@ end
 # Maximum number of successive halvings of a Vergini-Saraceno window whose tensions exceed `accept_tol`.
 const _VS_MAX_REFINEMENTS = 4
 
+# Mask of wavenumbers with `k1 <= Re(k) <= k2`.
+@inline _krange_mask(ks::AbstractVector{<:Number}, k1::Real, k2::Real) = (k1 .<= real.(ks)) .& (real.(ks) .<= k2)
+
+# Select `states[keep]`; `nothing` for missing or empty state lists.
+_select_states(::Nothing, keep) = nothing
+_select_states(states::AbstractVector, keep) = isempty(states) ? nothing : states[keep]
+
 # Mark candidates with tension or |Im k| above `accept_tol` as unverified (`control=false`) without dropping them,
 # warn about suspect or missing eigenvalues and sort all aligned quantities by Re(k).
 function _finalize_spectrum(billiard::Bi, solver::So, ks::Vector{K}, ts::Vector{T}, control::Vector{Bool}; states::Union{Nothing,Vector}=nothing, accept_tol::Union{Nothing,Real}=nothing) where {Bi<:AbsBilliard,So,K<:Number,T<:Real}
-    begin
-        control = copy(control)
-        nsuspect = 0
-        for i in eachindex(ts)
-            (_ten_ok(accept_tol, ts[i]) && _ten_ok(accept_tol, abs(imag(ks[i])))) && continue
-            control[i] = false; nsuspect += 1
-        end
-        nsuspect>0 && @warn "$(nameof(So)): $nsuspect eigenvalue candidate(s) with tension or imaginary part above accept_tol=$accept_tol marked unverified (control=false)"
-        isempty(ks) && @warn "$(nameof(So)): no eigenvalues found in the requested interval"
-        @debug "Spectrum finalized" maxlog=1 nlevels=length(ks) nsuspect live_GiB=Base.gc_live_bytes()/2^30 maxrss_GiB=Sys.maxrss()/2^30
-        p = sortperm(ks; by=real)
-        SpectralData(billiard, solver, ks[p], ts[p], control[p]; states=states===nothing ? nothing : states[p])
+    control = copy(control)
+    nsuspect = 0
+    for i in eachindex(ts)
+        (_ten_ok(accept_tol, ts[i]) && _ten_ok(accept_tol, abs(imag(ks[i])))) && continue
+        control[i] = false; nsuspect += 1
     end
+    nsuspect>0 && @warn "$(nameof(So)): $nsuspect eigenvalue candidate(s) with tension or imaginary part above accept_tol=$accept_tol marked unverified (control=false)"
+    isempty(ks) && @warn "$(nameof(So)): no eigenvalues found in the requested interval"
+    @debug "Spectrum finalized" maxlog=1 nlevels=length(ks) nsuspect live_GiB=Base.gc_live_bytes()/2^30 maxrss_GiB=Sys.maxrss()/2^30
+    p = sortperm(ks; by=real)
+    SpectralData(billiard, solver, ks[p], ts[p], control[p]; states=states===nothing ? nothing : states[p])
 end
 
 # Test whether two real-wavenumber uncertainty intervals overlap.
@@ -505,7 +510,7 @@ function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billi
                 end
             end
         end
-        keep = (k1T .<= real.(ks)) .& (real.(ks) .<= k2T)
+        keep = _krange_mask(ks, k1T, k2T)
         kept = solver.states === :none ? nothing : states[keep]
         if solver.states === :boundary
             kept = @timeit_debug "boundary_states" boundary_states(kept, billiard; ppw = solver.boundary_ppw, multithreaded)
@@ -623,8 +628,8 @@ function compute_spectrum(solver::BeynSolver, billiard::Bi, k1, k2; accept_tol::
                 end
                 states_win = @timeit_debug "postprocessing" [[BIMEigenstate(ks_win[i][j], symmetrize_layer_density(solver.kernel, X_win[i][:,j], pts[i], billiard), ts_win[i][j], pts[i]) for j in eachindex(ks_win[i])] for i in 1:nw]
                 ks = reduce(vcat, ks_win); ts = reduce(vcat, ts_win); states = reduce(vcat, states_win)
-                keep = (T(k1).<=real.(ks)).&(real.(ks).<=T(k2))
-                return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], fill(false, count(keep)); states=isempty(states) ? nothing : states[keep], accept_tol)
+                keep = _krange_mask(ks, T(k1), T(k2))
+                return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], fill(false, count(keep)); states=_select_states(states, keep), accept_tol)
             end
             if solver.states === :boundary
                 states_win = Vector{Vector{BIMEigenstate{Complex{T},T}}}(undef, nw)
@@ -635,15 +640,15 @@ function compute_spectrum(solver::BeynSolver, billiard::Bi, k1, k2; accept_tol::
                     end
                 end
                 ks = reduce(vcat, ks_win); ts = reduce(vcat, ts_win); states = reduce(vcat, states_win)
-                keep = (T(k1).<=real.(ks)).&(real.(ks).<=T(k2))
-                return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], fill(false, count(keep)); states=isempty(states) ? nothing : states[keep], accept_tol)
+                keep = _krange_mask(ks, T(k1), T(k2))
+                return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], fill(false, count(keep)); states=_select_states(states, keep), accept_tol)
             end
             @timeit_debug "solution" begin
                 @maybe_showprogress show_progress for i in 1:nw
                     ks_win[i], ts_win[i] = solve(solver, pts[i], k0[i], 2R[i]; multithreaded, cheb_config)
                 end
             end
-            ks = reduce(vcat, ks_win); ts = reduce(vcat, ts_win); keep = (T(k1).<=real.(ks)).&(real.(ks).<=T(k2))
+            ks = reduce(vcat, ks_win); ts = reduce(vcat, ts_win); keep = _krange_mask(ks, T(k1), T(k2))
             return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], fill(false, count(keep)); accept_tol)
         end
         side = solver.states === :boundary ? :left : :right
@@ -665,8 +670,8 @@ function compute_spectrum(solver::BeynSolver, billiard::Bi, k1, k2; accept_tol::
             states = @timeit_debug "postprocessing" (solver.states === :vectors ?
                 [BIMEigenstate(ks[q], symmetrize_layer_density(solver.kernel, X_win[i][:,j], pts[i], billiard), ts[q], pts[i]) for (q,(i,j)) in enumerate(entries)] :
                 [_boundary_state(solver.kernel, billiard, pts[i], ks[q], ts[q], view(X_win[i], :, j)) for (q,(i,j)) in enumerate(entries)])
-            keep = (T(k1).<=real.(ks)).&(real.(ks).<=T(k2))
-            return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], control[keep]; states=isempty(states) ? nothing : states[keep], accept_tol)
+            keep = _krange_mask(ks, T(k1), T(k2))
+            return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], control[keep]; states=_select_states(states, keep), accept_tol)
         end
         p = 0
         for i in 1:nw, q in eachindex(idx_keep[i])
@@ -899,7 +904,7 @@ function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::F
                 panel_start = panel_stop + 1
             end
         end
-        keep = (k1T .<= real.(ks)) .& (real.(ks) .<= k2T)
+        keep = _krange_mask(ks, k1T, k2T)
         ks = ks[keep]
         ts = ts[keep]
         want_u && (states = states[keep])
