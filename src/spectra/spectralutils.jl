@@ -377,6 +377,18 @@ function _vs_refine_window(solver, args::Tuple, k0, Δk, accept_tol, depth::Int;
     return kl, tl, sl
 end
 
+# Merge window `i` (levels `ki, ti, si`) into the running spectrum; the first window seeds it. Returns the running state list.
+function _vs_accumulate!(ks, ts, control, states, ki, ti, si, i::Int, kl, kr; merge_tol::Real)
+    if i == 1
+        append!(ks, ki)
+        append!(ts, ti)
+        append!(control, fill(false, length(ki)))
+        return si
+    end
+    @timeit_debug "postprocessing" overlap_and_merge!(ks, ts, ki, ti, control, kl, kr; tol = merge_tol, states_left = si === nothing ? nothing : states, states_right = si)
+    return states
+end
+
 uses_taylor(::AbsBasis) = false
 uses_taylor(basis::Union{CornerAdaptedFourierBessel,RealPlaneWaves,FourierBessel}) = basis.use_taylor
 
@@ -480,14 +492,7 @@ function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billi
                 for i in i1:i2
                     k0, Δk = centers[i], widths[i]
                     ki, ti, si = @timeit_debug "solution" _vs_refine_window(solver, (basis_new, pts, cache), k0, Δk, accept_tol, _VS_MAX_REFINEMENTS; multithreaded, merge_tol)
-                    if i == 1
-                        append!(ks, ki)
-                        append!(ts, ti)
-                        append!(control, fill(false, length(ki)))
-                        states = si
-                    else
-                        @timeit_debug "postprocessing" overlap_and_merge!(ks, ts, ki, ti, control, k0 - Δk, centers[i - 1] + widths[i - 1]; tol = merge_tol, states_left = si === nothing ? nothing : states, states_right = si)
-                    end
+                    states = _vs_accumulate!(ks, ts, control, states, ki, ti, si, i, k0 - Δk, i == 1 ? k0 : centers[i - 1] + widths[i - 1]; merge_tol)
                 end
             end
         else
@@ -500,14 +505,7 @@ function compute_spectrum(solver::AcceleratedBasisSolver, basis::AbsBasis, billi
                     (basis_new, pts)
                 end
                 ki, ti, si = @timeit_debug "solution" _vs_refine_window(solver, (basis_new, pts), k0, Δk, accept_tol, _VS_MAX_REFINEMENTS; multithreaded, merge_tol)
-                if i == 1
-                    append!(ks, ki)
-                    append!(ts, ti)
-                    append!(control, fill(false, length(ki)))
-                    states = si
-                else
-                    @timeit_debug "postprocessing" overlap_and_merge!(ks, ts, ki, ti, control, k0 - Δk, centers[i - 1] + widths[i - 1]; tol = merge_tol, states_left = si === nothing ? nothing : states, states_right = si)
-                end
+                states = _vs_accumulate!(ks, ts, control, states, ki, ti, si, i, k0 - Δk, i == 1 ? k0 : centers[i - 1] + widths[i - 1]; merge_tol)
             end
         end
         keep = _krange_mask(ks, k1T, k2T)
@@ -555,6 +553,12 @@ end
 ################################################################################
 # BEYN
 ################################################################################
+
+# States of one Beyn or CORK window from the columns of `X`: right vectors for `states = :vectors`, left vectors for `:boundary`.
+function _beyn_window_states(solver::Union{BeynSolver,CORKSolver}, billiard, pts, ks, ts, X)
+    solver.states === :vectors && return [BIMEigenstate(ks[j], symmetrize_layer_density(solver.kernel, X[:, j], pts, billiard), ts[j], pts) for j in eachindex(ks)]
+    return _boundary_states(solver.kernel, billiard, ks, ts, X, pts)
+end
 
 """
     compute_spectrum(solver::BeynSolver, billiard::Bi, k1, k2; accept_tol::Union{Nothing,Real}=1e-8, multithreaded::Bool=true, show_progress::Bool=true, max_memory::Real=default_memory_limit()) where {Bi<:AbsBilliard} → SpectralData
@@ -617,69 +621,45 @@ function compute_spectrum(solver::BeynSolver, billiard::Bi, k1, k2; accept_tol::
         if (solver.use_chebyshev || solver.imag_k_check) && solver.cheb_config.param_strategy!==:manual # always do cheb config since imag_k_check requires it anyway even if taylor
             cheb_config = @timeit_debug "preparation" tune_cheb_config(solver.kernel, pts[end], real(k0[end])+R[end], solver.cheb_config)
         end
+        ks_win = Vector{Vector{Complex{T}}}(undef, nw); ts_win = Vector{Vector{T}}(undef, nw)
+        control_win = Vector{Vector{Bool}}(undef, nw); states_win = Vector{Any}(undef, nw)
         if !solver.imag_k_check
-            ks_win = Vector{Vector{Complex{T}}}(undef, nw); ts_win = Vector{Vector{T}}(undef, nw)
-            if solver.states === :vectors
-                X_win = Vector{Matrix{Complex{T}}}(undef, nw)
-                @timeit_debug "solution" begin
-                    @maybe_showprogress show_progress for i in 1:nw
-                        ks_win[i], ts_win[i], X_win[i] = solve_vectors(solver, pts[i], k0[i], 2R[i]; multithreaded, cheb_config)
-                    end
-                end
-                states_win = @timeit_debug "postprocessing" [[BIMEigenstate(ks_win[i][j], symmetrize_layer_density(solver.kernel, X_win[i][:,j], pts[i], billiard), ts_win[i][j], pts[i]) for j in eachindex(ks_win[i])] for i in 1:nw]
-                ks = reduce(vcat, ks_win); ts = reduce(vcat, ts_win); states = reduce(vcat, states_win)
-                keep = _krange_mask(ks, T(k1), T(k2))
-                return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], fill(false, count(keep)); states=_select_states(states, keep), accept_tol)
-            end
-            if solver.states === :boundary
-                states_win = Vector{Vector{BIMEigenstate{Complex{T},T}}}(undef, nw)
-                @timeit_debug "solution" begin
-                    @maybe_showprogress show_progress for i in 1:nw
-                        ks_win[i], ts_win[i], Y = solve_left_vectors(solver, pts[i], k0[i], 2R[i]; multithreaded, cheb_config)
-                        states_win[i] = _boundary_states(solver.kernel, billiard, ks_win[i], ts_win[i], Y, pts[i])
-                    end
-                end
-                ks = reduce(vcat, ks_win); ts = reduce(vcat, ts_win); states = reduce(vcat, states_win)
-                keep = _krange_mask(ks, T(k1), T(k2))
-                return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], fill(false, count(keep)); states=_select_states(states, keep), accept_tol)
-            end
             @timeit_debug "solution" begin
                 @maybe_showprogress show_progress for i in 1:nw
-                    ks_win[i], ts_win[i] = solve(solver, pts[i], k0[i], 2R[i]; multithreaded, cheb_config)
+                    if solver.states === :none
+                        ks_win[i], ts_win[i] = solve(solver, pts[i], k0[i], 2R[i]; multithreaded, cheb_config)
+                        states_win[i] = nothing
+                    else
+                        ks_win[i], ts_win[i], X = solver.states === :vectors ?
+                            solve_vectors(solver, pts[i], k0[i], 2R[i]; multithreaded, cheb_config) :
+                            solve_left_vectors(solver, pts[i], k0[i], 2R[i]; multithreaded, cheb_config)
+                        states_win[i] = _beyn_window_states(solver, billiard, pts[i], ks_win[i], ts_win[i], X)
+                    end
+                    control_win[i] = fill(false, length(ks_win[i]))
                 end
             end
-            ks = reduce(vcat, ks_win); ts = reduce(vcat, ts_win); keep = _krange_mask(ks, T(k1), T(k2))
-            return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], fill(false, count(keep)); accept_tol)
-        end
-        side = solver.states === :boundary ? :left : :right
-        ks_win = Vector{Vector{Complex{T}}}(undef, nw); X_win = Vector{Matrix{Complex{T}}}(undef, nw)
-        @timeit_debug "solution" begin
-            @maybe_showprogress show_progress for i in 1:nw
-                ks_win[i], X_win[i] = _beyn_projected_solve(solver, pts[i], k0[i], 2R[i]; multithreaded, cheb_config, side)
+        else
+            side = solver.states === :boundary ? :left : :right
+            X_win = Vector{Matrix{Complex{T}}}(undef, nw)
+            @timeit_debug "solution" begin
+                @maybe_showprogress show_progress for i in 1:nw
+                    ks_win[i], X_win[i] = _beyn_projected_solve(solver, pts[i], k0[i], 2R[i]; multithreaded, cheb_config, side)
+                end
+            end
+            idx_keep, residuals = @timeit_debug "postprocessing" _beyn_imag_k_check(solver, ks_win, X_win, pts; multithreaded, cheb_config, krange=(T(k1), T(k2)), side)
+            @timeit_debug "postprocessing" for i in 1:nw
+                idx = idx_keep[i]
+                ks_i = ks_win[i][idx]
+                control_win[i] = isnan.(residuals[i])
+                ts_win[i] = T[control_win[i][q] ? abs(imag(ks_i[q])) : residuals[i][q] for q in eachindex(idx)]
+                states_win[i] = solver.states === :none ? nothing : _beyn_window_states(solver, billiard, pts[i], ks_i, ts_win[i], X_win[i][:, idx])
+                ks_win[i] = ks_i
             end
         end
-        idx_keep, residuals = @timeit_debug "postprocessing" _beyn_imag_k_check(solver, ks_win, X_win, pts; multithreaded, cheb_config, krange=(T(k1), T(k2)), side)
-        n = sum(length, idx_keep); ks = Vector{Complex{T}}(undef, n); ts = Vector{T}(undef, n); control = Vector{Bool}(undef, n)
-        if solver.states !== :none
-            entries = Tuple{Int,Int}[]; p = 0
-            for i in 1:nw, q in eachindex(idx_keep[i])
-                j = idx_keep[i][q]; p += 1
-                ks[p] = ks_win[i][j]; control[p] = isnan(residuals[i][q]); ts[p] = control[p] ? abs(imag(ks[p])) : residuals[i][q]
-                push!(entries, (i,j))
-            end
-            states = @timeit_debug "postprocessing" (solver.states === :vectors ?
-                [BIMEigenstate(ks[q], symmetrize_layer_density(solver.kernel, X_win[i][:,j], pts[i], billiard), ts[q], pts[i]) for (q,(i,j)) in enumerate(entries)] :
-                [_boundary_state(solver.kernel, billiard, pts[i], ks[q], ts[q], view(X_win[i], :, j)) for (q,(i,j)) in enumerate(entries)])
-            keep = _krange_mask(ks, T(k1), T(k2))
-            return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], control[keep]; states=_select_states(states, keep), accept_tol)
-        end
-        p = 0
-        for i in 1:nw, q in eachindex(idx_keep[i])
-            j = idx_keep[i][q]; p += 1
-            ks[p] = ks_win[i][j]; control[p] = isnan(residuals[i][q]); ts[p] = control[p] ? abs(imag(ks[p])) : residuals[i][q]
-        end
-        keep = (T(k1).<=real.(ks)).&(real.(ks).<=T(k2))
-        return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], control[keep]; accept_tol)
+        ks = reduce(vcat, ks_win); ts = reduce(vcat, ts_win); control = reduce(vcat, control_win)
+        states = solver.states === :none ? nothing : reduce(vcat, states_win)
+        keep = _krange_mask(ks, T(k1), T(k2))
+        return _finalize_spectrum(billiard, solver, ks[keep], ts[keep], control[keep]; states=_select_states(states, keep), accept_tol)
     end
 end
 
@@ -795,6 +775,18 @@ in `[k, k+dk]`.
     return A*((k+dk)^2-k^2)/(T(4pi))
 end
 
+# Append the EBIM roots of one center `ki` lying within `dki` of it to `ks`, `ts` and, when `states` is given, to `states` (left vectors in `res[3]`).
+function _ebim_collect!(ks, ts, states, solver, billiard, pts, res, ki, dki)
+    ksi, tsi = res[1], res[2]
+    @inbounds for q in eachindex(ksi)
+        abs(real(ksi[q]) - ki) <= dki || continue
+        push!(ks, ksi[q])
+        push!(ts, tsi[q])
+        states === nothing || push!(states, _boundary_state(solver.kernel, billiard, pts, ksi[q], tsi[q], view(res[3], :, q)))
+    end
+    return nothing
+end
+
 """
     compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::Function=(k -> 0.05*k^(-1/3)), window_overlap::Real=0.5, merge_tol=1e-5, spacing_frac=0.02, tolmax=5e-3, local_window::Int=4, accept_tol::Union{Nothing,Real}=5e-4, multithreaded::Bool=true, show_progress::Bool=true, max_memory::Real=default_memory_limit()) where {Bi<:AbsBilliard}
 
@@ -853,29 +845,15 @@ function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::F
                 ki = centers[i]
                 pts = @timeit_debug "preparation" evaluate_points(solver, billiard, ki)
                 res = @timeit_debug "solution" solve(solver, pts, ki, nlevels[i]; multithreaded, left = want_u)
-                ksi, tsi = res[1], res[2]
-                @inbounds for q = eachindex(ksi)
-                    if abs(real(ksi[q]) - ki) <= dks[i]
-                        push!(ks, ksi[q])
-                        push!(ts, tsi[q])
-                        want_u && push!(states, _boundary_state(solver.kernel, billiard, pts, ksi[q], tsi[q], view(res[3], :, q)))
-                    end
-                end
+                _ebim_collect!(ks, ts, want_u ? states : nothing, solver, billiard, pts, res, ki, dks[i])
             end
         else
             T === Float64 || throw(ArgumentError("analytic EBIM Taylor acceleration currently requires Float64"))
             R = T(solver.taylor_radius)
             R > zero(T) || throw(ArgumentError("taylor_radius must be positive"))
             p = solver.taylor_degree
-            np = length(centers)
-            panel_start = 1
-            progress = show_progress ? Progress(np; desc = "EBIM spectrum: ") : nothing
-            while panel_start <= np
-                panel_stop = panel_start
-                panel_limit = centers[panel_start] + 2R
-                while panel_stop < np && centers[panel_stop + 1] <= panel_limit
-                    panel_stop += 1
-                end
+            progress = show_progress ? Progress(length(centers); desc = "EBIM spectrum: ") : nothing
+            for (panel_start, panel_stop) in zip(_vs_panels(centers, R)...)
                 kc = T(0.5) * (centers[panel_start] + centers[panel_stop])
                 kmax_panel = max(centers[panel_stop], min(k2T, kc + R))
                 pts, cache = @timeit_debug "preparation" begin
@@ -891,17 +869,9 @@ function compute_spectrum(solver::ExpandedBIMSolver, billiard::Bi, k1, k2; dk::F
                     ki = centers[i]
                     @timeit_debug "horner_evaluation" _construct_matrices!(solver, A, dA, ddA, cache, ki; multithreaded)
                     res = @timeit_debug "solution" _solve(solver, A, dA, ddA, ki, nlevels[i]; left = want_u)
-                    ksi, tsi = res[1], res[2]
-                    for q = eachindex(ksi)
-                        if abs(real(ksi[q]) - ki) <= dks[i]
-                            push!(ks, ksi[q])
-                            push!(ts, tsi[q])
-                            want_u && push!(states, _boundary_state(solver.kernel, billiard, pts, ksi[q], tsi[q], view(res[3], :, q)))
-                        end
-                    end
+                    _ebim_collect!(ks, ts, want_u ? states : nothing, solver, billiard, pts, res, ki, dks[i])
                 end
                 show_progress && update!(progress, panel_stop)
-                panel_start = panel_stop + 1
             end
         end
         keep = _krange_mask(ks, k1T, k2T)
@@ -997,61 +967,25 @@ function compute_spectrum(solver::CORKSolver, billiard::Bi, k1, k2; accept_tol::
         intervals = _cork_intervals(solver, billiard, k1, k2)
         @debug "CORK sweep" maxlog=1 k1 k2 nwindows=length(intervals) states=solver.states live_GiB=Base.gc_live_bytes()/2^30 maxrss_GiB=Sys.maxrss()/2^30
         a, b = intervals[1]; k0 = (a+b)/2; Δpoly = (1+solver.guard)*(b-a)/2; pts = evaluate_points(solver, billiard, k0)
-        pmin = max(2, ceil(Int, sqrt(solver.block_size))); p = max(solver.p, pmin)
-        @timeit_debug "preparation" begin
-            refs = cork_validation_references(solver.kernel, pts, Float64(k0), Float64(Δpoly); multithreaded)
-            P, _ = build_cork_polynomial(solver.kernel, pts, Float64(k0), Float64(Δpoly), p; multithreaded)
-            err = validate_polynomial(solver.kernel, pts, P; multithreaded, references=refs)
-            if err>solver.taylor_tol
-                while err>solver.taylor_tol
-                    p += 1
-                    P, _ = build_cork_polynomial(solver.kernel, pts, Float64(k0), Float64(Δpoly), p; multithreaded)
-                    err = validate_polynomial(solver.kernel, pts, P; multithreaded, references=refs)
-                end
-            else
-                while p>pmin
-                    P1, _ = build_cork_polynomial(solver.kernel, pts, Float64(k0), Float64(Δpoly), p-1; multithreaded)
-                    err1 = validate_polynomial(solver.kernel, pts, P1; multithreaded, references=refs)
-                    err1>solver.taylor_tol && break
-                    p -= 1; err = err1
-                end
-            end
-            @debug "CORK polynomial degree tuned" maxlog=1 p_initial=solver.p p_final=p validation_error=err tolerance=solver.taylor_tol
-        end
+        p = @timeit_debug "preparation" _tune_cork_degree(solver, pts, k0, Δpoly; multithreaded)
         ks = Complex{T}[]; ts = T[]
-        if solver.states !== :none
-            states = nothing
-            @timeit_debug "solution" begin
-                @maybe_showprogress show_progress for i in eachindex(intervals)
-                    a, b = intervals[i]; k0 = (a+b)/2; dk = b-a; pts = @timeit_debug "evaluate_points" evaluate_points(solver, billiard, k0)
-                    ki, ti, X = _cork_solve(solver, pts, k0, dk; multithreaded, p, vectors=true, side=solver.states === :boundary ? :left : :right)
-                    keep = findall(j -> begin
-                        x = real(ki[j])
-                        a<=x && (i==length(intervals) ? x<=k2T : x<b) && k1T<=x
-                    end, eachindex(ki))
-                    isempty(keep) && continue
-                    si = @timeit_debug "postprocessing" (solver.states === :boundary ? _boundary_states(solver.kernel, billiard, ki[keep], ti[keep], X[:,keep], pts) : [BIMEigenstate(ki[j], symmetrize_layer_density(solver.kernel, X[:,j], pts, billiard), ti[j], pts) for j in keep])
-                    states===nothing ? (states = si) : append!(states, si)
-                    append!(ks, Complex{T}.(ki[keep])); append!(ts, T.(ti[keep]))
-                end
-            end
-            states===nothing && (states = BIMEigenstate{Complex{T},T}[])
-            _cork_warn_if_incomplete(solver, billiard, length(ks), k1T, k2T)
-            return _finalize_spectrum(billiard, solver, ks, ts, fill(false, length(ks)); states, accept_tol)
-        end
+        wantstates = solver.states !== :none
+        states = wantstates ? BIMEigenstate{Complex{T},T}[] : nothing
+        side = solver.states === :boundary ? :left : :right
         @timeit_debug "solution" begin
             @maybe_showprogress show_progress for i in eachindex(intervals)
                 a, b = intervals[i]; k0 = (a+b)/2; dk = b-a; pts = @timeit_debug "evaluate_points" evaluate_points(solver, billiard, k0)
-                ki, ti, _ = _cork_solve(solver, pts, k0, dk; multithreaded, p)
-                keep = findall(j -> begin
-                    x = real(ki[j])
-                    a<=x && (i==length(intervals) ? x<=k2T : x<b) && k1T<=x
-                end, eachindex(ki))
+                ki, ti, X = _cork_solve(solver, pts, k0, dk; multithreaded, p, vectors=wantstates, side)
+                keep = findall(j -> _cork_owned(real(ki[j]), a, b, i == length(intervals), k1T, k2T), eachindex(ki))
+                isempty(keep) && continue
+                if wantstates
+                    append!(states, @timeit_debug "postprocessing" _beyn_window_states(solver, billiard, pts, ki[keep], ti[keep], X[:, keep]))
+                end
                 append!(ks, Complex{T}.(ki[keep])); append!(ts, T.(ti[keep]))
             end
         end
         _cork_warn_if_incomplete(solver, billiard, length(ks), k1T, k2T)
-        return _finalize_spectrum(billiard, solver, ks, ts, fill(false, length(ks)); accept_tol)
+        return _finalize_spectrum(billiard, solver, ks, ts, fill(false, length(ks)); states, accept_tol)
     end
 end
 

@@ -1246,6 +1246,33 @@ _bim_numeric_type(::CORKSolver{T}) where {T} = T
 # Delegate boundary discretization to the wrapped BIM solver.
 evaluate_points(solver::CORKSolver, billiard::Bi, k) where {Bi<:AbsBilliard} = evaluate_points(solver.kernel, billiard, k)
 
+# Smallest polynomial degree `p >= max(solver.p, ceil(sqrt(block_size)))` (raised until the validation error is below `taylor_tol`, else lowered while it stays below) on the first window.
+function _tune_cork_degree(solver::CORKSolver, pts, k0, Δpoly; multithreaded::Bool=true)::Int
+    pmin = max(2, ceil(Int, sqrt(solver.block_size))); p = max(solver.p, pmin)
+    refs = cork_validation_references(solver.kernel, pts, Float64(k0), Float64(Δpoly); multithreaded)
+    P, _ = build_cork_polynomial(solver.kernel, pts, Float64(k0), Float64(Δpoly), p; multithreaded)
+    err = validate_polynomial(solver.kernel, pts, P; multithreaded, references=refs)
+    if err > solver.taylor_tol
+        while err > solver.taylor_tol
+            p += 1
+            P, _ = build_cork_polynomial(solver.kernel, pts, Float64(k0), Float64(Δpoly), p; multithreaded)
+            err = validate_polynomial(solver.kernel, pts, P; multithreaded, references=refs)
+        end
+    else
+        while p > pmin
+            P1, _ = build_cork_polynomial(solver.kernel, pts, Float64(k0), Float64(Δpoly), p-1; multithreaded)
+            err1 = validate_polynomial(solver.kernel, pts, P1; multithreaded, references=refs)
+            err1 > solver.taylor_tol && break
+            p -= 1; err = err1
+        end
+    end
+    @debug "CORK polynomial degree tuned" maxlog=1 p_initial=solver.p p_final=p validation_error=err tolerance=solver.taylor_tol
+    return p
+end
+
+# Root `x = Re k` belongs to window `[a, b)` (closed at `k2` for the last window) and to `[k1, k2]`.
+@inline _cork_owned(x, a, b, islast::Bool, k1, k2)::Bool = a <= x && (islast ? x <= k2 : x < b) && k1 <= x
+
 # Compact kernel name used only by debug diagnostics.
 @inline _cork_kernel_name(solver)::String = solver isa DoubleLayerPotentialSolver ? "DLP" : solver isa CombinedFieldIntegralEquationSolver ? "CFIE" : solver isa CompositeBIMSolver ? "CompositeBIM" : string(typeof(solver))
 
