@@ -78,6 +78,50 @@ function Base.filter(f::Function, data::SpectralData)
     return data[idx]
 end
 
+function _median_sorted(x::AbstractVector)
+    s = sort(x); n = length(s); m = n ÷ 2
+    return isodd(n) ? s[m+1] : (s[m] + s[m+1]) / 2
+end
+
+function _stats_line(io::IO, label::AbstractString, x::AbstractVector)
+    if isempty(x)
+        println(io, "  ", label, ": -")
+    else
+        @printf(io, "  %s: min = %.3e, median = %.3e, max = %.3e\n", label, minimum(x), _median_sorted(x), maximum(x))
+    end
+end
+
+_states_description(::Nothing) = "none"
+function _states_description(states::AbstractVector)
+    isempty(states) && return "none"
+    n_boundary = count(s -> s isa BIMEigenstate && s.vec === nothing && s.u !== nothing, states)
+    n_density = count(s -> s isa BIMEigenstate && s.vec !== nothing, states)
+    n_basis = count(s -> s isa BasisEigenstate, states)
+    parts = String[]
+    n_boundary > 0 && push!(parts, "boundary normal derivative (" * string(n_boundary) * ")")
+    n_density > 0 && push!(parts, "layer density vectors (" * string(n_density) * ")")
+    n_basis > 0 && push!(parts, "basis coefficient vectors (" * string(n_basis) * ")")
+    return isempty(parts) ? string(eltype(states)) : join(parts, ", ")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", data::SpectralData)
+    n = length(data)
+    println(io, "SpectralData with ", n, n == 1 ? " state" : " states")
+    println(io, "  billiard: ", nameof(typeof(data.billiard)))
+    println(io, "  solver: ", nameof(typeof(data.solver)))
+    if n == 0
+        println(io, "  k range: -")
+    else
+        kmin, kmax = extrema(data.k)
+        @printf(io, "  k range: [%.6g, %.6g]\n", kmin, kmax)
+    end
+    _stats_line(io, "tension", data.ten)
+    _stats_line(io, "k_im   ", data.k_im)
+    print(io, "  stored states: ", _states_description(data.states))
+end
+
+Base.show(io::IO, data::SpectralData) = print(io, "SpectralData(", length(data), " states", isempty(data.k) ? "" : @sprintf(", k ∈ [%.6g, %.6g]", extrema(data.k)...), ")")
+
 # Return `data.states`, or throw a clear error if no eigenstates are stored.
 # Shared by the `wavefunction`/`boundary_function`/`momentum_function`/
 # `husimi_function` SpectralData wrappers in states/*.jl.

@@ -994,3 +994,100 @@ using QuantumBilliards: _check_states_supported
         @test _check_states_supported(CORKSolver(kernel; states=:boundary)) === nothing
     end
 end
+
+# Display helpers for SpectralData: no eigen-solves, states are hand-built.
+using StaticArrays: SVector
+using QuantumBilliards: _median_sorted, _stats_line, _states_description, BIMEigenstate, BasisEigenstate, BoundaryPoints
+
+@testset "_median_sorted" begin
+    @test _median_sorted([5.0]) == 5.0
+    @test _median_sorted([3.0, 1.0, 2.0]) == 2.0           # odd count, unsorted input
+    @test _median_sorted([4.0, 1.0, 3.0, 2.0]) == 2.5      # even count: mean of middle pair
+    x = [3.0, 1.0, 2.0]
+    _median_sorted(x)
+    @test x == [3.0, 1.0, 2.0]                              # input not mutated
+end
+
+@testset "_stats_line" begin
+    @test sprint(_stats_line, "tension", [3e-3, 1e-3, 2e-3]) == "  tension: min = 1.000e-03, median = 2.000e-03, max = 3.000e-03\n"
+    @test sprint(_stats_line, "k_im   ", Float64[]) == "  k_im   : -\n"
+end
+
+@testset "_states_description" begin
+    pts = BoundaryPoints([SVector(0.0, 0.0), SVector(1.0, 0.0)])
+    boundary = BIMEigenstate(1.0, nothing, 1e-3, pts; u=[1.0 + 0im, 2.0 + 0im])
+    density = BIMEigenstate(1.0, [1.0 + 0im, 2.0 + 0im], 1e-3, pts)
+    density_u = BIMEigenstate(1.0, [1.0 + 0im, 2.0 + 0im], 1e-3, pts; u=[1.0 + 0im, 2.0 + 0im])
+    bare = BIMEigenstate(1.0, nothing, 1e-3, pts)
+    basis = BasisEigenstate{Float64,Float64,Symbol}(1.0, 1.0, [1.0, 2.0], 1e-3, :basis)
+
+    @test _states_description(nothing) == "none"
+    @test _states_description(QuantumBilliards.AbsState[]) == "none"
+    @test boundary.vec === nothing && boundary.u !== nothing
+    @test _states_description([boundary, boundary]) == "boundary normal derivative (2)"
+    @test _states_description([density]) == "layer density vectors (1)"
+    @test _states_description([density_u]) == "layer density vectors (1)"   # vec set wins over u
+    @test _states_description([basis, basis, basis]) == "basis coefficient vectors (3)"
+    @test _states_description([boundary, density, basis]) ==
+          "boundary normal derivative (1), layer density vectors (1), basis coefficient vectors (1)"
+    @test _states_description([bare]) == string(typeof(bare))                 # no u, no vec: falls back to eltype
+    @test _states_description([SpectraTestState(1)]) == string(SpectraTestState)
+end
+
+@testset "SpectralData show" begin
+    b = RectangleBilliard(1.0, 0.5)
+    plain = SpectralData(b, :solver, [1.0, 2.0, 3.0], [1e-3, 2e-3, 3e-3], [false, false, false])
+    txt(d) = sprint(show, MIME("text/plain"), d)
+
+    @testset "text/plain, states=nothing" begin
+        lines = split(txt(plain), '\n')
+        @test lines[1] == "SpectralData with 3 states"
+        @test lines[2] == "  billiard: RectangleBilliard"
+        @test lines[3] == "  solver: Symbol"
+        @test lines[4] == "  k range: [1, 3]"
+        @test lines[5] == "  tension: min = 1.000e-03, median = 2.000e-03, max = 3.000e-03"
+        @test lines[6] == "  k_im   : min = 0.000e+00, median = 0.000e+00, max = 0.000e+00"
+        @test lines[7] == "  stored states: none"
+        @test length(lines) == 7                           # no trailing newline
+    end
+
+    @testset "singular header" begin
+        @test startswith(txt(plain[1]), "SpectralData with 1 state\n")
+    end
+
+    @testset "even-count median" begin
+        d = SpectralData(b, :solver, [1.0, 2.0, 3.0, 4.0], [4e-3, 1e-3, 3e-3, 2e-3], falses(4) |> collect)
+        @test occursin("tension: min = 1.000e-03, median = 2.500e-03, max = 4.000e-03", txt(d))
+    end
+
+    @testset "empty data" begin
+        d = SpectralData(b, :solver, Float64[], Float64[], Bool[])
+        lines = split(txt(d), '\n')
+        @test lines[1] == "SpectralData with 0 states"
+        @test lines[4] == "  k range: -"
+        @test lines[5] == "  tension: -"
+        @test lines[6] == "  k_im   : -"
+        @test lines[7] == "  stored states: none"
+        @test sprint(show, d) == "SpectralData(0 states)"
+    end
+
+    @testset "empty states vector" begin
+        d = SpectralData(b, :solver, [1.0], [1e-3], [false]; states=SpectraTestState[])
+        @test endswith(txt(d), "stored states: none")
+    end
+
+    @testset "BIMEigenstate: u set vs vec set" begin
+        pts = BoundaryPoints([SVector(0.0, 0.0), SVector(1.0, 0.0)])
+        u = [1.0 + 0im, 2.0 + 0im]
+        s_u = BIMEigenstate(1.0, nothing, 1e-3, pts; u)
+        s_vec = BIMEigenstate(2.0, u, 2e-3, pts)
+        d_u = SpectralData(b, :solver, [1.0, 1.5], [1e-3, 1e-3], [false, false]; states=[s_u, s_u])
+        d_vec = SpectralData(b, :solver, [2.0], [2e-3], [false]; states=[s_vec])
+        @test endswith(txt(d_u), "stored states: boundary normal derivative (2)")
+        @test endswith(txt(d_vec), "stored states: layer density vectors (1)")
+    end
+
+    @testset "compact show" begin
+        @test sprint(show, plain) == "SpectralData(3 states, k ∈ [1, 3])"
+    end
+end
