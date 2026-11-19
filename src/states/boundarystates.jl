@@ -32,10 +32,21 @@ and `apply_symmetries_to_boundary_points`. Basis coefficients are real, so
 """
 function boundary_states(states::AbstractVector{BasisEigenstate{K,Tt,Ba}}, billiard::AbsBilliard; ppw::Real=5.0, multithreaded::Bool=true) where {K<:Real,Tt<:Real,Ba<:AbsBasis}
     out = Vector{BIMEigenstate{K,K}}(undef, length(states))
-    groups = Dict{Tuple{UInt,K},Vector{Int}}()
-    order = Tuple{UInt,K}[]
-    for i in eachindex(states)
-        key = (objectid(states[i].basis), states[i].k_basis)
+    boundary = get_boundary_curves_with_ignored(billiard)
+    sampler = FourierNodes([2, 3, 5], [crv.length for crv in boundary])
+    L = CompositeCurve(boundary).length
+    for idx in _group_indices(s -> (objectid(s.basis), s.k_basis), states)
+        _boundary_states_group!(out, states, idx, billiard, sampler, L, ppw, multithreaded)
+    end
+    return out
+end
+
+# Indices of `xs` grouped by the value of `f(x)`; groups are ordered by first occurrence and list indices in increasing order.
+function _group_indices(f, xs)
+    groups = Dict{Any,Vector{Int}}()
+    order = Any[]
+    for i in eachindex(xs)
+        key = f(xs[i])
         if haskey(groups, key)
             push!(groups[key], i)
         else
@@ -43,13 +54,7 @@ function boundary_states(states::AbstractVector{BasisEigenstate{K,Tt,Ba}}, billi
             push!(order, key)
         end
     end
-    boundary = get_boundary_curves_with_ignored(billiard)
-    sampler = FourierNodes([2, 3, 5], [crv.length for crv in boundary])
-    L = CompositeCurve(boundary).length
-    for key in order
-        _boundary_states_group!(out, states, groups[key], billiard, sampler, L, ppw, multithreaded)
-    end
-    return out
+    return [groups[key] for key in order]
 end
 
 function _boundary_states_group!(out, states::AbstractVector{BasisEigenstate{K,Tt,Ba}}, idx::Vector{Int}, billiard::AbsBilliard, sampler, L::Real, ppw::Real, multithreaded::Bool) where {K<:Real,Tt<:Real,Ba<:AbsBasis}
@@ -106,18 +111,7 @@ function _pts_groups(states::Nothing, n::Int)
 end
 
 function _pts_groups(states::AbstractVector{<:BIMEigenstate}, n::Int)
-    groups = Dict{UInt,Vector{Int}}()
-    order = UInt[]
-    for i in 1:n
-        key = objectid(states[i].pts)
-        if haskey(groups, key)
-            push!(groups[key], i)
-        else
-            groups[key] = [i]
-            push!(order, key)
-        end
-    end
-    return [groups[key] for key in order]
+    return _group_indices(s -> objectid(s.pts), view(states, 1:n))
 end
 
 function _complex_state(state::BIMEigenstate{K,T}) where {K<:Number,T<:Real}
@@ -255,28 +249,27 @@ function compute_boundary_functions(data::SpectralData{T,Bi,So}; multithreaded::
     nblas = multithreaded ? MAX_BLAS_THREADS : 1
     geom_key = UInt(0)
     geom = nothing
-    @maybe_showprogress show_progress for members in jobs
-        kc = sum(data.k[members]) / length(members)
-        pts = states === nothing ? evaluate_points(kernel, billiard, kc) : states[first(members)].pts
-        key = objectid(pts)
-        if states === nothing || key != geom_key
-            geom = _bim_geometry(kernel, pts)
-            geom_key = key
-        end
-        old_blas = BLAS.get_num_threads()
-        BLAS.set_num_threads(nblas)
-        local Y
-        try
+    old_blas = BLAS.get_num_threads()
+    BLAS.set_num_threads(nblas)
+    try
+        @maybe_showprogress show_progress for members in jobs
+            kc = sum(data.k[members]) / length(members)
+            pts = states === nothing ? evaluate_points(kernel, billiard, kc) : states[first(members)].pts
+            key = objectid(pts)
+            if states === nothing || key != geom_key
+                geom = _bim_geometry(kernel, pts)
+                geom_key = key
+            end
             A = construct_matrices(kernel, pts, T(kc), geom; multithreaded)
             Y = _left_null_vectors(A, length(members), kc, res_tol, rng)
-        finally
-            BLAS.set_num_threads(old_blas)
+            for (j, i) in enumerate(members)
+                s = _boundary_state(kernel, billiard, pts, complex(data.k[i], data.k_im[i]), data.ten[i], view(Y, :, j))
+                vec = states === nothing || states[i].vec === nothing ? nothing : Vector{Complex{T}}(states[i].vec)
+                out[i] = BIMEigenstate{Complex{T},T}(s.k, s.k_im, vec, s.ten, pts, s.u, s.bnd_norm)
+            end
         end
-        for (j, i) in enumerate(members)
-            s = _boundary_state(kernel, billiard, pts, complex(data.k[i], data.k_im[i]), data.ten[i], view(Y, :, j))
-            vec = states === nothing || states[i].vec === nothing ? nothing : Vector{Complex{T}}(states[i].vec)
-            out[i] = BIMEigenstate{Complex{T},T}(s.k, s.k_im, vec, s.ten, pts, s.u, s.bnd_norm)
-        end
+    finally
+        BLAS.set_num_threads(old_blas)
     end
     return SpectralData{T,Bi,So,typeof(out)}(billiard, data.solver, data.k, data.k_im, data.ten, data.control, out)
 end
