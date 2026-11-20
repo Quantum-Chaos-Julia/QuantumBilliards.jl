@@ -149,10 +149,13 @@ function _vs_boundary_checks(db, dv, billiard, ks_ref)
         @test length(bu.u) == length(bv.u)
         @test bu.s ≈ bv.s
         s = sign(dot(bu.u, bv.u))
-        err = norm(bu.u .- s .* bv.u) / norm(bv.u)
+        # the stored u is Rellich-normalized on the unfolded boundary (4 images in the even-even sector): u = s * bv.u / sqrt(bu.norm),
+        # with bu.norm the Rellich value of the unnormalized unfolded u, equal to 4 times the fundamental one of the raw reference
+        ref = s .* bv.u ./ sqrt(bu.norm)
+        err = norm(bu.u .- ref) / norm(ref)
         worst = max(worst, err)
         @test err < BOUNDARY_U_TOL_VS
-        @test isapprox(bu.norm, bv.norm; rtol=BOUNDARY_U_TOL_VS)
+        @test isapprox(bu.norm, 4 * bv.norm; rtol=BOUNDARY_U_TOL_VS)
     end
     return worst
 end

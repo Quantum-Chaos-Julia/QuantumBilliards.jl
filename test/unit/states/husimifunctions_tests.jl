@@ -645,7 +645,9 @@ end
         @test hs isa Vector{HusimiFunction{Float64}}
         @test length(hs) == 2
         for (i, st) in enumerate((s0, s1))
-            @test hu_same(hs[i], husimi_function(st, HU_CIRCLE))
+            ref = husimi_function(st, HU_CIRCLE)                      # batch u is Rellich-normalized: H agrees up to rounding
+            @test hs[i].H ≈ ref.H rtol = 1e-10
+            @test hs[i].qs == ref.qs && hs[i].ps == ref.ps && hs[i].k == ref.k
             @test hs[i].k === st.k                                    # k of the own state of every object
         end
         hc = husimi_function([s0, s1], HU_CIRCLE; c=5.0)

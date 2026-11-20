@@ -7,6 +7,15 @@ using QuantumBilliards: expected_states, WindowPlan, ComputationPlan, MemoryEsti
 
 cp_show(plan) = sprint(show, MIME("text/plain"), plan)
 
+using QuantumBilliards: _fundamental_only
+
+@testset "_fundamental_only" begin
+    @test _fundamental_only(FourierBessel(1; sym_x=1, sym_y=1)) == true              # basis with symmetries
+    @test _fundamental_only(FourierBessel(3)) == false                               # no symmetries
+    @test _fundamental_only((; kernel=(; symmetry=:reflection))) == true            # BIM solver stand-in: kernel symmetry set
+    @test _fundamental_only((; kernel=(; symmetry=nothing))) == false
+end
+
 @testset "expected_states" begin
     rect = RectangleBilliard(1.0, 0.7)
     stadium = StadiumBilliard(0.5)

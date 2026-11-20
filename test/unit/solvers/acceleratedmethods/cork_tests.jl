@@ -155,6 +155,31 @@ end
     end
 end
 
+using QuantumBilliards: _cork_owned
+
+@testset "_cork_owned: window ownership of a root" begin
+    k1, k2 = 2.0, 6.0
+    # interior window [3, 4): left end owned, right end belongs to the next window
+    @test _cork_owned(3.0, 3.0, 4.0, false, k1, k2)
+    @test _cork_owned(3.5, 3.0, 4.0, false, k1, k2)
+    @test !_cork_owned(4.0, 3.0, 4.0, false, k1, k2)
+    @test !_cork_owned(2.99, 3.0, 4.0, false, k1, k2)
+    # last window [5, 6] is closed at k2
+    @test _cork_owned(6.0, 5.0, 6.0, true, k1, k2)
+    @test !_cork_owned(6.0, 5.0, 6.0, false, k1, k2)
+    @test !_cork_owned(6.01, 5.0, 6.0, true, k1, k2)
+    # roots outside [k1, k2] are not owned even when inside the window
+    @test !_cork_owned(1.5, 1.0, 2.5, false, k1, k2)
+    @test _cork_owned(2.0, 1.0, 2.5, false, k1, k2)
+    @test !_cork_owned(6.5, 5.5, 7.0, true, k1, k2)
+    # consecutive windows partition [k1, k2]: every root is owned exactly once
+    edges = [2.0, 3.5, 5.0, 6.0]
+    for x in (2.0, 2.7, 3.5, 4.9, 5.0, 5.5, 6.0)
+        owners = count(i -> _cork_owned(x, edges[i], edges[i+1], i == length(edges) - 1, k1, k2), 1:length(edges)-1)
+        @test owners == 1
+    end
+end
+
 @testset "taylor_to_cheb!: Taylor to Chebyshev coefficients" begin
     Δ = 0.4
     C = power_to_cheb(3, Δ)
@@ -1015,3 +1040,24 @@ end
 end
 # The fallback of `_cork_left_vectors` (polynomial residual above tolerance, recomputation on the kernel matrix through
 # `_posthoc_left_vectors`) is not tested here: it needs a polynomial inconsistent with the kernel, which the exact synthetic problem cannot provide.
+
+using QuantumBilliards: _tune_cork_degree
+
+# The synthetic problem is a cubic in k, so its Chebyshev polynomial is exact for p >= 3 and has an error of order c*Δ^3 below that:
+# the tuned degree is the smallest p >= max(solver.p, ceil(sqrt(block_size))) whose validation error is below taylor_tol.
+@testset "_tune_cork_degree" begin
+    pts, k0, Δ = CK_PTS, CK_K0, CK_DPOLY
+    @testset "an overshoot is lowered to the exact degree" begin
+        @test _tune_cork_degree(ck_solver(p=7), pts, k0, Δ; multithreaded=false) == 3
+        @test _tune_cork_degree(ck_solver(p=3), pts, k0, Δ; multithreaded=false) == 3
+    end
+    @testset "an undershoot is raised to the exact degree" begin
+        @test _tune_cork_degree(ck_solver(p=2), pts, k0, Δ; multithreaded=false) == 3
+    end
+    @testset "the floor ceil(sqrt(block_size)) bounds the result below" begin
+        @test _tune_cork_degree(ck_solver(p=3, block_size=25, mstart=25, mstep=25), pts, k0, Δ; multithreaded=false) == 5
+    end
+    @testset "return type" begin
+        @test _tune_cork_degree(ck_solver(p=3), pts, k0, Δ; multithreaded=false) isa Int
+    end
+end

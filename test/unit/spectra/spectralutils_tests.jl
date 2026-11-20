@@ -1002,6 +1002,27 @@ end
 using StaticArrays: SVector
 using QuantumBilliards: _median_sorted, _stats_line, _states_description, BIMEigenstate, BasisEigenstate, BoundaryPoints
 
+using QuantumBilliards: _krange_mask, _select_states
+
+@testset "_krange_mask" begin
+    ks = [1.0, 2.0, 3.0, 4.0]
+    @test _krange_mask(ks, 2.0, 3.0) == [false, true, true, false]            # both ends inclusive
+    @test _krange_mask(ks, 0.0, 10.0) == trues(4)
+    @test _krange_mask(ks, 5.0, 6.0) == falses(4)
+    @test _krange_mask(ks, 3.0, 2.0) == falses(4)                             # empty interval
+    @test _krange_mask([1.0 + 0.5im, 2.5 - 3im, 3.5 + 0im], 1.0, 3.0) == [true, true, false]   # real part decides
+    @test _krange_mask(Float64[], 0.0, 1.0) == Bool[]
+    @test _krange_mask(ks, 2, 3) == [false, true, true, false]                # integer bounds
+end
+
+@testset "_select_states" begin
+    @test _select_states(nothing, [true, false]) === nothing
+    @test _select_states(Int[], Bool[]) === nothing                           # empty lists become nothing
+    @test _select_states([10, 20, 30], [true, false, true]) == [10, 30]
+    @test _select_states([10, 20, 30], [2, 3]) == [20, 30]
+    @test _select_states([10, 20, 30], falses(3)) == Int[]                    # non-empty input with nothing kept stays a vector
+end
+
 @testset "_median_sorted" begin
     @test _median_sorted([5.0]) == 5.0
     @test _median_sorted([3.0, 1.0, 2.0]) == 2.0           # odd count, unsorted input
@@ -1092,5 +1113,124 @@ end
 
     @testset "compact show" begin
         @test sprint(show, plain) == "SpectralData(3 states, k ∈ [1, 3])"
+    end
+end
+
+# Window helpers of compute_spectrum (Steps 4, 5, 7 of scratchpad/compute-spectrum-refactor-plan.md). No eigen-solves:
+# `_vs_accumulate!` uses the merge data of the `overlap_and_merge!` testset; the BIM helpers use a coarse DLP circle kernel
+# and hand-built vectors.
+using QuantumBilliards: _vs_accumulate!, _beyn_window_states, _ebim_collect!, _rellich, evaluate_points, boundary_matrix_size
+
+@testset "_vs_accumulate!" begin
+    kl, kr = 2.0, 3.0
+    ki, ti = [1.9, 2.2002, 2.8004, 3.5, 4.0], [1e-3, 1e-3, 5e-3, 1e-3, 1e-3]
+    mkleft() = ([1.0, 2.2, 2.8], [1e-3, 4e-3, 2e-3], [false, false, false])
+
+    @testset "first window seeds the running spectrum" begin
+        ks = Float64[]; ts = Float64[]; c = Bool[]
+        si = [SpectraTestState(1), SpectraTestState(2)]
+        out = _vs_accumulate!(ks, ts, c, nothing, [1.0, 2.0], [1e-3, 2e-3], si, 1, 0.0, 0.0; merge_tol=1e-3)
+        @test out === si
+        @test ks == [1.0, 2.0] && ts == [1e-3, 2e-3] && c == [false, false]
+        ks = Float64[]; ts = Float64[]; c = Bool[]
+        @test _vs_accumulate!(ks, ts, c, nothing, [1.0], [1e-3], nothing, 1, 0.0, 0.0; merge_tol=1e-3) === nothing
+        @test ks == [1.0]
+    end
+
+    @testset "later windows are merged like overlap_and_merge!" begin
+        ks, ts, c = mkleft()
+        out = _vs_accumulate!(ks, ts, c, nothing, copy(ki), copy(ti), nothing, 2, kl, kr; merge_tol=1e-3)
+        @test out === nothing
+        k2, t2, c2 = mkleft()
+        overlap_and_merge!(k2, t2, copy(ki), copy(ti), c2, kl, kr; tol=1e-3)
+        @test ks == k2 && ts == t2 && c == c2
+        @test ks == [1.0, 2.2002, 2.8, 3.5, 4.0]
+    end
+
+    @testset "states follow the retained candidates and the running list is returned" begin
+        ks, ts, c = mkleft()
+        states = [SpectraTestState(1), SpectraTestState(2), SpectraTestState(3)]
+        si = [SpectraTestState(11), SpectraTestState(12), SpectraTestState(13), SpectraTestState(14), SpectraTestState(15)]
+        out = _vs_accumulate!(ks, ts, c, states, copy(ki), copy(ti), si, 2, kl, kr; merge_tol=1e-3)
+        @test out === states
+        @test [s.id for s in out] == [1, 12, 3, 14, 15]
+        @test length(out) == length(ks)
+    end
+end
+
+const SPU_CIRCLE = CircleBilliard(1.0)
+const SPU_KERNEL = DoubleLayerPotentialSolver(2.0, SPU_CIRCLE; min_pts=16)
+const SPU_PTS = evaluate_points(SPU_KERNEL, SPU_CIRCLE, 2.0)
+const SPU_N = boundary_matrix_size(SPU_KERNEL, SPU_PTS)
+
+@testset "_beyn_window_states" begin
+    ks = [2.4, 3.8]; ts = [1e-9, 2e-9]
+    X = ComplexF64.(randn(MersenneTwister(1), SPU_N, 2))
+
+    @testset ":vectors stores the layer density on the stored points" begin
+        solver = BeynSolver(SPU_KERNEL; states=:vectors)
+        out = _beyn_window_states(solver, SPU_CIRCLE, SPU_PTS, ks, ts, X)
+        @test length(out) == 2 && all(s -> s isa BIMEigenstate, out)
+        for j in 1:2
+            @test out[j].k == ks[j] && out[j].ten == ts[j]
+            @test out[j].vec == X[:, j]                       # no symmetry: the density is stored unchanged
+            @test out[j].pts === SPU_PTS
+            @test out[j].u === nothing
+        end
+    end
+
+    @testset ":boundary stores a Rellich-normalized u and no density" begin
+        for solver in (BeynSolver(SPU_KERNEL; states=:boundary), CORKSolver(SPU_KERNEL; states=:boundary))
+            out = _beyn_window_states(solver, SPU_CIRCLE, SPU_PTS, ks, ts, X)
+            @test length(out) == 2
+            for j in 1:2
+                @test out[j].vec === nothing
+                @test out[j].k == ks[j] && out[j].ten == ts[j]
+                @test length(out[j].u) == length(SPU_PTS.xy)
+                @test _rellich(SPU_PTS, out[j].u, ks[j]) ≈ 1 rtol = 1e-10
+            end
+        end
+    end
+
+    @testset "empty window" begin
+        out = _beyn_window_states(BeynSolver(SPU_KERNEL; states=:vectors), SPU_CIRCLE, SPU_PTS, Float64[], Float64[], zeros(ComplexF64, SPU_N, 0))
+        @test isempty(out)
+    end
+end
+
+# Only `solver.kernel` is read by `_ebim_collect!`.
+struct EBIMStub
+    kernel
+end
+
+@testset "_ebim_collect!" begin
+    # three roots of one center; ki = 5.0, dki = 0.1 keeps the first two (|Re k - ki| <= dki, inclusive of the left, Im part ignored)
+    ksi = ComplexF64[4.95 + 1e-9im, 5.1, 5.3]
+    tsi = [1e-3, 2e-3, 3e-3]
+    Y = ComplexF64.(randn(MersenneTwister(2), SPU_N, 3))
+    res = (ksi, tsi, Y)
+
+    @testset "states = nothing collects levels only" begin
+        ks = ComplexF64[]; ts = Float64[]
+        @test _ebim_collect!(ks, ts, nothing, EBIMStub(SPU_KERNEL), SPU_CIRCLE, SPU_PTS, res, 5.0, 0.1) === nothing
+        @test ks == ksi[1:2] && ts == tsi[1:2]
+    end
+
+    @testset "with a states vector the u-states are appended in order" begin
+        ks = ComplexF64[]; ts = Float64[]
+        states = BIMEigenstate{ComplexF64,Float64}[]
+        _ebim_collect!(ks, ts, states, EBIMStub(SPU_KERNEL), SPU_CIRCLE, SPU_PTS, res, 5.0, 0.1)
+        @test length(states) == length(ks) == 2
+        for (j, st) in enumerate(states)
+            @test st.k == real(ksi[j]) && st.ten == tsi[j]
+            @test st.vec === nothing
+            @test _rellich(SPU_PTS, st.u, st.k) ≈ 1 rtol = 1e-10
+        end
+    end
+
+    @testset "no root in range" begin
+        ks = ComplexF64[]; ts = Float64[]
+        _ebim_collect!(ks, ts, nothing, EBIMStub(SPU_KERNEL), SPU_CIRCLE, SPU_PTS, res, 9.0, 0.1)
+        @test isempty(ks) && isempty(ts)
     end
 end

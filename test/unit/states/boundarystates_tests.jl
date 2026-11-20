@@ -5,9 +5,10 @@
 # shares one boundary grid (from the largest k of the group), one gradient-matrix evaluation and one matrix product U = G X.
 #
 # No eigen solves. States are hand-built with prescribed coefficients. References are
-#  * the per-state boundary_function(state, billiard; ppw).u, which uses the same grid when the group has one k (or one state),
-#  * the analytic gradient of rectangle plane-wave modes, u = grad(psi) . n at the returned points,
-#  * the Rellich identity rellich(unfolded) = (number of copies) * bnd_norm,
+#  * the per-state boundary_function(state, billiard; ppw).u (raw, sign arbitrary), which uses the same grid when the group has one k (or one state),
+#    the boundary state u is parallel to it: u = sign * u_raw / sqrt(bnd_norm) with the sign making the largest entry positive,
+#  * the analytic gradient of rectangle plane-wave modes, u = grad(psi) . n at the returned points, up to the positive normalization,
+#  * the Rellich identity: u is normalized after unfolding, rellich(unfolded u) = 1 and bnd_norm = (number of copies) * the fundamental raw value,
 #  * a test-local stub basis whose gradient matrices contain a NaN, for the regularisation.
 # Helper definitions use the prefix `bs_` / `BS_`.
 
@@ -15,7 +16,7 @@ using StaticArrays
 using LinearAlgebra: dot, norm, qr, Diagonal, I
 using Random: MersenneTwister
 using QuantumBilliards: _level_clusters, _pts_groups, _complex_state, _adjoint_inverse_iteration, _left_residuals, _left_null_vectors
-using QuantumBilliards: _boundary_state, _boundary_states
+using QuantumBilliards: _boundary_state, _boundary_states, _normalize_u!, _group_indices
 using QuantumBilliards: boundary_states, _rellich, get_boundary_curves_with_ignored, FourierNodes, boundary_coords,
                         _debroglie_grid_size, gradient_matrices
 
@@ -26,6 +27,13 @@ const BS_RECT = RectangleBilliard(BS_A, BS_B)
 const BS_CIRCLE = CircleBilliard(1.0)
 
 bs_j0_state(basis=FourierBessel(1; sym_x=1, sym_y=1); c=1.0) = BasisEigenstate(BS_J01, [c], 1e-12, basis)
+
+# Boundary-state u expected from the raw reference `ref = boundary_function(state, billiard)`: normalized after unfolding on
+# `copies` images (raw unfolded Rellich value = copies * ref.norm), largest-modulus entry positive.
+function bs_expected_u(ref; copies=4)
+    p = argmax(abs.(ref.u))
+    return sign(ref.u[p]) .* ref.u ./ sqrt(copies * ref.norm)
+end
 
 # Rectangle mode (m, n) as a one-wave RealPlaneWaves state, with the analytic gradient.
 function bs_rect_mode(m::Int, n::Int)
@@ -69,8 +77,10 @@ end
         @test out isa Vector{BIMEigenstate{Float64,Float64}} && length(out) == 1
         @test out[1].vec === nothing
         @test out[1].u isa Vector{Float64}
-        @test out[1].u ≈ ref.u rtol = 1e-12
-        @test out[1].bnd_norm ≈ ref.norm rtol = 1e-12
+        @test out[1].u ≈ bs_expected_u(ref) rtol = 1e-12
+        @test out[1].bnd_norm ≈ 4 * ref.norm rtol = 1e-12                # Rellich value of the raw unfolded u
+        @test _rellich(out[1].pts, out[1].u, st.k) ≈ 1 rtol = 1e-12
+        @test out[1].u[argmax(abs.(out[1].u))] > 0
         @test out[1].k === st.k && out[1].ten == st.ten
         @test length(out[1].pts.xy) == length(ref.u) == length(out[1].u)
         @test out[1].pts.s == ref.s && out[1].pts.ds == ref.ds
@@ -82,7 +92,9 @@ end
         st = BasisEigenstate(BS_J01, vec, 1e-12, basis)
         out = boundary_states([st], BS_CIRCLE)[1]
         ref = boundary_function(st, BS_CIRCLE)
-        @test out.u ≈ ref.u rtol = 1e-12
+        @test out.u ≈ bs_expected_u(ref; copies=1) rtol = 1e-12
+        @test out.bnd_norm ≈ ref.norm rtol = 1e-12
+        @test _rellich(out.pts, out.u, st.k) ≈ 1 rtol = 1e-12
         @test length(out.u) == 513
     end
 
@@ -91,7 +103,7 @@ end
         coarse = boundary_states([st], BS_CIRCLE)[1]
         fine = boundary_states([st], BS_CIRCLE; ppw=3000.0)[1]
         @test length(fine.u) > length(coarse.u)
-        @test fine.u ≈ boundary_function(st, BS_CIRCLE; ppw=3000.0).u rtol = 1e-12
+        @test fine.u ≈ bs_expected_u(boundary_function(st, BS_CIRCLE; ppw=3000.0)) rtol = 1e-12
         @test boundary_states([st], BS_CIRCLE; multithreaded=false)[1].u ≈ coarse.u rtol = 1e-12
     end
 end
@@ -107,11 +119,16 @@ end
             @test length(out.u) == length(pts.xy) == length(pts.normal) == length(pts.ds)
             # the unfolded grid is longer than the fundamental one
             @test length(pts.xy) > length(bs_grid(BS_RECT, st.k).xy)
-            # u = grad(psi) . n at the unfolded points with the unfolded normals
-            @test out.u ≈ [dot(grad(p[1], p[2]), nrm) for (p, nrm) in zip(pts.xy, pts.normal)] atol = 1e-10
-            # the Rellich integrand is reflection invariant: unfolded value is 4 copies of the stored fundamental one
-            @test _rellich(pts, out.u, st.k) ≈ 4 * out.bnd_norm rtol = 1e-9
-            @test out.u ≈ boundary_function(st, BS_RECT).u rtol = 1e-12
+            # u is parallel to grad(psi) . n at the unfolded points with the unfolded normals; normalized to unit Rellich value
+            g = [dot(grad(p[1], p[2]), nrm) for (p, nrm) in zip(pts.xy, pts.normal)]
+            @test _rellich(pts, out.u, st.k) ≈ 1 rtol = 1e-9
+            @test out.bnd_norm ≈ _rellich(pts, g, st.k) rtol = 1e-9          # Rellich value of the unnormalized unfolded u
+            @test out.u ≈ sign(g[argmax(abs.(g))]) .* g ./ sqrt(out.bnd_norm) atol = 1e-10
+            @test out.u[argmax(abs.(out.u))] > 0
+            # the Rellich integrand is reflection invariant: bnd_norm is 4 copies of the fundamental raw value
+            ref = boundary_function(st, BS_RECT)
+            @test out.bnd_norm ≈ 4 * ref.norm rtol = 1e-9
+            @test out.u ≈ bs_expected_u(ref) rtol = 1e-12
         end
     end
 end
@@ -140,10 +157,11 @@ end
 
     @testset "batch u equals the single-state result for every group" begin
         for (i, s) in enumerate(states)
-            @test out[i].u ≈ boundary_function(s, BS_CIRCLE).u rtol = 1e-10
+            @test out[i].u ≈ bs_expected_u(boundary_function(s, BS_CIRCLE)) rtol = 1e-10
+            @test _rellich(out[i].pts, out[i].u, s.k) ≈ 1 rtol = 1e-10
         end
-        @test out[3].u ≈ 2 .* out[1].u rtol = 1e-12                 # linearity in the coefficients
-        @test out[3].bnd_norm ≈ 4 * out[1].bnd_norm rtol = 1e-12    # Rellich norm is quadratic
+        @test out[3].u ≈ out[1].u rtol = 1e-12                      # normalization removes the coefficient scale
+        @test out[3].bnd_norm ≈ 4 * out[1].bnd_norm rtol = 1e-12    # Rellich value of the raw u is quadratic
     end
 
     @testset "a group uses the grid of its largest wavenumber" begin
@@ -156,10 +174,10 @@ end
         res = boundary_states([lo, hi], BS_CIRCLE)
         @test res[1].pts === res[2].pts
         @test length(res[1].u) == length(bs_grid(BS_CIRCLE, 10.0).xy)
-        # u does not depend on the wavenumber label, only on the grid: the single high-k state gives the same grid
+        # the raw u depends only on the grid; the Rellich value scales as 1/k^2, so normalizing at k = 2 instead of 10 scales u by 2/10
         lo_hi = BasisEigenstate(10.0, kb, vec1, 1e-12, basis)
-        @test res[1].u ≈ boundary_function(lo_hi, BS_CIRCLE).u rtol = 1e-10
-        @test res[2].u ≈ boundary_function(hi, BS_CIRCLE).u rtol = 1e-10
+        @test res[1].u ≈ (lo.k / hi.k) .* bs_expected_u(boundary_function(lo_hi, BS_CIRCLE); copies=1) rtol = 1e-10     # basis without symmetries: one copy
+        @test res[2].u ≈ bs_expected_u(boundary_function(hi, BS_CIRCLE); copies=1) rtol = 1e-10
     end
 end
 
@@ -171,9 +189,58 @@ end
     ref = [p[2]^2 + 2 * p[1]^2 for p in pts.xy]                                    # n . (2x, y) on the unit circle
     @test !any(isnan, out.u) && isfinite(out.bnd_norm)
     @test length(out.u) == length(ref)
-    @test out.u[BS_NAN_ROW] ≈ (ref[BS_NAN_ROW-1] + ref[BS_NAN_ROW+1]) / 2 atol = 1e-12   # mean of the neighbours
-    mask = trues(length(ref)); mask[BS_NAN_ROW] = false
-    @test out.u[mask] ≈ ref[mask] atol = 1e-12
+    ref[BS_NAN_ROW] = (ref[BS_NAN_ROW-1] + ref[BS_NAN_ROW+1]) / 2                  # regularised entry: mean of the neighbours
+    @test out.bnd_norm ≈ _rellich(out.pts, ref, st.k) rtol = 1e-9
+    @test out.u ≈ ref ./ sqrt(out.bnd_norm) atol = 1e-12                           # all-positive u: sign +
+    @test _rellich(out.pts, out.u, st.k) ≈ 1 rtol = 1e-9
+end
+
+@testset "_normalize_u!" begin
+    pts = bs_grid(BS_CIRCLE, 5.0)
+    k = 5.0
+
+    @testset "real u: unit Rellich value, largest entry positive, returns the unscaled Rellich value" begin
+        u = -2.0 .* (1 .+ 0.3 .* cos.(3 .* pts.s))                              # largest modulus entry is negative
+        u0 = copy(u)
+        r0 = _rellich(pts, u0, k)
+        v = _normalize_u!(pts, u, k)
+        @test v isa Float64
+        @test v ≈ r0 rtol = 1e-12
+        @test _rellich(pts, u, k) ≈ 1 rtol = 1e-12
+        @test u[argmax(abs.(u))] > 0
+        @test u ≈ -u0 ./ sqrt(r0) rtol = 1e-12                                  # rotation by the sign -1, then scaling
+    end
+
+    @testset "complex u: phase removed at the largest entry" begin
+        u = ComplexF64.(1 .+ 0.3 .* cos.(2 .* pts.s)) .* cis(0.7)
+        u0 = copy(u)
+        r0 = _rellich(pts, u0, k)
+        v = _normalize_u!(pts, u, k)
+        p = argmax(abs.(u0))
+        @test v ≈ r0 rtol = 1e-12
+        @test _rellich(pts, u, k) ≈ 1 rtol = 1e-12
+        @test imag(u[p]) ≈ 0 atol = 1e-12
+        @test real(u[p]) > 0
+        @test u ≈ u0 .* (conj(u0[p]) / abs(u0[p])) ./ sqrt(r0) rtol = 1e-12
+    end
+
+    @testset "already normalized u is a fixed point" begin
+        u = 1 .+ 0.3 .* cos.(3 .* pts.s)
+        _normalize_u!(pts, u, k)
+        u1 = copy(u)
+        @test _normalize_u!(pts, u, k) ≈ 1 rtol = 1e-12
+        @test u ≈ u1 rtol = 1e-12
+    end
+end
+
+@testset "_group_indices" begin
+    @test _group_indices(identity, [3, 1, 3, 2, 1, 3]) == [[1, 3, 6], [2, 5], [4]]   # first-occurrence order, increasing indices
+    @test _group_indices(isodd, [2, 4, 1, 6, 3]) == [[1, 2, 4], [3, 5]]
+    @test _group_indices(identity, [5, 5, 5]) == [[1, 2, 3]]
+    @test _group_indices(identity, [1, 2, 3]) == [[1], [2], [3]]
+    @test isempty(_group_indices(identity, Int[]))
+    @test _group_indices(x -> x[1], [(:a, 1), (:b, 2), (:a, 3)]) == [[1, 3], [2]]
+    @test _group_indices(identity, view([4, 7, 4, 7], 1:3)) == [[1, 3], [2]]         # works on views
 end
 
 @testset "boundary_states - edge cases and type stability" begin
@@ -193,7 +260,7 @@ end
         bfs = boundary_function([st1], BS_RECT)
         ref = boundary_function(st1, BS_RECT)
         @test bfs isa Vector{<:BoundaryFunction} && length(bfs) == 1
-        @test bfs[1].u ≈ ref.u rtol = 1e-12
+        @test bfs[1].u ≈ bs_expected_u(ref) rtol = 1e-12
         @test bfs[1].k === ref.k
     end
 end

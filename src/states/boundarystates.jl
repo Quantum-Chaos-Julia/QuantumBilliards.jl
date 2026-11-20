@@ -13,11 +13,11 @@ For each group the grid is the `FourierNodes` boundary grid of
 where `k` is the largest wavenumber of the group. The normal-derivative matrix
 `G = nₓ ∂ₓB + n_y ∂_yB` is formed once and applied to all coefficient vectors
 of the group with one matrix product, `U = G X`. Each column is regularized
-with [`regularize!`](@ref), its Rellich norm is evaluated with
-[`_rellich`](@ref) on the fundamental boundary, and `u` and the grid are
-unfolded onto the full boundary with `apply_symmetries_to_boundary_function`
-and `apply_symmetries_to_boundary_points`. Basis coefficients are real, so
-`u` is real.
+with [`regularize!`](@ref), `u` and the grid are unfolded onto the full
+boundary with `apply_symmetries_to_boundary_function` and
+`apply_symmetries_to_boundary_points`. The unfolded `u` is then scaled to unit
+[`_rellich`](@ref) value on the full boundary, with its largest entry made
+positive. Basis coefficients are real, so `u` is real.
 
 ## Arguments
 * `states`: Basis eigenstates, possibly from different bases or basis wavenumbers.
@@ -28,7 +28,7 @@ and `apply_symmetries_to_boundary_points`. Basis coefficients are real, so
 * `multithreaded::Bool=true`: Whether the gradient matrices are built multithreaded and the per-state post-processing runs threaded.
 
 ## Returns
-* `Vector{BIMEigenstate{K,K}}`: One state per input state, in input order, with `vec = nothing`, `u` and `bnd_norm` the Rellich value of the fundamental-boundary `u`. States of one group share `pts`.
+* `Vector{BIMEigenstate{K,K}}`: One state per input state, in input order, with `vec = nothing`, `u` Rellich-normalized on the full boundary and `bnd_norm` the Rellich value of the unnormalized unfolded `u`. States of one group share `pts`.
 """
 function boundary_states(states::AbstractVector{BasisEigenstate{K,Tt,Ba}}, billiard::AbsBilliard; ppw::Real=5.0, multithreaded::Bool=true) where {K<:Real,Tt<:Real,Ba<:AbsBasis}
     out = Vector{BIMEigenstate{K,K}}(undef, length(states))
@@ -78,8 +78,8 @@ function _boundary_states_group!(out, states::AbstractVector{BasisEigenstate{K,T
         state = states[idx[j]]
         u = U[:, j]
         regularize!(u)
-        bnd_norm = K(_rellich(pts, u, state.k))
         isnothing(symmetries) || (u = apply_symmetries_to_boundary_function(u, symmetries, basis.sym_characters))
+        bnd_norm = _normalize_u!(full_pts, u, state.k)
         out[idx[j]] = BIMEigenstate(state.k, nothing, K(state.ten), full_pts; u, bnd_norm)
     end
     return nothing
@@ -167,13 +167,19 @@ function _posthoc_left_vectors(kernel::AbsBIMSolver, pts::BoundaryPoints{T}, ks:
     return Y === nothing ? zeros(ComplexF64, 0, 0) : Y
 end
 
+# Rotate `u` so that its largest entry is real and positive, then scale it to unit Rellich value on `pts`; returns the Rellich value of the unscaled `u`.
+function _normalize_u!(pts::BoundaryPoints{T}, u::AbstractVector{<:Number}, k::Real) where {T<:Real}
+    p = findmax(abs, u)[2]
+    u .*= conj(u[p]) / abs(u[p])
+    bnd_norm = T(_rellich(pts, u, T(k)))
+    u ./= sqrt(bnd_norm)
+    return bnd_norm
+end
+
 # `u`-state of one level from a left null vector `y` of the (possibly symmetry-reduced) kernel matrix: `u = y ./ ds` expanded with the orbit phases, rotated so that its largest entry is real and positive, and Rellich-normalized.
 function _boundary_state(kernel::AbsBIMSolver, billiard::AbsBilliard, pts::BoundaryPoints{T}, k::Number, ten::Real, y::AbstractVector) where {T<:Real}
     u = Vector{Complex{T}}(_bim_normal_derivative(kernel, pts, y, billiard))
-    p = findmax(abs, u)[2]
-    u .*= conj(u[p]) / abs(u[p])
-    bnd_norm = T(_rellich(pts, u, T(real(k))))
-    u ./= sqrt(bnd_norm)
+    bnd_norm = _normalize_u!(pts, u, T(real(k)))
     return BIMEigenstate{Complex{T},T}(T(real(k)), T(imag(k)), nothing, T(ten), pts, u, bnd_norm)
 end
 

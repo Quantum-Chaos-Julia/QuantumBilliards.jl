@@ -57,6 +57,7 @@ end
     run_file("integration/states/spectrum_states.jl")
     run_file("integration/states/boundary_functions_wavenumber.jl")
     run_file("integration/states/boundary_functions_spectra.jl")
+    run_file("integration/states/boundary_u_cross_solver.jl")
 end
 
 @group "docs" begin

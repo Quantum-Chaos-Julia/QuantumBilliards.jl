@@ -126,6 +126,14 @@ bf_bim_state(k, u, pts) = BIMEigenstate{Float64,Float64}(k, 0.0, nothing, 1e-9, 
 # The legacy tuple of a BoundaryFunction, read from the fields (u, s, norm).
 bf_tuple(bf) = (bf.u, bf.s, bf.norm)
 
+# Batch boundary_function of basis states returns the Rellich-normalized u of the 4-fold unfolded boundary (largest entry positive,
+# norm = 4 * the fundamental value); the single-state boundary_function returns the raw u. `bf_normalized_u(ref)` is the
+# batch u expected from the raw reference `ref`.
+function bf_normalized_u(ref; copies=4)
+    p = argmax(abs.(ref.u))
+    return sign(ref.u[p]) .* ref.u ./ sqrt(copies * ref.norm)
+end
+
 # Boundary points (positions, normals, s, ds) of a basis state, rebuilt from the billiard and basis in the way the basis
 # boundary_function samples them: FourierNodes, N = _debroglie_grid_size, unfolded by the basis symmetries. A BoundaryFunction
 # stores only u, s and ds, so the positions and normals needed by the identities below come from here.
@@ -838,12 +846,20 @@ end
         bfs = boundary_function(data)
         @test bfs isa Vector{BoundaryFunction{Float64,Float64}} && length(bfs) == 2
         ref0 = boundary_function(s0, BF_CIRCLE)
-        @test bf_tuple(bfs[1]) == bf_tuple(ref0) && bfs[1].L == ref0.L && bfs[1].ds == ref0.ds
-        @test bf_tuple(bfs[2]) == bf_tuple(bf1)
+        @test bfs[1].u ≈ bf_normalized_u(ref0) rtol = 1e-10
+        @test bfs[1].s == ref0.s
+        @test bfs[1].norm ≈ 4 * ref0.norm rtol = 1e-10
+        @test bfs[1].L == ref0.L
+        @test bfs[1].ds == ref0.ds
+        @test bfs[2].u ≈ bf_normalized_u(ref1) rtol = 1e-10
+        @test bfs[2].s == bf1.s
+        @test bfs[2].norm ≈ 4 * bf1.norm rtol = 1e-10
         @test bfs[1].k === s0.k && bfs[2].k === s1.k                      # k of the own state of every object
         bfd1 = boundary_function(data[1])                                  # data of one state: a vector with one object
         @test bfd1 isa Vector{<:BoundaryFunction} && length(bfd1) == 1
-        @test bf_tuple(bfd1[1]) == bf_tuple(ref0)
+        @test bfd1[1].u ≈ bf_normalized_u(ref0) rtol = 1e-10
+        @test bfd1[1].s == ref0.s
+        @test bfd1[1].norm ≈ 4 * ref0.norm rtol = 1e-10
         @test boundary_function(data, 1; ppw=3000.0).u == boundary_function(s0, BF_CIRCLE; ppw=3000.0).u
 
         @test momentum_function(data, 2) == momentum_function(s1, BF_CIRCLE)
@@ -874,9 +890,9 @@ end
         @test bfs isa Vector{<:BoundaryFunction} && length(bfs) == 2
         for (bf, s) in zip(bfs, (s0, s1))
             ref = boundary_function(s, BF_CIRCLE)
-            @test bf.u ≈ ref.u rtol = 1e-10
+            @test bf.u ≈ bf_normalized_u(ref) rtol = 1e-10        # normalized, positive largest entry; parallel to the raw reference
             @test bf.k === s.k
-            @test bf.norm ≈ ref.norm rtol = 1e-10
+            @test bf.norm ≈ 4 * ref.norm rtol = 1e-10             # Rellich value of the unnormalized unfolded u
             @test bf.ds == ref.ds && bf.L == ref.L && bf.outer == ref.outer
         end
         @test isempty(boundary_function(typeof(s0)[], BF_CIRCLE))
