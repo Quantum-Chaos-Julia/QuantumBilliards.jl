@@ -1,7 +1,7 @@
 # Unit tests for
-#   src/states/husimifunctions.jl   (antisym_vec, _normalize_husimi!, _is_global_phase_real, _husimi_uniform_arclength_grid,
-#                                    _husimi_symmetric_window, the two quadratures _husimi_uniform_arclength and the general
-#                                    husimi_function(k, s, ds, u, L[, qs, ps]), the BoundaryPoints form, the eigenstate forms
+#   src/states/husimifunctions.jl   (antisym_vec, _normalize_husimi!, _is_global_phase_real, the phase-factored explicit-grid
+#                                    husimi_function(k, s, ds, u, L, qs, ps), the automatic-grid form
+#                                    husimi_function(k, s, ds, u, L), the BoundaryPoints form, the eigenstate forms
 #                                    for basis states and BIM states, the batched forms, the SpectralData wrappers, the
 #                                    outer-loop selection of husimi_function(boundary_function(...)) through bf.outer /
 #                                    _outer_range, and _collect_functions)
@@ -39,13 +39,12 @@
 using StaticArrays
 using LinearAlgebra: norm, dot
 using SpecialFunctions: besselj
-using QuantumBilliards: antisym_vec, _normalize_husimi!, _is_global_phase_real, _husimi_uniform_arclength_grid,
-                        _husimi_symmetric_window, _husimi_uniform_arclength, _outer_range, _collect_functions
+using QuantumBilliards: antisym_vec, _normalize_husimi!, _is_global_phase_real, _outer_range, _collect_functions
 
 const HU_J01 = 2.404825557695773       # first zero of J0
 const HU_J02 = 5.520078110286311       # second zero of J0
 const HU_J11 = 3.8317059702075125      # first zero of J1
-const HU_K = 20.0                      # sigma = 1/sqrt(k) = 0.22, window w sigma = 1.56 < L/2: fast uniform path
+const HU_K = 20.0                      # sigma = 1/sqrt(k) = 0.22, window w sigma = 1.56 < L/2: one periodic image suffices
 const HU_P0 = 0.5                      # k * p0 = 10, an integer number of periods on the unit circle
 const HU_CIRCLE = CircleBilliard(1.0)
 
@@ -137,41 +136,9 @@ end
     @test _is_global_phase_real([1.0, 2.0, 3.0] .+ 1e-3im; rtol=1e-2)
 end
 
-@testset "_husimi_uniform_arclength_grid" begin
-    s = (0:9) .* 0.1; ds = fill(0.1, 10)
-    @test _husimi_uniform_arclength_grid(s, ds)
-    s2 = collect(s); s2[5] += 1e-3
-    @test !_husimi_uniform_arclength_grid(s2, ds)
-    ds2 = copy(ds); ds2[3] = 0.05
-    @test !_husimi_uniform_arclength_grid(s, ds2)
-    ds3 = copy(ds); ds3[1] = 0.0                                      # a zero weight (as at the curve ends of boundary nodes)
-    @test !_husimi_uniform_arclength_grid(s, ds3)
-    @test _husimi_uniform_arclength_grid(s2, ds; rtol=1e-2)
-    @test _husimi_uniform_arclength_grid(Float32.(s), fill(0.1f0, 10))
-    sg, dsg, _ = hu_graded_grid(64)
-    @test !_husimi_uniform_arclength_grid(sg, dsg)
-end
-
-@testset "_husimi_symmetric_window" begin
-    s = (0:9) .* 0.1; ds = fill(0.1, 10)
-    x, dx, idx = _husimi_symmetric_window(s, ds, 0.35)                # nside = 1 + floor(0.35 / 0.1) = 4 nodes on each side
-    @test idx == 4
-    @test x ≈ [-0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3]
-    @test dx == fill(0.1, 7)
-    @test x == -reverse(x)
-    x, dx, idx = _husimi_symmetric_window(s, ds, 100.0)               # a wide window is capped at the grid size
-    @test idx == 10 && length(x) == length(dx) == 19
-    x, _, idx = _husimi_symmetric_window(s, ds, 0.0)                  # zero width: only the centre node
-    @test idx == 1 && x == [0.0]
-    dsv = collect(1.0:10.0)
-    _, dx, _ = _husimi_symmetric_window(s, dsv, 0.25)                 # weights are mirrored around the centre node
-    @test dx == [3.0, 2.0, 1.0, 2.0, 3.0]
-end
-
-@testset "husimi_function(k, s, ds, u, L) - constant boundary function (fast uniform path)" begin
+@testset "husimi_function(k, s, ds, u, L) - constant boundary function, uniform nodes" begin
     k = HU_K
     s, ds, L = hu_uniform_grid(Float64, 256)
-    @test _husimi_uniform_arclength_grid(s, ds) && 7 / sqrt(k) < L / 2        # the fast path is selected
     u = ones(256)
 
     @testset "analytic Gaussian in p, independent of q" begin
@@ -181,14 +148,14 @@ end
         @test hu_err(H, hu_expected((q, p) -> hu_const_density(k, p), qs, ps)) < 1e-8
     end
 
-    @testset "grids: signed momentum grid in [-1, 1] with p = 0 at the centre, boundary positions on the boundary" begin
+    @testset "grids: signed momentum grid in [-1, 1] with p = 0 at the centre, evenly spaced boundary positions" begin
         H, qs, ps = husimi_function(k, s, ds, u, L)
         np = ceil(Int, 10 * sqrt(k))                                  # c = 10 samples per sigma in p
         @test length(ps) == 2np + 1 && ps[1] ≈ -1 && ps[end] ≈ 1
         @test ps ≈ -reverse(ps) atol = 1e-14
-        @test issorted(qs) && qs[1] >= 0 && qs[end] < L
+        @test issorted(qs) && qs[1] == 0 && qs[end] < L
         σ = 1 / sqrt(k)
-        @test all(diff(qs) .>= ds[1] - 1e-12) && maximum(diff(qs)) <= σ / 10 + ds[1]
+        @test all(diff(qs) .≈ qs[2] - qs[1]) && qs[2] - qs[1] <= σ / 10
         @test eltype(H) == Float64 && eltype(qs) == Float64 && eltype(ps) == Float64
     end
 
@@ -277,7 +244,7 @@ end
     s, ds, L = hu_uniform_grid(Float64, 256)
     u = cos.(k * p0 .* s) .+ 0.4 .* cos.(2k * p0 .* s .+ 0.3)
     H, qs, _ = husimi_function(k, s, ds, u, L)
-    @test length(qs) == 256                                           # one boundary position per node at this k
+    @test length(qs) == ceil(Int, L * 10 * sqrt(k))                   # evenly spaced grid, independent of the node positions
 
     @testset "real scale factors and a global complex phase do not change the density" begin
         @test husimi_function(k, s, ds, -3.7 .* u, L).H ≈ H atol = 1e-12 * maximum(H)
@@ -285,13 +252,17 @@ end
         @test Hp ≈ H atol = 1e-12 * maximum(H)
     end
 
-    @testset "a cyclic shift of u by n nodes shifts the density by n boundary positions" begin
-        Hs, _, _ = husimi_function(k, s, ds, circshift(u, 17), L)
-        @test Hs ≈ circshift(H, (17, 0)) atol = 1e-12 * maximum(H)
+    @testset "a cyclic shift of u by n nodes shifts the density by n node spacings in q" begin
+        # u'_j = u_{j-n}  =>  h'(q) = h(q - n ds)
+        n = 17
+        ps = collect(range(0, 1; length=21))
+        Hs, _, _ = husimi_function(k, s, ds, circshift(u, n), L, qs, ps)
+        Hr, _, _ = husimi_function(k, s, ds, u, L, qs .- n * ds[1], ps)
+        @test hu_err(Hs, Hr) < 1e-10
     end
 end
 
-@testset "husimi_function(k, s, ds, u, L, qs, ps) - prescribed grids (general quadrature)" begin
+@testset "husimi_function(k, s, ds, u, L, qs, ps) - prescribed grids (analytic densities)" begin
     k = HU_K; p0 = HU_P0
     s, ds, L = hu_uniform_grid(Float64, 256)
     u = cos.(k * p0 .* s)
@@ -320,12 +291,6 @@ end
         @test H[3, :] ≈ H[1, :] atol = 1e-12 * maximum(H)
     end
 
-    @testset "agrees with the fast uniform evaluator on the same grid" begin
-        Hf, qf, pf = _husimi_uniform_arclength(k, s, ds, u, L; full_p=true)
-        Hg, _, _ = husimi_function(k, s, ds, u, L, qf, pf; full_p=true)
-        @test Hg ≈ Hf atol = 1e-10 * maximum(Hf)
-    end
-
     @testset "the Gaussian window is not truncated near q = L" begin
         H, qo, po = husimi_function(k, s, ds, u, L, [5.7], ps; full_p=true)
         @test hu_err(H, hu_expected(f, qo, po)) < 1e-8
@@ -341,10 +306,237 @@ end
     end
 end
 
-@testset "husimi_function - non-uniform arclength grid (general path)" begin
+# Naive reference of the explicit-grid evaluator: the direct window sum
+#   h(q, p) = sum_j u_j ds_j exp(-k d_j^2 / 2) exp(-i k p d_j),  d_j = s_j + m L - q,  q = mod(q, L),
+# over all periodic images m and all nodes with |d_j| <= w / sqrt(k), H = |h|^2 normalised to sum 1. Evaluated in Float64.
+# The momentum grid is used as given (for full_p = false the caller passes the reflected grid antisym_vec(ps)).
+function hu_naive(k, s, ds, u, L, qs, ps; w=7.0)
+    k, L = Float64(k), Float64(L)
+    s, ds, qs, ps = Float64.(s), Float64.(ds), Float64.(qs), Float64.(ps)
+    u = Complex{Float64}.(u)
+    width = w / sqrt(k)
+    nc = ceil(Int, width / L) + 2                                     # more images than needed, the window cut decides
+    H = zeros(length(qs), length(ps))
+    for (iq, q0) in enumerate(qs), (ip, p) in enumerate(ps)
+        q = mod(q0, L)
+        h = 0.0im
+        for m in -nc:nc, j in eachindex(s)
+            d = s[j] + m * L - q
+            abs(d) <= width || continue
+            h += u[j] * ds[j] * exp(-k * d^2 / 2) * cis(-k * p * d)
+        end
+        H[iq, ip] = abs2(h)
+    end
+    return H ./ sum(H)
+end
+
+# Graded periodic nodes on [0, L): s(t) = L (t - sin(2 pi t) / (2 pi)), ds = s'(t) / N.
+function hu_graded_nodes(L, N)
+    t = collect(0:N-1) ./ N
+    return L .* (t .- sin.(2pi .* t) ./ (2pi)), L .* (1 .- cos.(2pi .* t)) ./ N
+end
+
+@testset "husimi_function(k, s, ds, u, L, qs, ps) - against the direct window sum" begin
+    k = 20.0
+
+    @testset "uniform nodes, real u, full_p = false" begin
+        s, ds, L = hu_uniform_grid(Float64, 64)
+        u = cos.(10 .* s) .+ 0.3 .* sin.(3 .* s)
+        qs = [0.0, 0.37, 1.9, 3.14, 5.0, 6.0]
+        ps = collect(range(0, 1; length=9))
+        H, qo, po = husimi_function(k, s, ds, u, L, qs, ps)
+        @test qo == qs && po ≈ antisym_vec(ps)
+        @test size(H) == (6, 17)
+        @test sum(H) ≈ 1 rtol = 1e-10
+        E = hu_naive(k, s, ds, u, L, qs, po)
+        @test hu_err(H, E) < 1e-10
+    end
+
+    @testset "graded nodes, complex u, full_p = true" begin
+        s, ds = hu_graded_nodes(2pi, 80)
+        L = 2pi
+        u = exp.(1im .* (7 .* s .+ 0.4 .* sin.(s))) .* (1 .+ 0.2 .* cos.(s))
+        qs = [0.2, 1.0, 2.7, 4.4, 6.1]
+        ps = collect(range(-1, 1; length=15))
+        H, qo, po = husimi_function(k, s, ds, u, L, qs, ps; full_p=true)
+        @test qo == qs && po == ps
+        @test sum(H) ≈ 1 rtol = 1e-10
+        @test hu_err(H, hu_naive(k, s, ds, u, L, qs, ps)) < 1e-10
+        @test maximum(abs, H .- reverse(H; dims=2)) > 1e-3 * maximum(H)     # genuinely asymmetric in p: the test is not trivial
+    end
+
+    @testset "full_p = false and full_p = true agree for a real u" begin
+        s, ds = hu_graded_nodes(2pi, 80)
+        L = 2pi
+        u = cos.(5 .* s) .+ 0.5 .* cos.(2 .* s .+ 0.3)
+        qs = [0.1, 1.3, 2.2, 5.9]
+        ps_half = collect(range(0, 1; length=11))
+        Hh, _, ph = husimi_function(k, s, ds, u, L, qs, ps_half; full_p=false)
+        Hf, _, pf = husimi_function(k, s, ds, u, L, qs, antisym_vec(ps_half); full_p=true)
+        @test ph ≈ pf
+        @test hu_err(Hh, Hf) < 1e-10
+        @test Hh ≈ reverse(Hh; dims=2) atol = 1e-12 * maximum(Hh)
+        @test hu_err(Hh, hu_naive(k, s, ds, u, L, qs, ph)) < 1e-10
+        @test sum(Hh) ≈ 1 rtol = 1e-10
+        @test sum(Hf) ≈ 1 rtol = 1e-10
+    end
+
+    @testset "zero-weight nodes (seam-like) contribute nothing" begin
+        s, ds, L = hu_uniform_grid(Float64, 64)
+        ds[[1, 2, 32, 64]] .= 0.0
+        u = cos.(10 .* s) .+ 0.2
+        qs = [0.0, 0.2, 3.1, 6.2]
+        ps = collect(range(0, 1; length=9))
+        H, _, po = husimi_function(k, s, ds, u, L, qs, ps)
+        @test sum(H) ≈ 1 rtol = 1e-10
+        @test hu_err(H, hu_naive(k, s, ds, u, L, qs, po)) < 1e-10
+        # a zero-weight node is the same as a removed one, whatever its u is
+        keep = ds .> 0
+        u2 = copy(u); u2[.!keep] .= 1e6
+        H2, _, _ = husimi_function(k, s, ds, u2, L, qs, ps)
+        @test H2 ≈ H atol = 1e-10 * maximum(H)
+        H3, _, _ = husimi_function(k, s[keep], ds[keep], u[keep], L, qs, ps)
+        @test H3 ≈ H atol = 1e-10 * maximum(H)
+    end
+
+    @testset "seam: q near 0 and near L, and q outside [0, L)" begin
+        s, ds = hu_graded_nodes(2pi, 80)
+        L = 2pi
+        u = cos.(10 .* s) .+ 0.3 .* cos.(3 .* s)
+        qs = [0.0, 0.05, L - 0.05, L + 0.1, -0.1, L, 2L + 0.3]            # window w / sqrt(k) = 1.56 crosses the seam
+        ps = collect(range(-1, 1; length=11))
+        H, _, _ = husimi_function(k, s, ds, u, L, qs, ps; full_p=true)
+        @test sum(H) ≈ 1 rtol = 1e-10
+        @test hu_err(H, hu_naive(k, s, ds, u, L, qs, ps)) < 1e-10
+        # q is periodic: q + L, q - L and q give the same row up to the common normalisation
+        Hp, _, _ = husimi_function(k, s, ds, u, L, [0.1, 0.1 + L, 0.1 - L], ps; full_p=true)
+        @test Hp[2, :] ≈ Hp[1, :] atol = 1e-10 * maximum(Hp)
+        @test Hp[3, :] ≈ Hp[1, :] atol = 1e-10 * maximum(Hp)
+    end
+
+    @testset "small k: several periodic copies (ncopies > 1)" begin
+        k = 0.5; L = 4.0                                              # w / sqrt(k) = 9.9 > 2 L: ncopies = 3
+        s, ds = hu_graded_nodes(L, 40)
+        u = cos.(2pi / L .* 2 .* s) .+ 0.4
+        qs = [0.0, 0.7, 2.0, 3.9, 4.3]
+        ps = collect(range(0, 1; length=9))
+        H, _, po = husimi_function(k, s, ds, u, L, qs, ps)
+        @test sum(H) ≈ 1 rtol = 1e-10
+        @test hu_err(H, hu_naive(k, s, ds, u, L, qs, po)) < 1e-10
+        Hc, _, pc = husimi_function(k, s, ds, exp.(1im .* 1.3 .* s), L, qs, collect(range(-1, 1; length=9)); full_p=true)
+        @test hu_err(Hc, hu_naive(k, s, ds, exp.(1im .* 1.3 .* s), L, qs, pc)) < 1e-10
+        Hw, _, pw = husimi_function(k, s, ds, u, L, qs, ps; w=3.0)          # w / sqrt(k) = 4.2: ncopies = 2
+        @test hu_err(Hw, hu_naive(k, s, ds, u, L, qs, pw; w=3.0)) < 1e-10
+    end
+
+    @testset "w selects the truncation window" begin
+        s, ds = hu_graded_nodes(2pi, 80)
+        L = 2pi
+        u = cos.(10 .* s)
+        qs = [0.5, 2.5]; ps = collect(range(0, 1; length=7))
+        H, _, po = husimi_function(k, s, ds, u, L, qs, ps; w=2.0)
+        @test hu_err(H, hu_naive(k, s, ds, u, L, qs, po; w=2.0)) < 1e-10
+        Hd, _, _ = husimi_function(k, s, ds, u, L, qs, ps)
+        @test hu_err(H, Hd) > 1e-6                                    # the window matters
+    end
+
+    @testset "type stability and Float32" begin
+        s, ds, L = hu_uniform_grid(Float64, 64)
+        u = cos.(10 .* s)
+        qs = [0.3, 1.1, 5.9]; ps = collect(range(0, 1; length=5))
+        @inferred husimi_function(k, s, ds, u, L, qs, ps)
+        @inferred husimi_function(k, s, ds, ComplexF64.(u), L, qs, ps; full_p=true)
+        hf = husimi_function(k, s, ds, u, L, qs, ps)
+        @test hf isa HusimiFunction{Float64}
+
+        s32, ds32, L32 = hu_uniform_grid(Float32, 64)
+        u32 = cos.(10f0 .* s32)
+        qs32 = Float32[0.3, 1.1, 5.9]; ps32 = collect(range(0f0, 1f0; length=5))
+        k32 = 20.0f0
+        @inferred husimi_function(k32, s32, ds32, u32, L32, qs32, ps32)
+        h32 = husimi_function(k32, s32, ds32, u32, L32, qs32, ps32)
+        @test h32 isa HusimiFunction{Float32}
+        @test h32.H isa Matrix{Float32} && h32.qs isa Vector{Float32} && h32.ps isa Vector{Float32}
+        @test sum(h32.H) ≈ 1 rtol = 1e-4
+        @test hu_err(Float64.(h32.H), hu_naive(k32, s32, ds32, u32, L32, qs32, h32.ps)) < 1e-4
+    end
+
+    @testset "argument checks of full_p = false" begin
+        s, ds, L = hu_uniform_grid(Float64, 64)
+        u = cos.(10 .* s)
+        qs = [0.3, 1.1]
+        @test_throws ArgumentError husimi_function(k, s, ds, u, L, qs, collect(range(-1, 1; length=5)))          # negative momenta
+        @test_throws ArgumentError husimi_function(k, s, ds, u, L, qs, collect(range(0.1, 1; length=5)))        # not starting at 0
+        @test_throws ArgumentError husimi_function(k, s, ds, exp.(1im .* 10 .* s), L, qs, collect(range(0, 1; length=5)))   # complex u
+        @test sum(husimi_function(k, s, ds, exp.(1im .* 10 .* s), L, qs, collect(range(-1, 1; length=5)); full_p=true).H) ≈ 1
+    end
+end
+
+@testset "husimi_function(k, s, ds, u, L) - automatic evenly spaced grid" begin
+    @testset "uniform nodes, real u: grid shapes, full_p = false" begin
+        k = 20.0; c = 10.0
+        s, ds, L = hu_uniform_grid(Float64, 64)                       # nodes are not the q grid
+        u = cos.(10 .* s)
+        H, qs, ps = husimi_function(k, s, ds, u, L)
+        nq = max(2, ceil(Int, L * c * sqrt(k))); np = max(1, ceil(Int, c * sqrt(k)))
+        @test qs ≈ collect(range(0, L; length=nq + 1))[1:end-1]
+        @test length(qs) == nq && qs[1] == 0 && qs[end] < L
+        @test ps ≈ antisym_vec(collect(range(0, 1; length=np + 1)))
+        @test size(H) == (nq, 2np + 1)
+        @test sum(H) ≈ 1 rtol = 1e-10
+        @test length(qs) != length(s)
+        @test hu_err(H, hu_naive(k, s, ds, u, L, qs, ps)) < 1e-10
+    end
+
+    @testset "graded nodes, complex u: full_p escalates, signed grid in [-1, 1]" begin
+        k = 9.0; c = 4.0
+        s, ds = hu_graded_nodes(2pi, 50)
+        L = 2pi
+        u = exp.(1im .* 3 .* s)
+        H, qs, ps = husimi_function(k, s, ds, u, L; c=c)
+        nq = ceil(Int, L * c * sqrt(k)); np = ceil(Int, c * sqrt(k))
+        @test length(qs) == nq && all(diff(qs) .≈ L / nq)
+        @test ps ≈ collect(range(-1, 1; length=2np + 1))
+        @test size(H) == (nq, 2np + 1)
+        @test hu_err(H, hu_naive(k, s, ds, u, L, qs, ps)) < 1e-10
+        Hf, qf, pf = husimi_function(k, s, ds, real.(u), L; c=c, full_p=true)
+        @test pf ≈ ps && qf == qs
+        @test hu_err(Hf, hu_naive(k, s, ds, real.(u), L, qf, pf)) < 1e-10
+    end
+
+    @testset "minimum grid sizes: nq >= 2, np >= 1" begin
+        s, ds, L = hu_uniform_grid(Float64, 16)
+        L = 0.1; s = s ./ (2pi) .* L; ds = ds ./ (2pi) .* L
+        H, qs, ps = husimi_function(1.0, s, ds, ones(16), L; c=0.5)       # ceil(0.1 * 0.5) = 1 -> nq = 2, np = ceil(0.5) = 1
+        @test length(qs) == 2 && qs ≈ [0.0, 0.05]
+        @test ps ≈ [-1.0, 0.0, 1.0] && size(H) == (2, 3)
+        @test sum(H) ≈ 1 rtol = 1e-10
+    end
+
+    @testset "equals the explicit-grid method on the same grid" begin
+        k = 20.0
+        s, ds = hu_graded_nodes(2pi, 60)
+        L = 2pi
+        u = cos.(10 .* s)
+        hf = husimi_function(k, s, ds, u, L; c=5.0, w=6.0)
+        ref = husimi_function(k, s, ds, u, L, hf.qs, hf.ps[length(hf.ps)÷2+1:end]; w=6.0)
+        @test hf.H == ref.H && hf.qs == ref.qs && hf.ps == ref.ps && hf.k === k
+    end
+
+    @testset "Float32 grids" begin
+        s, ds, L = hu_uniform_grid(Float32, 64)
+        hf = husimi_function(20.0f0, s, ds, cos.(10f0 .* s), L)
+        @test hf isa HusimiFunction{Float32}
+        @test hf.qs isa Vector{Float32} && hf.ps isa Vector{Float32}
+        nq = ceil(Int, L * 10 * sqrt(20.0f0))
+        @test length(hf.qs) == nq && hf.qs[1] == 0f0 && hf.qs[end] < L
+        @test sum(hf.H) ≈ 1 rtol = 1e-4
+    end
+end
+
+@testset "husimi_function - non-uniform arclength grid" begin
     k = HU_K; p0 = HU_P0
     s, ds, L = hu_graded_grid(512)
-    @test !_husimi_uniform_arclength_grid(s, ds)
 
     @testset "constant u: analytic Gaussian; grids are equispaced in q with spacing <= sigma / c" begin
         H, qs, ps = husimi_function(k, s, ds, ones(512), L)
@@ -365,12 +557,12 @@ end
     end
 end
 
-@testset "husimi_function - window wider than half the period uses the general path" begin
+@testset "husimi_function - window wider than half the period" begin
     k = 4.0; p0 = HU_P0                                               # sigma = 0.5, w sigma = 3.5 > L / 2, k p0 = 2
     s, ds, L = hu_uniform_grid(Float64, 256)
-    @test _husimi_uniform_arclength_grid(s, ds) && 7 / sqrt(k) >= L / 2
+    @test 7 / sqrt(k) >= L / 2
     H, qs, ps = husimi_function(k, s, ds, cos.(k * p0 .* s), L)
-    @test qs[1] == 0 && all(diff(qs) .≈ qs[2] - qs[1])                # the general path builds equispaced boundary positions
+    @test qs[1] == 0 && all(diff(qs) .≈ qs[2] - qs[1])                # equispaced boundary positions
     hu_check_density(H, qs, ps)
     @test hu_err(H, hu_expected((q, p) -> hu_cos_density(k, p0, q, p), qs, ps)) < 1e-6
     Hc, qc, pc = husimi_function(k, s, ds, ones(256), L)
@@ -408,7 +600,7 @@ end
     u = cos.(k * HU_P0 .* s)
     qs = [0.3, 1.1, 2.9]; ps = collect(range(-1, 1; length=21))
 
-    @testset "automatic grid, fast uniform path" begin
+    @testset "automatic grid, uniform nodes" begin
         hf = husimi_function(k, s, ds, u, L)
         @test hf isa HusimiFunction{Float64} && hf.k === k
         @test hf.H isa Matrix{Float64} && hf.qs isa Vector{Float64} && hf.ps isa Vector{Float64}
@@ -417,7 +609,7 @@ end
         @test H === hf.H && qs0 === hf.qs && ps0 === hf.ps
     end
 
-    @testset "automatic grid, general path (graded grid)" begin
+    @testset "automatic grid, graded nodes" begin
         sg, dsg, Lg = hu_graded_grid(512)
         hf = husimi_function(k, sg, dsg, cos.(k * HU_P0 .* sg), Lg)
         @test hf isa HusimiFunction{Float64} && hf.k === k
@@ -549,17 +741,16 @@ end
 end
 
 @testset "husimi_function(::BIMEigenstate)" begin
-    @testset "uniform grid, J02 mode: constant u, fast path" begin
+    @testset "uniform grid, J02 mode: constant u" begin
         s, ds, L = hu_uniform_grid(Float64, 256)
         st = hu_bim_state(HU_J02, fill(-HU_J02 * besselj(1, HU_J02), 256), hu_pts(s, ds))
-        @test 7 / sqrt(st.k) < L / 2 && _husimi_uniform_arclength_grid(s, ds)
         H, qs, ps = husimi_function(st, HU_CIRCLE, hu_SweepStub())
         hu_check_density(H, qs, ps)
         hu_check_constant(H, qs, ps, st.k; var=false)                 # exp(-k) at |p| = 1 is not negligible for k = 5.5: <p^2> is truncated
         @test husimi_function(st, HU_CIRCLE, hu_SweepStub(); full_p=true).H ≈ H atol = 1e-12 * maximum(H)
     end
 
-    @testset "graded grid, J01 mode: constant u, general path" begin
+    @testset "graded grid, J01 mode: constant u" begin
         s, ds, _ = hu_graded_grid(512)
         st = hu_bim_state(HU_J01, fill(-HU_J01 * besselj(1, HU_J01), 512), hu_pts(s, ds))
         H, qs, ps = husimi_function(st, HU_CIRCLE, hu_SweepStub())

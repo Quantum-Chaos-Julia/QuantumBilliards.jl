@@ -36,39 +36,6 @@ function antisym_vec(x::AbstractVector{T}) where {T}
     return vcat(reverse(-x[2:end]),x)
 end
 
-# Check whether s and ds define a sufficiently uniform physical-arclength grid.
-function _husimi_uniform_arclength_grid(s::AbstractVector{T}, ds::AbstractVector{T}; rtol::Real=sqrt(eps(T))) where {T<:Real}
-    N = length(s)
-    Δs = s[2]-s[1]
-    atol_s = T(rtol)*max(one(T),abs(Δs))
-    atol_ds = T(rtol)*max(one(T),abs(ds[1]))
-    @inbounds for i in 2:N-1
-        isapprox(s[i+1]-s[i],Δs;rtol=rtol,atol=atol_s) || return false
-    end
-    @inbounds for i in 2:N
-        isapprox(ds[i],ds[1];rtol=rtol,atol=atol_ds) || return false
-    end
-    return true
-end
-
-# Construct the symmetric relative-arclength stencil for the uniform evaluator.
-function _husimi_symmetric_window(s::AbstractVector{T}, ds::AbstractVector{T}, width::Real) where {T<:Real}
-    N = length(s)
-    Δs = s[2]-s[1]
-    nside = min(N,1+floor(Int,T(width)/Δs))
-    x = Vector{T}(undef,nside)
-    dx = Vector{T}(undef,nside)
-    s0 = s[1]
-    @inbounds for i in 1:nside
-        x[i] = s[i]-s0
-        dx[i] = ds[i]
-    end
-    idx = nside
-    x = antisym_vec(x)
-    dx = vcat(reverse(dx[2:end]),dx)
-    return x,dx,idx
-end
-
 # Normalize a discrete Poincare-Husimi density
 @inline function _normalize_husimi!(H::AbstractMatrix{T}) where {T<:Real}
     H ./= sum(H)
@@ -114,52 +81,74 @@ The returned Poincare-Husimi density is normalized so that `sum(H)=1`.
 * [`HusimiFunction`](@ref) with `H` the normalized Poincare-Husimi density indexed as `H[q,p]`, `qs` the boundary-position grid, `ps` the full signed momentum grid and `k` the eigenwavenumber. It iterates as `(H, qs, ps)`.
 """
 function husimi_function(k::T, s::AbstractVector{T}, ds::AbstractVector{T}, u::AbstractVector{Num}, L::T, qs::AbstractVector{T}, ps::AbstractVector{T}; w::Real=7.0, full_p::Bool=false) where {T<:Real,Num<:Number}
-    # For each boundary position `q`, the coherent-state amplitude is approximated by
+    # The coherent-state amplitude is
     # `h(q,p) = Σⱼ uⱼ exp[-k(sⱼ-q)²/2] exp[-ikp(sⱼ-q)] dsⱼ`,
-    # with only points satisfying `|sⱼ-q| ≤ w/√k` retained. Periodicity is handled
-    # by extending the boundary coordinates and data by `n = max(1, ⌈w/(√k L)⌉)` copies
-    # in either direction, with `q` reduced to `[0, L)`.
-    # For fixed `q`, the Gaussian envelope, quadrature weights and boundary function
-    # are combined once and reused for every momentum. This supports arbitrary
-    # physical-arclength discretizations.
+    # with only points satisfying `|sⱼ-q| ≤ w/√k` retained. Only `|h|²` is used, so the
+    # factor `exp(ikpq)` drops out and the momentum dependence of the window sum factorizes:
+    # `|h(q,p)|² = |Σⱼ gⱼ(q) Fⱼₚ|²` with `gⱼ = exp[-k(sⱼ-q)²/2]` and `Fⱼₚ = uⱼ dsⱼ exp(-ikp sⱼ)`.
+    # `F` costs one `sincos` per node and momentum; the window sum is then multiply-adds only.
+    # Periodicity is handled by the boundary copies `sⱼ+mL`, `|m| ≤ max(1, ⌈w/(√k L)⌉)`, each
+    # contributing a constant phase `exp(-ikpmL)` to its run of window nodes; `q` is reduced to `[0, L)`.
+    # This supports arbitrary physical-arclength discretizations, including zero-weight nodes.
     if !full_p
         (iszero(first(ps)) && all(p->p>=zero(T),ps)) || throw(ArgumentError("full_p=false requires a nonnegative momentum grid starting at p=0"))
         _is_global_phase_real(u) || throw(ArgumentError("full_p=false requires u to be real up to a global phase; pass full_p=true for genuinely complex boundary functions"))
     end
     width = T(w)/sqrt(k)
     ncopies = max(1,ceil(Int,width/L))
-    s_ext = reduce(vcat,[s.+m*L for m in -ncopies:ncopies])
-    ds_ext = repeat(ds,2ncopies+1)
-    u_ext = repeat(u,2ncopies+1)
-    nq = length(qs); np = length(ps)
+    nimg = 2ncopies+1
+    N = length(s); nq = length(qs); np = length(ps)
+    F = Matrix{Complex{T}}(undef,N,np)
+    img_phase = Matrix{Complex{T}}(undef,nimg,np)
+    @inbounds for ip in 1:np
+        kp = k*ps[ip]
+        for j in 1:N
+            sn,cs = sincos(kp*s[j])
+            F[j,ip] = Complex{T}(u[j]*ds[j])*Complex(cs,-sn)
+        end
+        for mi in 1:nimg
+            sn,cs = sincos(kp*(mi-ncopies-1)*L)
+            img_phase[mi,ip] = Complex(cs,-sn)
+        end
+    end
     Hp = zeros(T,np,nq)
-    offsets = Vector{T}(undef,0)
-    c_re = Vector{T}(undef,0)
-    c_im = Vector{T}(undef,0)
+    g = Vector{T}(undef,0)
+    run_lo = Vector{Int}(undef,nimg)
+    run_hi = Vector{Int}(undef,nimg)
+    run_start = Vector{Int}(undef,nimg)
+    run_img = Vector{Int}(undef,nimg)
     @inbounds for iq in 1:nq
         q = mod(qs[iq],L)
-        lo = searchsortedfirst(s_ext,q-width)
-        hi = searchsortedlast(s_ext,q+width)
-        W = max(0,hi-lo+1)
-        if length(offsets)<W
-            resize!(offsets,W); resize!(c_re,W); resize!(c_im,W)
-        end
-        for t in 1:W
-            j = lo+t-1
-            d = s_ext[j]-q
-            wt = exp(-T(0.5)*k*d*d)*ds_ext[j]
-            offsets[t] = d
-            c_re[t] = wt*real(u_ext[j])
-            c_im[t] = wt*imag(u_ext[j])
+        nruns = 0
+        W = 0
+        for mi in 1:nimg
+            off = (mi-ncopies-1)*L
+            lo = searchsortedfirst(s,q-width-off)
+            hi = searchsortedlast(s,q+width-off)
+            hi<lo && continue
+            nruns += 1
+            run_lo[nruns] = lo; run_hi[nruns] = hi; run_start[nruns] = W-lo+1; run_img[nruns] = mi
+            length(g)<W+hi-lo+1 && resize!(g,W+hi-lo+1)
+            for j in lo:hi
+                d = s[j]+off-q
+                g[W+j-lo+1] = exp(-T(0.5)*k*d*d)
+            end
+            W += hi-lo+1
         end
         for ip in 1:np
-            kp = k*ps[ip]
             sracc = zero(T); siacc = zero(T)
-            for t in 1:W
-                sn,cs = sincos(kp*offsets[t])
-                re = c_re[t]; im = c_im[t]
-                sracc += re*cs+im*sn
-                siacc += im*cs-re*sn
+            for r in 1:nruns
+                sr = zero(T); si = zero(T)
+                off = run_start[r]
+                for j in run_lo[r]:run_hi[r]
+                    gj = g[off+j]
+                    f = F[j,ip]
+                    sr += gj*real(f)
+                    si += gj*imag(f)
+                end
+                ph = img_phase[run_img[r],ip]
+                sracc += sr*real(ph)-si*imag(ph)
+                siacc += sr*imag(ph)+si*real(ph)
             end
             Hp[ip,iq] = sracc*sracc+siacc*siacc
         end
@@ -176,88 +165,8 @@ function husimi_function(k::T, s::AbstractVector{T}, ds::AbstractVector{T}, u::A
 end
 
 ################################################################################
-# FAST UNIFORM-ARCLENGTH QUADRATURE
+# AUTOMATIC PHASE-SPACE GRID
 ################################################################################
-
-"""
-    _husimi_uniform_arclength(k::T, s::AbstractVector{T}, ds::AbstractVector{T}, u::AbstractVector{Num}, L::T; c::Real=10.0, w::Real=7.0, full_p::Bool=false) where {T<:Real,Num<:Number}
-
-Evaluate the Poincare-Husimi function using a translating coherent-state
-stencil on a uniform physical-arclength boundary grid.
-The returned Poincare-Husimi density is normalized so that `sum(H)=1`.
-
-## Arguments
-* `k::T`: Eigenwavenumber.
-* `s::AbstractVector{T}`: Uniform physical boundary arclength coordinates.
-* `ds::AbstractVector{T}`: Uniform physical boundary quadrature weights.
-* `u::AbstractVector{Num}`: Physical boundary normal derivative `∂ₙψ`.
-* `L::T`: Total physical boundary length.
-
-## Keyword Arguments
-* `c::Real=10.0`: Phase-space sampling density in units of `σ=1/√k`.
-* `w::Real=7.0`: Gaussian truncation radius in units of `σ`.
-* `full_p::Bool=false`: Whether both momentum signs are evaluated explicitly. For 1d irreps (u real-valued up to a global complex phase), where we have p -> -p symmetry this should be false. 
-
-## Returns
-* `H::Matrix{T}`: Normalized Poincare-Husimi density.
-* `qs::Vector{T}`: Sampled boundary positions.
-* `ps::Vector{T}`: Full signed momentum grid.
-"""
-function _husimi_uniform_arclength(k::T, s::AbstractVector{T}, ds::AbstractVector{T}, u::AbstractVector{Num}, L::T; c::Real=10.0, w::Real=7.0, full_p::Bool=false) where {T<:Real,Num<:Number}
-    # The relative coordinates and quadrature weights inside the truncated
-    # coherent-state window are independent of its center `q`. The Gaussian factor
-    # `exp(-kx²/2)` is constructed once. For each momentum `p`, the Fourier factor
-    # `exp(-ikpx)` produces a fixed complex stencil which is translated around the periodic boundary.
-    # The coherent-state width is `σ=1/√k`. Approximately `c` samples per `σ` are
-    # used in boundary position, with comparable momentum resolution.
-    N = length(s)
-    sig = inv(sqrt(k))
-    x,dx,idx = _husimi_symmetric_window(s,ds,T(w)*sig)
-    W = length(x)
-    gauss = Vector{T}(undef,W)
-    @inbounds @simd for t in 1:W
-        gauss[t] = exp(-T(0.5)*k*x[t]*x[t])*dx[t]
-    end
-    np = max(1,ceil(Int,T(c)*sqrt(k)))
-    ps_eval = full_p ? collect(range(-one(T),one(T);length=2np+1)) : collect(range(zero(T),one(T);length=np+1))
-    Δs = s[2]-s[1]
-    q_stride = max(1,round(Int,(sig/T(c))/Δs))
-    q_idx = collect(1:q_stride:N)
-    qs = collect(s[q_idx])
-    nq = length(qs)
-    H = zeros(T,nq,length(ps_eval))
-    uc = CircularVector(u)
-    cs_re = Vector{T}(undef,W)
-    cs_im = Vector{T}(undef,W)
-    @inbounds for ip in eachindex(ps_eval)
-        kp = k*ps_eval[ip]
-        for t in 1:W
-            sn,cs = sincos(kp*x[t])
-            cs_re[t] = gauss[t]*cs
-            cs_im[t] = -gauss[t]*sn
-        end
-        for iq in 1:nq
-            j = q_idx[iq]
-            sracc = zero(T); siacc = zero(T)
-            for t in 1:W
-                uj = uc[j-idx+t]
-                ur = real(uj); ui = imag(uj)
-                cr = cs_re[t]; ci = cs_im[t]
-                sracc += cr*ur-ci*ui
-                siacc += cr*ui+ci*ur
-            end
-            H[iq,ip] = sracc*sracc+siacc*siacc
-        end
-    end
-    if full_p
-        ps_out = ps_eval
-    else
-        H = hcat(reverse(H[:,2:end];dims=2),H)
-        ps_out = antisym_vec(ps_eval)
-    end
-    _normalize_husimi!(H)
-    return H,qs,ps_out
-end
 
 """
     husimi_function(k::T, s::AbstractVector{T}, ds::AbstractVector{T}, u::AbstractVector{Num}, L::T; c::Real=10.0, w::Real=7.0, full_p::Bool=false) where {T<:Real,Num<:Number}
@@ -282,10 +191,6 @@ Compute an automatically gridded Poincare-Husimi function.
 function husimi_function(k::T, s::AbstractVector{T}, ds::AbstractVector{T}, u::AbstractVector{Num}, L::T; c::Real=10.0, w::Real=7.0, full_p::Bool=false) where {T<:Real,Num<:Number}
     full_p = full_p || !_is_global_phase_real(u)
     sig = inv(sqrt(k))
-    if _husimi_uniform_arclength_grid(s,ds) && T(w)*sig<L/T(2)
-        H,qs,ps = _husimi_uniform_arclength(k,s,ds,u,L;c=c,w=w,full_p=full_p)
-        return HusimiFunction(H,qs,ps,k)
-    end
     nq = max(2,ceil(Int,L*T(c)/sig))
     np = max(1,ceil(Int,T(c)/sig))
     qs = collect(range(zero(T),L;length=nq+1))[1:end-1]
