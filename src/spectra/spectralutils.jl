@@ -116,7 +116,7 @@ function Base.show(io::IO, ::MIME"text/plain", data::SpectralData)
         @printf(io, "  k range: [%.6g, %.6g]\n", kmin, kmax)
     end
     _stats_line(io, "tension", data.ten)
-    _stats_line(io, "k_im   ", data.k_im)
+    _stats_line(io, "|k_im| ", abs.(data.k_im))
     print(io, "  stored states: ", _states_description(data.states))
 end
 
