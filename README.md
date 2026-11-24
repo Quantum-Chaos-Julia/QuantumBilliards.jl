@@ -114,7 +114,7 @@ Complete spectra for $500 \le k \le 1400$ of the Prosen billiard (single `comput
 
 ```julia
 using MKL, QuantumBilliards, BilliardGeometry, StaticArrays, LinearAlgebra
-BLAS.set_num_threads(64)
+BLAS.set_num_threads(64) # Or tipically num of CPU cores
 kmin, kmax, ppw = 500.0, 1400.0, 7.0
 
 # Vergini–Saraceno
@@ -148,6 +148,13 @@ solver = CORKSolver(dlp; nlevels=100, mstart=400, Rmax=0.5, p=15,
     eigenvectors=false, verbose=false)
 @time data_cork = compute_spectrum(solver, billiard, kmin, kmax;
     accept_tol=1e-8, multithreaded=true, show_progress=true)
+```
+
+NOTE: The benchmark results (optimized Beyn residual calculation and faster horner evals due to muladd (fused multiply-add where possible)) and kwarg use_half_contour reported above is currently available on the Half_node_Beyn branch. To use this branch execute:
+
+```julia
+using Pkg
+Pkg.add(url="https://github.com/Quantum-Chaos-Julia/QuantumBilliards.jl", rev="Half_node_Beyn")
 ```
 
 # Related packages
