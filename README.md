@@ -96,15 +96,54 @@ Visualization is provided by [QBPlotting.jl](https://github.com/Quantum-Chaos-Ju
 Available through BilliardGeometry.jl: circle, ellipse, rectangle, stadium, Prosen, Robnik limaçon, mushroom, annular, Sinai, triangles, general polygons, polar/Fourier-ripple billiards, `C3` and star billiards, and more. Custom billiards are assembled from parametrized curves (`LineSegment`, `CircleSegment`, `PolarSegment`, `FourierCoeffPolarSegment`), grouped into simple or composite domains with boundary roles (specular reflection, transparent interface, symmetry wall) and an optional symmetry registry.
 
 # Benchmarks
-Complete spectra for $500 \le k \le 1400$ of the Prosen billiard (single `compute_spectrum` call, 64 threads, AMD Threadripper PRO 7985WX, Julia 1.12 with MKL):
+Complete spectra for $500 \le k \le 1400$ of the Prosen billiard (single `compute_spectrum` call with eigenvectors=false, 64 threads, AMD Threadripper PRO 7985WX, Julia 1.12 with MKL):
 
 | Solver | Eigenvalues | Runtime [s] | Eigenvalues/s |
-|---|---|---|---|
-| `VerginiSaracenoSolver` | 106 697 | 2875 | 37.1 |
-| `BeynSolver` | 108 710 | 3338 | 32.6 |
-| `CORKSolver` | 108 710 | 4125 | 26.4 |
+|:-------|------------:|------------:|--------------:|
+| `VerginiSaracenoSolver` | 106 697 | 1270 | 84.0 |
+| `BeynSolver` (half contour) | 108 710 | 1506 | 72.2 |
+| `BeynSolver` (full contour) | 108 710 | 2853 | 38.1 |
+| `CORKSolver` | 108 710 | 3926 | 27.7 |
 
-(VS uses `a=0.04`, BIM solvers `a=0.2`, so level counts differ.) Completeness was verified against the Weyl law.
+(VS uses `a=0.04`, BIM solvers `a=0.2`, so level counts differ.) Completeness was verified against the Weyl law. The code to reproduce the benchmark results is given below (run with julia -t 64)
+
+```julia
+using MKL, QuantumBilliards, BilliardGeometry, StaticArrays, LinearAlgebra
+BLAS.set_num_threads(64) # Or tipically num of CPU cores
+kmin, kmax, ppw = 500.0, 1400.0, 7.0
+
+# Vergini–Saraceno
+billiard = ProsenBilliard(0.04)
+basis = CornerAdaptedFourierBessel(10, pi/2, SVector(0.0, 0.0), 0.0)
+solver = VerginiSaracenoSolver(2.5, ppw; eigenvectors=false)
+@time data_vs = compute_spectrum(solver, basis, billiard, kmin, kmax, 0.05;
+    merge_tol=1e-4, accept_tol=nothing, multithreaded=true, show_progress=true)
+
+# Boundary-integral setup
+billiard = ProsenBilliard(0.2)
+dlp = DoubleLayerPotentialSolver(ppw, billiard;
+    symmetry=XYAxisReflection(), sym_characters=(-1, -1))
+cfg = ChebyshevConfig(Float64; param_strategy=:manual)
+
+# Full-contour Beyn
+solver = BeynSolver(dlp; nlevels=200, r=400, nq=40, Rmax=0.5,
+    res_tol=1e-6, eigenvectors=false, cheb_config=cfg)
+@time data_full = compute_spectrum(solver, billiard, kmin, kmax;
+    accept_tol=1e-6, multithreaded=true, show_progress=true)
+
+# Half-contour Beyn
+solver = BeynSolver(dlp; nlevels=200, r=400, nq=40, Rmax=0.5,
+    res_tol=1e-6, eigenvectors=false, cheb_config=cfg, use_half_contour=true)
+@time data_half = compute_spectrum(solver, billiard, kmin, kmax;
+    accept_tol=1e-6, multithreaded=true, show_progress=true)
+
+# CORK
+solver = CORKSolver(dlp; nlevels=100, mstart=400, Rmax=0.5, p=15,
+    block_size=5, guard=0.05, res_tol=1e-10, taylor_tol=1e-10,
+    eigenvectors=false, verbose=false)
+@time data_cork = compute_spectrum(solver, billiard, kmin, kmax;
+    accept_tol=1e-8, multithreaded=true, show_progress=true)
+```
 
 # Related packages
 - [BilliardGeometry.jl](https://github.com/Quantum-Chaos-Julia/BilliardGeometry.jl) - geometry, boundary discretization, quadratures, symmetries.
