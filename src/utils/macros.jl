@@ -7,6 +7,13 @@ function set_precision(a)
     return t == Float32 ? Float32(1e-8) : convert(t,1e-16) 
 end
 
+""" 
+Designated to be moved or redesigned 
+"""
+macro experimental(ex)
+    return esc(ex)
+end
+
 # Runs a loop with ProgressMeter only when requested.
 macro maybe_showprogress(show_progress, loop)
     return esc(:($show_progress ? (@showprogress $loop) : $loop))
