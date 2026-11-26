@@ -5,6 +5,8 @@
 
 # Implements the analytic Taylor expansions of the DLP and CFIE kernels using the radial recurrences for Bessel and Hankel functions via _kernel_taylor!. The ones with the Rmat overload handle the Kress logarithmic quadrature correction (these are closed curves that need singular quadrature). The ones that dont have Rmat ahve regular trapezoidal quadrature since they are classified as cross-kernel and are for holes etc. where source-target separation has no self-interaction.
 
+# NOTE: J0 and J1 are now obtained from real(H0) and real(H1) recurrsion for performance. If in future we will want complex k0 support, this part will need to be modified.
+
 """
     _kernel_taylor!(::DoubleLayerPotentialSolver, w::TaylorWorkspace, pts, Rmat::Matrix{Float64}, G, k::Float64, p::Int, i::Int, j::Int) -> Vector{ComplexF64}
 
@@ -40,15 +42,22 @@ coefficients of the raw operator `D(k)`; the sign and identity in
     end
     invtwopi = inv(2π); r = G.R[i,j]; r2 = r*r; invr = G.invR[i,j]
     lt = G.logterm[i,j]; inn = G.inner[i,j]; z = k*r
-    # L1 term corresponds to -(1/2π)(inn/r)kJ₁(kr) in the DLP split. For the recurrence we require the seeds for (j0,j1) for the radial1_taylor! recurrence (even though directly we dont need j0). An analogoues argument is made for H1 with (h0,h1).
+    # L1 term corresponds to -(1/2π)(inn/r)kJ₁(kr) in the DLP split.
     h0 = _bim_hankelh1(0,z); h1 = _bim_hankelh1(1,z)
-    j0 = _bim_besselj(0,z,h0); j1 = _bim_besselj(1,z,h1)
     radial1_taylor!(w.H1,k,r2,p,k*h1,k*r*h0)
-    radial1_taylor!(w.J1,k,r2,p,k*j1,k*r*j0)
+    wj=pts.ws[j]
+    q=muladd(-wj,lt,Rmat[i,j]) # Rmat[i,j] - wj*lt
+    dlp_geom_factor=0.5*inn*invr*wj
+    dlp_L1_factor= -invtwopi*inn*invr*q
     @inbounds @simd for l = 1:p+1
-        l1 = -invtwopi*inn*invr*w.J1[l] # Ref Eq. 2.6 below
-        l2 = im/2*inn*invr*w.H1[l] - l1*lt # Ref Eq. 2.6 below (this is the full kernel L(i,j) - L1 term with the Kress logarithm - the term log(4*sin^2((t_i-t_j)/2)) wihtout the diagonal divergent pointwise limit - early return diag limit))
-        a[l] = Rmat[i,j]*l1 + pts.ws[j]*l2 # Ref Eq 3.1 combine the L1 and L2 contributions with the Kress quadrature integration weights
+        ### For documentation ###
+        #l1 = -invtwopi*inn*invr*real(w.H1[l]) # Ref Eq. 2.6 below
+        #l2 = im/2*inn*invr*w.H1[l] - l1*lt # Ref Eq. 2.6 below (this is the full kernel L(i,j) - L1 term with the Kress logarithm - the term log(4*sin^2((t_i-t_j)/2)) wihtout the diagonal divergent pointwise limit - early return diag limit))
+        #a[l] = Rmat[i,j]*l1 + pts.ws[j]*l2 # Ref Eq 3.1 combine the L1 and L2 contributions with the Kress quadrature integration weights
+        #########################
+        h1_k=w.H1[l]
+        h1_k_re=real(h1_k)
+        a[l]=ComplexF64(muladd(-dlp_geom_factor,imag(h1_k),dlp_L1_factor*h1_k_re),dlp_geom_factor*h1_k_re) # dlp_L1_factor*real(H1) + im*dlp_geom_factor*H1.
     end
     return a
 end
@@ -101,19 +110,35 @@ satisfies `w.a[n+1]=Kᵢⱼ⁽ⁿ⁾(k)/n!`; the Fredholm transformation
     lt = G.logterm[i,j]; inn = G.inner[i,j]; sj = G.speed[j]; wj = pts.ws[j]; z = k*r
     # We need all H0, H1, J0, J1 since CFIE combines both single-layer and double-layer contributions
     h0 = _bim_hankelh1(0,z); h1 = _bim_hankelh1(1,z) # Hankel functions of the first kind for orders 0 and 1
-    j0 = _bim_besselj(0,z,h0); j1 = _bim_besselj(1,z,h1) # Bessel functions of the first kind for orders 0 and 1
     # see QuantumBilliards paper Appendix F. for the definition of the radial Taylor expansions
     radial1_taylor!(w.H1,k,r2,p,k*h1,k*r*h0) # Taylor coeffs for H1 - DLP part
-    radial1_taylor!(w.J1,k,r2,p,k*j1,k*r*j0) # Taylor coeffs for J1 - DLP part
     radial0_k_taylor!(w.H0,w.yH0,k,r2,p,h0,-r*h1) # Taylor coeffs for H0 - SLP part
-    radial0_k_taylor!(w.J0,w.yJ0,k,r2,p,j0,-r*j1) # Taylor coeffs for J0 - SLP part
+    q=muladd(-wj,lt,Rmat[i,j]) # Rmat[i,j] - wj*lt
+    dlp_geom_factor=0.5*inn*invr*wj
+    dlp_L1_factor= -invtwopi*inn*invr*q
+    slp_geom_factor= -0.5*sj*wj
+    slp_M1_factor= -invtwopi*sj*q
     @inbounds @simd for l = 1:p+1
-        l1 = -invtwopi*inn*invr*w.J1[l] # Contribution from the J1 term (off-diagonal DLP), see also _kernel_taylor! for the DLP only
-        l2 = im/2*inn*invr*w.H1[l] - l1*lt # Contribution from the H1 term (off-diagonal DLP), see also _kernel_taylor! for the DLP only
-        dval = Rmat[i,j]*l1 + wj*l2 # Off-diagonal DLP contribution with the Kress logarithm 
-        ikm1 = -im*invtwopi*sj*w.J0[l] # Contribution from the J0 term (off-diagonal SLP)
-        ikm2 = -0.5*sj*w.H0[l] + im*invtwopi*sj*lt*w.J0[l] # Contribution from the H0 term (off-diagonal SLP)
-        a[l] = dval + Rmat[i,j]*ikm1 + wj*ikm2 # Total off-diagonal contribution (DLP + SLP) with Kress integration weight Rmat
+        ### for documentation ###
+        #l1 = -invtwopi*inn*invr*real(w.H1[l]) # Contribution from the J1 term (off-diagonal DLP), see also _kernel_taylor! for the DLP only
+        #l2 = im/2*inn*invr*w.H1[l] - l1*lt # Contribution from the H1 term (off-diagonal DLP), see also _kernel_taylor! for the DLP only
+        #dval = Rmat[i,j]*l1 + wj*l2 # Off-diagonal DLP contribution with the Kress logarithm 
+        #ikm1 = -im*invtwopi*sj*real(w.H0[l]) # Contribution from the J0 term (off-diagonal SLP)
+        #ikm2 = -0.5*sj*w.H0[l] + im*invtwopi*sj*lt*real(w.H0[l]) # Contribution from the H0 term (off-diagonal SLP)
+        #a[l] = dval + Rmat[i,j]*ikm1 + wj*ikm2 # Total off-diagonal contribution (DLP + SLP) with Kress integration weight Rmat
+        ########################
+        h0_k=w.H0[l];h1_k=w.H1[l]
+        h0_k_re=real(h0_k);h1_k_re=real(h1_k); # kJ₀ and kJ₁ coefficients at real k
+        # following 2 lines need some comment:
+        # DLP = dlp_L1_factor*real(h1) + im*dlp_geom_factor*h1
+        # since im*h1 = -imag(h1) + im*real(h1), the Hankel term
+        # contributes -dlp_geom_factor*imag(h1) to the real part
+        dlp_real=muladd(-dlp_geom_factor,imag(h1_k),dlp_L1_factor*h1_k_re)
+        dlp_imag=dlp_geom_factor*h1_k_re
+        # add ikS = slp_geom_factor*h0_k + im*slp_M1_factor*real(h0_k).
+        cfie_real=muladd(slp_geom_factor,h0_k_re,dlp_real)
+        cfie_imag=muladd(slp_geom_factor,imag(h0_k),muladd(slp_M1_factor,h0_k_re,dlp_imag))
+        a[l]=ComplexF64(cfie_real,cfie_imag)
     end
     return a
 end
@@ -182,7 +207,7 @@ Compute normalized Taylor coefficients of a smooth cross-component CFIE entry.
     cD = pts.ws[j]*(im/2)*inn/r # c_D = (i/2)wⱼinn/r
     cS = -pts.ws[j]*sj/2 # c_S = -½wⱼsⱼ
     @inbounds @simd for l = 1:p+1
-        a[l] = cD*w.H1[l]+cS*w.H0[l] # Combine Dᵢⱼ'th and ikSᵢⱼ'th l-th Taylor coefficient contribution for the CFIE kernel Kᵢⱼ(k)
+        a[l]=muladd(cS,w.H0[l],cD*w.H1[l]) # Combine Dᵢⱼ'th and ikSᵢⱼ'th l-th Taylor coefficient contribution for the CFIE kernel Kᵢⱼ(k)
     end
     return a
 end
@@ -203,7 +228,7 @@ end
     # Cache full-boundary node data and the first column of the full-grid Kress matrix.
     # But the storage is reduced from O(N^2) to O(N) by keeping only the first column of the Kress matrix unlike
     # the BilliardGeometry.jl version to keep storage low
-    #TODO Make this one from scratch, this is just a temp AI fix
+    #TODO Move this one to BilliardGeometry.jl to replace the old one!
     N = length(pts)
     X = getindex.(pts.xy, 1); Y = getindex.(pts.xy, 2)
     dX = getindex.(pts.tangent, 1); dY = getindex.(pts.tangent, 2)
@@ -240,13 +265,19 @@ end
     dt = pts.ts[lo]-pts.ts[hi]; lt = log(4*sin(dt/2)^2)
     R = cache.kress[mod(i-j,length(pts))+1]; z = k*r; invtwopi = inv(2π)
     h0 = _bim_hankelh1(0,z); h1 = _bim_hankelh1(1,z)
-    j0 = _bim_besselj(0,z,h0); j1 = _bim_besselj(1,z,h1)
     radial1_taylor!(w.H1,k,r2,p,k*h1,k*r*h0)
-    radial1_taylor!(w.J1,k,r2,p,k*j1,k*r*j0)
+    wj=pts.ws[j]
+    q=muladd(-wj,lt,R) # see above function
+    dlp_geom_factor=0.5*inn*invr*wj
+    dlp_L1_factor= -invtwopi*inn*invr*q
     @inbounds @simd for l = 1:p+1
-        l1 = -invtwopi*inn*invr*w.J1[l]
-        l2 = im/2*inn*invr*w.H1[l] - l1*lt
-        a[l] = R*l1 + pts.ws[j]*l2
+        ### for documentation ###
+        #l1 = -invtwopi*inn*invr*real(w.H1[l]) # L1 = -(inn*invr)/(2π) * j1_k.
+        #l2 = im/2*inn*invr*w.H1[l] - l1*lt # L2 = (im/2)*inn*invr*h1_k - lt*L1.
+        #a[l] = R*l1 + pts.ws[j]*l2 # DLP = R*L1 + w_j*L2
+        #########################
+        h1_k=w.H1[l];j1_k=real(h1_k) # h1_k and j1_k already include the factor k.
+        a[l] = ComplexF64(muladd(-dlp_geom_factor,imag(h1_k),dlp_L1_factor*j1_k),dlp_geom_factor*j1_k)
     end
     return a
 end
@@ -600,7 +631,8 @@ kernels's Taylor coefficients,
 """
 function _construct_matrices_multi_k_taylor_reduced(solver::SweepBIMSolver, pts::BoundaryPoints{Float64}, k0::Float64, ks::AbstractVector{<:Number}, p::Int; multithreaded::Bool = true)::Vector{Matrix{ComplexF64}}
     solver.symmetry === nothing && throw(ArgumentError("reduced Taylor construction requires an active symmetry"))
-    cache = _taylor_cache(solver, pts) # cache containing the geometry for computing the taylor coefficients of the kernel
+    compact = solver isa DoubleLayerPotentialSolver && solver.grading isa SmoothPeriodicGrading
+    cache = compact ? _reduced_dlp_taylor_cache(pts) : _taylor_cache(solver, pts)
     orbits = solver isa CompositeBIMSolver ? _composite_symmetry_orbits(Float64, solver, pts) : _fold_boundary(Float64, solver.billiard, length(pts.xy), solver.symmetry, solver.sym_characters) # compute the symmetry orbits of the boundary points - this is the symmetry reduction via modular arithmetic. See BilliardGeometry.jl for more details on implementation. orbits contains the fundamental indices, orbit membership, and phase factors for each boundary point such that irrep factors and full boundary can be constructed.
     m::Int = fundamental_size(orbits) # size of the fundamental domain of the boundary points
     fund = orbits.fundamental_indices # fundamental indices of the boundary points

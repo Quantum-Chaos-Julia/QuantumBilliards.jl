@@ -20,6 +20,7 @@ export AbsBasis, AbsSolver, AbsBasisSolver, AbsBIMSolver
 include("utils/coordinatesystems.jl")
 include("utils/macros.jl")
 export @use_threads, @blas_multi, @blas_1, @blas_multi_then_1, try_MKL!
+include("utils/llvm_fma.jl")
 include("utils/billiardutils.jl")
 export make_triangle_and_basis, adapt_basis
 include("solvers/boundarypoints.jl")

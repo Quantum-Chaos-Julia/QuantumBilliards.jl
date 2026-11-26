@@ -279,7 +279,8 @@ Choose `r` distinct interior points `s_j`, fixed throughout one contour.
 Returns `(full, sources)`. Throws `ArgumentError` if the clearance band does
 not contain enough candidate points.
 """
-function _beyn_interior_sources(kernel::DoubleLayerPotentialSolver, pts::BoundaryPoints{Float64}, k0, r::Int, rng; multithreaded::Bool=true)
+@experimental function _beyn_interior_sources(kernel::DoubleLayerPotentialSolver, pts::BoundaryPoints{Float64}, k0, r::Int, rng; multithreaded::Bool=true)
+    #TODO Hot garbage, but it works. Needs an actual rewrite with some thought behind it but the geometry API is still under development...
     n = length(pts)
     # Fourfold boundary sampling refinining the boundary choice for easier interior source points placement 
     # ppw = 1.0 does nothing due to high min_pts, very hacky
@@ -289,6 +290,8 @@ function _beyn_interior_sources(kernel::DoubleLayerPotentialSolver, pts::Boundar
     _require_no_holes(full, full.billiard)
     comp = full_boundary(full.billiard)
     isempty(comp) && error("Boundary cannot be empty.")
+    #TODO: Filthy AI hack that I needed to put comments for myself just to understand what tf is going on, just really needed it to work. 
+    # Črt maybe you can rewrite this properly with the updated geometry API
     lens, cum, Ltot = component_lengths(comp)
     fine_count = max(full.min_pts, round(Int, Float64(k0)*Ltot*full.pts_scaling_factor[1]/(2*pi)))
     fine_count = _bim_round_nodes(fine_count, lcm(2, _bim_solver_node_multiple(full)), nothing)
@@ -877,6 +880,12 @@ function _beyn_solve_core(solver::BeynSolver, pts::BoundaryPoints, k0, dk; multi
     idx = findall(keep)
     return ks[idx], residuals[idx], isempty(idx) ? Matrix{Complex{T}}(undef, N, 0) : X[:,idx]
 end
+
+#TODO Imag k check does not work for half contour, since it seems that it worked with full Green func kernel
+# due to the im*J part of the Hankels (anyway now with cheap residual evals not that important)
+# Still a cool accuracy proxy diagnostic for full contour.
+# one can check for stadium geometry that at tipical ppw ≈ 10 we dont get anywhere close to machine ϵ since
+# not C^2 (curvature jumps at the circle-line joins)
 
 """
     _beyn_imag_k_check(solver::BeynSolver, ks_all, X_all, all_pts;
