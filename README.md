@@ -26,6 +26,10 @@ with the boundary condition $\psi_n|_{\partial \mathcal{B}}=0$. Thus we find the
 The library implements extremely efficient numerical methods for computing the spectra (wavenumbers) and states (represented as wavefunctions) allowing us to compute up to a millions of eigenstates!
 Each method has its own strengths and limitations and is more suitable for specific use cases for instance either sacrificing some accuracy for computation speed or vice versa. 
 
+# Next update
+- MO Merge the half contour Beyn approach from Appendix E.1 into main along with the added taylor recurrence and chebyshev eval optimizations
+- MO Add the BeynBasisSolver (still optimizing) - see BeynBasisSolver.pdf for the idea
+
 # Package features
 - General purpose solvers for the 2D interior Dirichlet Helmholtz problem on arbitrary billiard tables: smooth, cornered, symmetry-reduced and multiply connected domains. Geometry is handled by the companion package [BilliardGeometry.jl](https://github.com/Quantum-Chaos-Julia/BilliardGeometry.jl).
 - Two complementary formulations behind one interface: Helmholtz **basis methods** (Fourier-Bessel, real plane waves) and **boundary-integral methods** (double-layer and combined-field kernels with Kress corner grading).
