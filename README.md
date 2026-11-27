@@ -14,6 +14,10 @@
 
 Welcome to the QuantumBilliards.jl - a high performance Julia library for computing the states and spectra of quantum billiards. The goal is to provide a library that is a learning tool for students as well as full computational suite for seasoned quantum chaos researchers that want to attain that last bit of performance for their research publications. We hope this tool will invigorate the study of quantum billiards and related problems and make it more accessible to a wider research community. The documentation is available [here](https://Quantum-Chaos-Julia.github.io/QuantumBilliards.jl/).
 
+# Next update
+- MO Merge the half contour Beyn approach from Appendix E.1 into main along with the added taylor recurrence and chebyshev eval optimizations
+- MO Add the BeynBasisSolver (still optimizing) - see BeynBasisSolver.pdf for the idea
+
 ## Introduction
 Quantum billiards are fundamental models, widely studied in the context of quantum chaos, quantum classical correspondence and semiclassical analysis. 
 The package contains a collection of the most effective solution methods for solving quantum billiard eigenvalue problems with state of the art performance and an intuitive API.
