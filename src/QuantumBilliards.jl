@@ -49,7 +49,8 @@ include("solvers/decompositions.jl")
 include("solvers/matrixconstructors.jl")
 export basis_matrix, basis_and_gradient_matrices, dk_matrix
 
-include("solvers/chebyshev/core.jl")
+include("solvers/chebyshev/cospi_weights.jl")
+include("solvers/chebyshev/bessels_core.jl")
 include("solvers/chebyshev/bessels.jl")
 include("solvers/sweepmethods/decompositionmethod.jl")
 include("solvers/sweepmethods/particularsolutions.jl")

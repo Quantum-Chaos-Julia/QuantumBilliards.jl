@@ -71,11 +71,15 @@ end
 function _build_table_h!(ν::Int, κ::Int, k::ComplexF64, a::Float64, b::Float64; M::Int=16)::ChebHankelTableH
     @assert a>0 && b>a "a=$(a), b=$(b)"
     f1 = Vector{ComplexF64}(undef, M+1)
+    half_k=0.5*k
     @inbounds for j in 0:M
-        t = cospi(j/M)
-        r = ((b+a)+(b-a)*t)/2
-        z = k*r
-        f1[j+1] = SpecialFunctions.besselh(ν, κ, z)
+        t=cospi(j/M)
+        ### for documentation ###
+        #r = ((b+a)+(b-a)*t)/2
+        #z = k*r
+        #########################
+        z=half_k*muladd(b-a,t,b+a)
+        f1[j+1]=SpecialFunctions.besselh(ν, κ, z)
     end
     c = Vector{ComplexF64}(undef, M+1)
     _chebfit!(c, f1)
@@ -87,11 +91,15 @@ end
 function _build_table_j!(ν::Int, k::ComplexF64, a::Float64, b::Float64; M::Int=16)::ChebJTable
     @assert a>=0 && b>a "a=$(a), b=$(b)"
     f1 = Vector{ComplexF64}(undef, M+1)
+    half_k=0.5*k
     @inbounds for j in 0:M
-        t = cospi(j/M)
-        r = ((b+a)+(b-a)*t)/2
-        z = k*r
-        f1[j+1] = SpecialFunctions.besselj(ν, z)
+        t=cospi(j/M)
+        ### for documentation ###
+        #r=((b+a)+(b-a)*t)/2
+        #z=k*r
+        #########################
+        z=half_k*muladd(b-a,t,b+a)
+        f1[j+1]=SpecialFunctions.besselj(ν, z)
     end
     c = Vector{ComplexF64}(undef, M+1)
     _chebfit!(c, f1)
@@ -229,7 +237,8 @@ end
 
 # O(1) uniform-panel lookup: p = floor((r-rmin)/dr)+1, clamped to [1,npanels].
 @inline function _find_panel_uniform(pl::Union{ChebHankelPlanH,ChebJPlan}, r::Float64)::Int
-    p = Int(floor((r-pl.rmin)*pl.invdr))+1
+    #p = Int(floor((r-pl.rmin)*pl.invdr))+1
+    p=Int(floor(muladd(r,pl.invdr,-pl.rmin*pl.invdr)))+1
     return ifelse(p<1, 1, ifelse(p>pl.npanels, pl.npanels, p))
 end
 @inline _find_panel(pl::Union{ChebHankelPlanH,ChebJPlan}, r::Float64)::Int = _find_panel_uniform(pl, r)
@@ -274,11 +283,14 @@ function panel_and_geom(pl::Union{ChebHankelPlanH,ChebJPlan}, rvec::AbstractVect
             pidx[i] = Int32(0)
             t[i] = 0.0
         else
-            p = Int(floor((r-rmin)*invdr))+1
+            #p = Int(floor((r-rmin)*invdr))+1
+            p=Int(floor(muladd(r,invdr,-rmin*invdr)))+1
             p = ifelse(p<1, 1, ifelse(p>np, np, p))
             pidx[i] = Int32(p)
-            center = rmin+(p-0.5)*dr
-            t[i] = 2*(r-center)*invdr
+            #center = rmin+(p-0.5)*dr
+            center=muladd(p-0.5,dr,rmin)
+            #t[i] = 2*(r-center)*invdr
+            t[i]=muladd(2.0*r,invdr,-2.0*center*invdr)
         end
         invsqrt[i] = inv(sqrt(r))
     end
@@ -296,7 +308,8 @@ end
     end
     p = _find_panel(pl, r)
     P = pl.panels[p]
-    return Int32(p), (2*r-(P.b+P.a))/(P.b-P.a)
+    #return Int32(p), (2*r-(P.b+P.a))/(P.b-P.a)
+    return Int32(p), muladd(2.0,r,-(P.b+P.a))/(P.b-P.a)
 end
 
 # Evaluate H_ν^(κ)(kr) from a precomputed plan at one physical radius. The
